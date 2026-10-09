@@ -809,7 +809,7 @@ channel, with a 10-byte header ahead of the bitstream:
 | 0 | 4 | frame identifier, **little endian** |
 | 4 | 2 | width, little endian |
 | 6 | 2 | height, little endian |
-| 8 | 1 | codec: `1` H.264, `2` HEVC (*corrected 2026-09-16*; older hosts wrote `1` for both) |
+| 8 | 1 | codec: `1` H.264, `2` HEVC (*corrected 2026-09-16*; older hosts write `1` for both, so a receiver takes the codec from the bitstream, below) |
 | 9 | 1 | flags |
 
 Flags: bits 0 to 2 rotation, **bit 3 ten-bit colour**, bit 4 the host session is locked
@@ -819,7 +819,7 @@ Note the endianness change. Sequence numbers and message lengths are big endian;
 are little endian. Getting this backwards produces a plausible-looking frame with absurd
 dimensions.
 
-Three traps, all of which have cost time already.
+Four traps, all of which have cost time already.
 
 **Rotation is one-based.** `0` means unspecified, and upright is `1`. A host that emits `0x00`
 for an unrotated display is emitting "unknown", not "none". Conversely a receiver that reads
@@ -828,6 +828,16 @@ for an unrotated display is emitting "unknown", not "none". Conversely a receive
 **Nothing in the header says which pictures are keyframes.** A receiver classifies them from
 the bitstream, by finding the start code and testing the unit type for a parameter set or an
 instantaneous refresh. There is no bit to check first.
+
+**The codec byte does not name the codec** (*amended 2026-10-09*). A host of the earlier
+generation writes `1` there whatever it codes, HEVC included, and such hosts are still in
+service. A receiver takes the codec from the unit that builds its decoder: a sequence parameter
+set (unit type 7, `first & 0x1F == 7`) is H.264, a video parameter set on the base layer (the
+unit header's first byte exactly `0x40`) is HEVC, and every unit after it goes to the decoder
+that set built. A receiver that believes the byte never finds an H.264 sequence set in an HEVC
+stream and shows nothing, while sound and input carry on. `0x41` is never a video set: it is
+HEVC type 32 on another layer, and also an H.264 predicted slice, which an H.264 stream sends
+constantly.
 
 **Correction (2026-08-18).** This section previously called bit 3 a keyframe flag and said a
 host should set it because doing so was more informative and free. **Bit 3 is the colour

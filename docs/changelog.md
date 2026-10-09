@@ -3,6 +3,26 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-09 - C5.23: the codec from the parameter sets
+
+### Fixed
+- **A host of the earlier generation never got a picture shown in HEVC.** Such a host writes
+  the first codec's number in the video header whatever it codes, and the client classified
+  each unit by that byte, so an HEVC stream never showed it a parameter set to build from:
+  the picture froze at the last H.264 one while sound and input carried on
+  ([01 §11.3](01-protocol.md)). The client now takes the codec from the parameter set that
+  builds its decoder, as [10 §5](10-client.md) already said: a sequence set is H.264, a video
+  set on the base layer HEVC. `0x41`, which reads as both a video set on another layer and an
+  H.264 predicted slice, is never taken as a set. Status reports the codec the decoder was
+  built for.
+
+### Checked
+- The feed's test, an HEVC video set under a header naming the first codec, shown failing
+  before the fix; loosening the video set back to any layer fails nine tests.
+- Live: the codec, chroma and depth walk against a host of the earlier generation, every
+  state shown and the host's stream as asked in each (8 and 10 bits, 4:2:0 and 4:4:4), and
+  against a current host, which degrades what its encoder cannot give and was followed.
+
 ## 2026-10-06 - 15.7: the translation in front of the client's port
 
 ### Decided
