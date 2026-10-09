@@ -3,6 +3,27 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-09 - W1.11: the static library
+
+### Decided
+- **The client library also builds as a static library for an MSVC link**
+  ([06 §3b](06-api.md)): `cargo rustc -p lowlat-sdk --release --crate-type staticlib` gives
+  `lowlat.lib`, for an application that links the client into its own image. It is asked for
+  by name rather than listed among the crate's kinds, so no other build spends a second
+  whole-program link on it.
+- **It names its system libraries inside itself**, as linker directives, so the link takes
+  `lowlat.lib` alone. The C runtime is the application's to choose: the static release one
+  links as it is, the static debug one with `/NODEFAULTLIB:libcmt.lib`.
+- **Release only.** Optimized whole, it is one object holding the entry points and the
+  directives together; a debug build is half a gigabyte of separate objects, and the one with
+  the directives is never taken.
+
+### Checked
+- An ABI gate links a C program against `lowlat.lib` and nothing else under both static
+  runtimes, the linker's warnings as errors, and has the client's deliberate panic contained;
+  shown failing with a system library left out of the directives, and with the debug
+  runtime's set-aside removed.
+
 ## 2026-10-09 - C5.23: the codec from the parameter sets
 
 ### Fixed

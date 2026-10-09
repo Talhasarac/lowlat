@@ -795,6 +795,18 @@ library, so a machine with any GPU decoder or a library pair never lands on it. 
 system the kind is refused with `LOWLAT_ERR_DECODER_UNSUPPORTED`, as not in the build
 ([10 §5.2](10-client.md)).
 
+**A static library on Windows since W1.11** (*2026-10-09*): `cargo rustc -p lowlat-sdk
+--release --crate-type staticlib` builds `lowlat.lib` beside the shared library, the same
+entry points behind the same header, for an application that links the client into its own
+image rather than shipping the library beside it. It is asked for by name, so no other build
+spends its link on one. **It names the system libraries it calls into inside itself**, so an
+MSVC link takes `lowlat.lib` and nothing more. Its C runtime is the shared library's, the
+static release one: an application built with that links it as it is, and one built with the
+static debug runtime adds `/NODEFAULTLIB:libcmt.lib`, which sets the release runtime's name
+aside. Only the release build names its libraries: a debug build keeps every crate's objects
+apart, and the one carrying the names is never one the linker takes. The decoders' runtimes are
+found at run time exactly as before, the codec library's pair included.
+
 **Sound is decoded, not played** (minor 7). `acquire_audio` hands out one packet a call,
 signed sixteen-bit stereo at 48 kHz, in the order the host sent them, as many frames as the
 packet held -- 960 for a host at 20 ms, at most 8000; `count` is the room in frames going in

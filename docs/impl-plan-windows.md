@@ -381,6 +381,12 @@ once, here; the design is [10 §4.2 and §5.2](10-client.md), the boundary
 - [ ] **W1.10 packaging**: the zip from the build workflow; CI decodes the clips through a
   downloaded LGPL pair, since its runner has no GPU, and builds the demo. Checked by the
   artifact, built and unpacked.
+- [x] **W1.11 the static library** (*2026-10-09*, ahead of W1.9, for an application that
+  links the client library into its own): `lowlat.lib` from the release build, asked for by
+  name, its system libraries named inside it ([06 §3b](06-api.md)). Checked by an ABI gate
+  that links a C program against it and nothing else under the static release and debug
+  runtimes, warnings as errors, and has its deliberate panic contained; shown failing with a
+  system library left out and with the debug runtime's set-aside removed.
 
 **Gate:** Gate C ([impl-plan-client.md](impl-plan-client.md)) on this machine, against two
 established hosts:
