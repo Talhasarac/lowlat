@@ -103,8 +103,59 @@ fn without_sanitizer(flags: &str) -> String {
 /// hours old. A gate that tests yesterday's artifact reports on yesterday.
 fn shared_object() -> PathBuf {
     let profile = artifacts();
+    let built = cargo_into(&profile, &["build", "--quiet", "-p", "lowlat-sdk"])
+        .output()
+        .expect("cargo builds the shared object");
+    assert!(
+        built.status.success(),
+        "the shared object could not be built:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let object = profile.join(OBJECT);
+    assert!(object.is_file(), "{} was not produced", object.display());
+    object
+}
+
+/// The static library, built here for the same reason the shared object is,
+/// and asked for by name: the crate's own list of kinds leaves it out, so
+/// that no other build spends its link on one.
+///
+/// **Always the release build, whatever this test was**, because that is the
+/// one that names its system libraries: optimized whole, it is a single
+/// object that holds the entry points and the directives together, and the
+/// linker reads the directives of the members it takes. A debug build keeps
+/// every crate's objects apart -- half a gigabyte of them -- and the one with
+/// the directives is never taken.
+#[cfg(windows)]
+fn static_library() -> PathBuf {
+    let profile = artifacts().with_file_name("release");
+    let args = [
+        "rustc",
+        "--quiet",
+        "-p",
+        "lowlat-sdk",
+        "--crate-type",
+        "staticlib",
+    ];
+    let built = cargo_into(&profile, &args)
+        .output()
+        .expect("cargo builds the static library");
+    assert!(
+        built.status.success(),
+        "the static library could not be built:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let library = profile.join("lowlat.lib");
+    assert!(library.is_file(), "{} was not produced", library.display());
+    library
+}
+
+/// cargo, building into `profile` with the outer build's settings.
+fn cargo_into(profile: &Path, args: &[&str]) -> Command {
     let mut build = Command::new(env!("CARGO"));
-    build.args(["build", "--quiet", "-p", "lowlat-sdk"]);
+    build.args(args);
     // The test profile decides which directory this is running from, and the
     // build has to land in the same one.
     if profile.file_name().is_some_and(|name| name == "release") {
@@ -115,12 +166,12 @@ fn shared_object() -> PathBuf {
     // proc macros, which cargo compiles for the host only when a target is
     // named. Without it a sanitized derive cannot be loaded by the compiler
     // and the build fails on a crate it cannot find.
-    if let Some(triple) = named_target(&profile) {
+    if let Some(triple) = named_target(profile) {
         build.args(["--target", &triple]);
     }
-    // **Unsanitized, whatever this test was.** The object is opened by a C
-    // harness compiled with no sanitizer runtime, and an object built with one
-    // fails to load on that runtime's own symbols. What these tests check of
+    // **Unsanitized, whatever this test was.** The library is opened or
+    // linked by a C harness compiled with no sanitizer runtime, and one built
+    // with one fails on that runtime's own symbols. What these tests check of
     // it -- its exported names, a panic held at the boundary -- is the same
     // either way; the library's own tests are what a sanitizer sees.
     // **Passed on only when it was set**: the variable replaces the
@@ -129,16 +180,7 @@ fn shared_object() -> PathBuf {
     if let Ok(flags) = std::env::var("RUSTFLAGS") {
         build.env("RUSTFLAGS", without_sanitizer(&flags));
     }
-    let built = build.output().expect("cargo builds the shared object");
-    assert!(
-        built.status.success(),
-        "the shared object could not be built:\n{}",
-        String::from_utf8_lossy(&built.stderr)
-    );
-
-    let object = profile.join(OBJECT);
-    assert!(object.is_file(), "{} was not produced", object.display());
-    object
+    build
 }
 
 /// A scratch directory under the profile, so nothing lands in the source tree
@@ -660,6 +702,47 @@ fn a_deliberate_panic_returns_a_status_from_the_shared_object() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
+}
+
+/// **The static library links alone into an MSVC program**, its system
+/// libraries named inside it, and holds a panic at its boundary as the shared
+/// object does. Under both C runtimes an application chooses: the release
+/// one, and the debug one with the release one's name set aside, which is all
+/// a debug build adds (06 section 3b). The linker's warnings are errors, so a
+/// conflict between the two runtimes fails here rather than in an
+/// application.
+#[cfg(windows)]
+#[test]
+fn the_static_library_links_alone_and_holds_a_panic() {
+    let library = static_library();
+    let source = root().join("crates/sdk/tests/c/static.c");
+    let dir = scratch("static");
+    for (runtime, set_aside, name) in [
+        ("/MT", None, "release"),
+        ("/MTd", Some("/NODEFAULTLIB:libcmt.lib"), "debug"),
+    ] {
+        let program = dir.join(format!("static-{name}.exe"));
+        let mut command = msvc("cl.exe");
+        command
+            .args(["/nologo", "/std:c11", "/W4", "/WX", runtime, "/I"])
+            .arg(root().join("include"))
+            .arg(&source)
+            .arg(format!("/Fo{}\\", dir.display()))
+            .arg(format!("/Fe{}", program.display()))
+            .args(["/link", "/WX"])
+            .args(set_aside)
+            .arg(&library);
+        if let Err(why) = run(command) {
+            panic!("the static library does not link alone with the {name} runtime:\n{why}");
+        }
+        let ran = Command::new(&program).output().expect("the program runs");
+        assert!(
+            ran.status.success(),
+            "the statically linked program failed with the {name} runtime:\n{}{}",
+            String::from_utf8_lossy(&ran.stdout),
+            String::from_utf8_lossy(&ran.stderr)
+        );
+    }
 }
 
 /// **Every exported symbol carries the prefix**, so an application built
