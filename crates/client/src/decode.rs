@@ -275,7 +275,7 @@ fn drive<D: Backend>(backend: D, shared: &Shared<'_>, replacing: bool) -> Next {
             Decision::Built(fed) => {
                 telemetry.decoder.store(1, Ordering::Relaxed);
                 telemetry.codec.store(
-                    header.as_ref().map_or(0, |h| u32::from(h.codec.wire())),
+                    feed.codec().map_or(0, |c| u32::from(c.wire())),
                     Ordering::Relaxed,
                 );
                 telemetry.stream_format.store(

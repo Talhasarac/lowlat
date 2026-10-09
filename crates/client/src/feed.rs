@@ -8,10 +8,10 @@
 //! against a fake, and they are the part that has ever gone wrong.
 //!
 //! **A decoder is built from the stream, never from the configuration.** The
-//! first unit led by a parameter set builds it, for the codec and depth the
-//! header names; what the application asked for is a preference the host may
-//! not have met, and a decoder built from it fails every picture of a stream
-//! that differs.
+//! first unit led by a parameter set builds it, for the codec that set names
+//! and the depth the header names; what the application asked for is a
+//! preference the host may not have met, and a decoder built from it fails
+//! every picture of a stream that differs.
 
 use lowlat_core::video::{self, Codec, KeyframeMetadata, VIDEO_HEADER_LEN, VideoHeader};
 pub use lowlat_decode::{Decoder, Fault, Fed};
@@ -77,6 +77,12 @@ impl<D: Decoder> Feed<D> {
         self.present
     }
 
+    /// The codec the present decoder was built for: the stream's, whatever
+    /// its headers say.
+    pub fn codec(&self) -> Option<Codec> {
+        self.built_for.map(|(codec, _)| codec)
+    }
+
     /// The host announced a generation for this stream.
     pub fn announce_generation(&mut self, generation: u32) {
         self.announced = Some(generation);
@@ -125,7 +131,16 @@ impl<D: Decoder> Feed<D> {
             return Decision::Consumed(metadata);
         }
 
-        let leads = video::leads_with_parameter_set(content, header.codec);
+        // **The codec is the parameter sets', not the header's**: a host of an
+        // earlier generation writes the first codec's number whatever it
+        // codes, and read as it stands that header never shows an HEVC
+        // stream a set to build from.
+        let sets = video::parameter_set_codec(content);
+        let leads = sets.is_some();
+        let header = VideoHeader {
+            codec: sets.unwrap_or(header.codec),
+            ..header
+        };
         let unit = content.get(VIDEO_HEADER_LEN..).unwrap_or(&[]);
 
         if header.announced {
@@ -253,6 +268,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct Fake {
         built: u32,
+        /// The codec each build was asked for, in order.
+        codecs: Vec<Codec>,
         destroyed: u32,
         fed: Vec<Vec<u8>>,
         /// What the next feeds return, in order; `Picture` once exhausted.
@@ -263,7 +280,7 @@ mod tests {
     }
 
     impl Decoder for Fake {
-        fn build(&mut self, _header: &VideoHeader) -> Result<(), Fault> {
+        fn build(&mut self, header: &VideoHeader) -> Result<(), Fault> {
             if self.refuse_build {
                 return Err(Fault::Fatal);
             }
@@ -271,6 +288,7 @@ mod tests {
                 return Err(Fault::DeviceLost);
             }
             self.built += 1;
+            self.codecs.push(header.codec);
             Ok(())
         }
         fn feed(&mut self, unit: &[u8]) -> Result<Fed, Fault> {
@@ -347,6 +365,33 @@ mod tests {
             Decision::Built(Fed::Picture)
         ));
         assert_eq!(feed.feed(&delta(1, false)), Decision::Fed(Fed::Picture));
+    }
+
+    /// **The codec is the parameter sets', not the header's.** A host of an
+    /// earlier generation writes the first codec's number in every header,
+    /// HEVC included: its video set builds an HEVC decoder, a sequence set
+    /// after it rebuilds for H.264, and a predicted H.264 slice whose first
+    /// byte also reads as a video set (0x41, on another layer) rebuilds
+    /// nothing.
+    #[test]
+    fn the_codec_comes_from_the_parameter_sets_not_the_header() {
+        let mut feed = Feed::new(Fake::default());
+        assert!(matches!(
+            feed.feed(&message(1, false, 0x40)),
+            Decision::Built(Fed::Picture)
+        ));
+        assert_eq!(feed.decoder().codecs, [Codec::H265]);
+        assert_eq!(feed.codec(), Some(Codec::H265));
+        assert_eq!(
+            feed.feed(&message(1, false, 0x02)),
+            Decision::Fed(Fed::Picture)
+        );
+
+        assert!(matches!(feed.feed(&sps(2, false)), Decision::Built(_)));
+        assert_eq!(feed.decoder().codecs, [Codec::H265, Codec::H264]);
+        assert_eq!(feed.codec(), Some(Codec::H264));
+        assert_eq!(feed.feed(&delta(2, false)), Decision::Fed(Fed::Picture));
+        assert_eq!(feed.decoder().built, 2);
     }
 
     /// **The request is one act with the teardown**, and it happens at once.
