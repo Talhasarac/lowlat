@@ -94,6 +94,37 @@ pub enum Input {
     },
     /// Everything held comes up; the application reports it on losing focus.
     ReleaseAll,
+    /// The application's own message: a header and no body, sent exactly as
+    /// given, its arguments big endian as every header's are. Nothing here
+    /// reads it, so an opcode the library also speaks changes nothing the
+    /// library keeps -- one on the unplug's opcode forgets no pad.
+    Control {
+        opcode: u8,
+        a0: u32,
+        a1: u32,
+        a2: u32,
+    },
+}
+
+/// Whether the application may send `opcode` as its own message. Not one the
+/// library sends for the session itself -- its departure, the initialization,
+/// the declaration and the keyframe request, its decode-time report,
+/// diagnostics -- which sent behind its back leaves the host and the library
+/// disagreeing about the session; and not one whose message has a body, which
+/// a header alone misframes.
+pub(crate) const fn sendable(opcode: u8) -> bool {
+    !matches!(
+        opcode,
+        op::DISCONNECT
+            | op::INIT
+            | op::ENCODER_CONFIG
+            | op::ENCODE_LATENCY
+            | op::DIAGNOSTICS
+            | op::USER_DATA
+            | op::GAMEPAD_STATE
+            | op::PAD_REPORT
+            | op::VIRTUAL_DEVICE
+    )
 }
 
 /// What travels from the application's thread to the session's.
@@ -346,6 +377,7 @@ impl Mapper {
             // A report is several messages; the driver asks for them apart.
             Input::PadReport { .. } => None,
             Input::ReleaseAll => Some(Wire::bare(op::RELEASE, 0, 0, 0)),
+            Input::Control { opcode, a0, a1, a2 } => Some(Wire::bare(opcode, a0, a1, a2)),
         }
     }
 
@@ -734,6 +766,59 @@ mod tests {
             })
             .is_some()
         );
+    }
+
+    /// The application's own message goes out exactly as given, its arguments
+    /// big endian as every header's are: a caller whose peer reads them the
+    /// other way round swaps them itself, and these bytes are its own. It
+    /// needs neither a rectangle nor a picture.
+    #[test]
+    fn an_application_message_goes_out_as_given() {
+        let mut m = Mapper::default();
+        let w = m
+            .encode(&Input::Control {
+                opcode: 6,
+                a0: 0x10FF_FFFF,
+                a1: 0xA11E_0000,
+                a2: 0x0100_0000,
+            })
+            .unwrap();
+        let mut header = [0u8; lowlat_core::control::CONTROL_HEADER_LEN];
+        lowlat_core::control::encode_header(&mut header, &w.control()).unwrap();
+        assert_eq!(
+            header,
+            [
+                0x10, 0xFF, 0xFF, 0xFF, 0xA1, 0x1E, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06
+            ]
+        );
+        assert!(w.control().body.is_empty());
+    }
+
+    /// One on the unplug's opcode forgets no pad: the same state is still not
+    /// repeated after it, where after a real unplug it is.
+    #[test]
+    fn an_application_message_forgets_no_pad() {
+        let mut m = Mapper::default();
+        let state = PadState {
+            buttons: 1,
+            ..PadState::default()
+        };
+        assert!(m.encode(&Input::PadState { pad: 0, state }).is_some());
+        assert!(
+            m.encode(&Input::Control {
+                opcode: op::GAMEPAD_UNPLUG,
+                a0: 0,
+                a1: 0,
+                a2: 0,
+            })
+            .is_some()
+        );
+        assert!(
+            m.encode(&Input::PadState { pad: 0, state }).is_none(),
+            "the application's message forgot the pad"
+        );
+        assert!(m.encode(&Input::PadUnplug { pad: 0 }).is_some());
+        assert!(m.encode(&Input::PadState { pad: 0, state }).is_some());
     }
 
     const DS5_IDLE: &[u8; pad::INPUT_LEN] =

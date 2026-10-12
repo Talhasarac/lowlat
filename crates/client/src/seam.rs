@@ -917,7 +917,9 @@ impl Client {
     /// One input report. `Err(NoSession)` without one; a full ring drops it
     /// and counts it rather than saying so here. A state, button or axis for
     /// a pad sent as its own reports is refused (`PadFamily`); an unplug
-    /// forgets the pad's family.
+    /// forgets the pad's family. The application's own message is refused for
+    /// an opcode it may not carry (`Opcode`), session or not, and forgets
+    /// nothing.
     pub fn send_input(&mut self, input: Input) -> Result<(), Error> {
         let pad = match input {
             Input::PadState { pad, .. }
@@ -926,6 +928,9 @@ impl Client {
             Input::PadUnplug { pad } => {
                 self.forget_pad(pad);
                 None
+            }
+            Input::Control { opcode, .. } if !crate::input::sendable(opcode) => {
+                return Err(Error::Opcode);
             }
             _ => None,
         };

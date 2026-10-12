@@ -1202,7 +1202,7 @@ fn refused(error: ::lowlat_client::Error) -> lowlat_status {
         Error::TooManyHeld => LOWLAT_ERR_TOO_MANY_HELD,
         Error::NoSession => LOWLAT_ERR_NOT_STARTED,
         Error::TooSmall(_) => LOWLAT_ERR_TOO_SMALL,
-        Error::Report | Error::PadFamily => LOWLAT_ERR_INVALID_ARGUMENT,
+        Error::Report | Error::PadFamily | Error::Opcode => LOWLAT_ERR_INVALID_ARGUMENT,
     }
 }
 
@@ -1952,6 +1952,45 @@ pub unsafe extern "C" fn lowlat_client_send_pad_unplug(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lowlat_client_send_release_all(cl: *mut lowlat_client) -> lowlat_status {
     report(cl, ::lowlat_client::input::Input::ReleaseAll)
+}
+
+/// The application's own message on the control channel (docs/10-client.md
+/// section 8; minor 24): a header and no body, sent exactly as given, each
+/// argument written big endian as every header's are -- a caller whose peer
+/// reads them the other way round swaps them itself. It travels in order with
+/// the input around it and never blocks, as the calls above do.
+///
+/// **The library reads none of it**, so an opcode it also speaks changes
+/// nothing it keeps: one on the unplug's opcode forgets no pad. **A host that
+/// does not know the message reads the opcode's own meaning** -- on that
+/// opcode, an unplug of the pad the third argument names.
+///
+/// Refused for the opcodes the library sends for the session itself (10, 11,
+/// 13, 21, 35) and for those whose message has a body (17, 23, 31, 32).
+///
+/// @param[in] cl The handle from [`lowlat_client_create`].
+/// @param[in] opcode The opcode.
+/// @param[in] a0 The first argument.
+/// @param[in] a1 The second argument.
+/// @param[in] a2 The third argument.
+/// @returns [`LOWLAT_OK`]; [`LOWLAT_ERR_INVALID_ARGUMENT`] for a refused
+/// opcode, session or not; [`LOWLAT_ERR_NOT_STARTED`] with no session up.
+///
+/// # Safety
+///
+/// `cl` came from [`lowlat_client_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lowlat_client_send_control(
+    cl: *mut lowlat_client,
+    opcode: u8,
+    a0: u32,
+    a1: u32,
+    a2: u32,
+) -> lowlat_status {
+    report(
+        cl,
+        ::lowlat_client::input::Input::Control { opcode, a0, a1, a2 },
+    )
 }
 
 /// Send the host's application a message.
@@ -3645,6 +3684,112 @@ mod tests {
             LOWLAT_TIMEOUT,
             "an ending the application caused raised an event"
         );
+        unsafe { lowlat_client_destroy(handle) };
+    }
+
+    /// The application's own message is refused for an opcode the library
+    /// sends for the session itself or one whose message has a body, session
+    /// or not; any other goes as far as the session. And it forgets no pad: a
+    /// pad sent as its own reports stays that family across one on the
+    /// unplug's opcode, where a real unplug frees it.
+    #[test]
+    fn an_application_message_is_refused_the_librarys_opcodes() {
+        const REFUSED: [u8; 9] = [10, 11, 13, 17, 21, 23, 31, 32, 35];
+        const SENT: [u8; 7] = [0, 6, 24, 26, 30, 36, 255];
+        let mut handle: *mut lowlat_client = core::ptr::null_mut();
+        let info = no_decoder();
+        assert_eq!(
+            unsafe { lowlat_client_create(&raw const info, &raw mut handle) },
+            LOWLAT_OK
+        );
+        for opcode in REFUSED {
+            assert_eq!(
+                unsafe { lowlat_client_send_control(handle, opcode, 0, 0, 0) },
+                LOWLAT_ERR_INVALID_ARGUMENT,
+                "opcode {opcode} was not refused without a session"
+            );
+        }
+        for opcode in SENT {
+            assert_eq!(
+                unsafe { lowlat_client_send_control(handle, opcode, 0, 0, 0) },
+                LOWLAT_ERR_NOT_STARTED,
+                "opcode {opcode} was refused"
+            );
+        }
+
+        let mut ours = lowlat_credentials {
+            size: core::mem::size_of::<lowlat_credentials>() as u32,
+            port: 0,
+            reserved: 0,
+            ufrag: [0; LOWLAT_ICE_MAX],
+            pwd: [0; LOWLAT_ICE_MAX],
+            fingerprint: [0; LOWLAT_FINGERPRINT_MAX],
+            aes256: [0; LOWLAT_ICE_MAX],
+        };
+        assert_eq!(
+            unsafe {
+                lowlat_client_new_attempt(
+                    handle,
+                    core::ptr::null(),
+                    c"one".as_ptr(),
+                    lowlat_transport::LOWLAT_TRANSPORT_BUD as u32,
+                    &raw mut ours,
+                )
+            },
+            LOWLAT_OK
+        );
+        for opcode in REFUSED {
+            assert_eq!(
+                unsafe { lowlat_client_send_control(handle, opcode, 0, 0, 0) },
+                LOWLAT_ERR_INVALID_ARGUMENT,
+                "opcode {opcode} was not refused during an attempt"
+            );
+        }
+
+        // The attempt records the family before any session carries it.
+        let idle = include_bytes!("../../../core/tests/data/pad/ds5/input-idle.bin");
+        let state = lowlat_pad_state {
+            size: core::mem::size_of::<lowlat_pad_state>() as u32,
+            buttons: 0,
+            lx: 0,
+            ly: 0,
+            rx: 0,
+            ry: 0,
+            lt: 0,
+            rt: 0,
+        };
+        assert_eq!(
+            unsafe {
+                lowlat_client_send_pad_report(
+                    handle,
+                    1,
+                    lowlat_pad_type::LOWLAT_PAD_TYPE_DS5 as u32,
+                    lowlat_pad_report::LOWLAT_PAD_REPORT_INPUT as u32,
+                    idle.as_ptr(),
+                    idle.len() as u32,
+                )
+            },
+            LOWLAT_ERR_NOT_STARTED
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_control(handle, 6, 0, 0, 1) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_pad_state(handle, 1, &raw const state) },
+            LOWLAT_ERR_INVALID_ARGUMENT,
+            "the application's message forgot the pad's family"
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_pad_unplug(handle, 1) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_pad_state(handle, 1, &raw const state) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+
+        unsafe { lowlat_client_end_connection(handle) };
         unsafe { lowlat_client_destroy(handle) };
     }
 

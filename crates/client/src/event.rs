@@ -181,6 +181,9 @@ pub enum Error {
     /// A pad already sent as the other family: as its own reports, or as
     /// states and buttons. One family until it is unplugged.
     PadFamily,
+    /// An opcode the application's own message may not carry: one the library
+    /// sends for the session itself, or one whose message has a body.
+    Opcode,
 }
 
 /// Where building a decoder stopped.

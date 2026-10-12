@@ -42,7 +42,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 23
+#define LOWLAT_ABI_MINOR 24
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -3105,6 +3105,35 @@ lowlat_status lowlat_client_send_pad_unplug(lowlat_client *cl,
 ///
 /// @attention `cl` came from `lowlat_client_create`.
 lowlat_status lowlat_client_send_release_all(lowlat_client *cl) LOWLAT_NOEXCEPT;
+
+/// The application's own message on the control channel (docs/10-client.md
+/// section 8; minor 24): a header and no body, sent exactly as given, each
+/// argument written big endian as every header's are -- a caller whose peer
+/// reads them the other way round swaps them itself. It travels in order with
+/// the input around it and never blocks, as the calls above do.
+///
+/// **The library reads none of it**, so an opcode it also speaks changes
+/// nothing it keeps: one on the unplug's opcode forgets no pad. **A host that
+/// does not know the message reads the opcode's own meaning** -- on that
+/// opcode, an unplug of the pad the third argument names.
+///
+/// Refused for the opcodes the library sends for the session itself (10, 11,
+/// 13, 21, 35) and for those whose message has a body (17, 23, 31, 32).
+///
+/// @param[in] cl The handle from `lowlat_client_create`.
+/// @param[in] opcode The opcode.
+/// @param[in] a0 The first argument.
+/// @param[in] a1 The second argument.
+/// @param[in] a2 The third argument.
+/// @returns `LOWLAT_OK`; `LOWLAT_ERR_INVALID_ARGUMENT` for a refused
+/// opcode, session or not; `LOWLAT_ERR_NOT_STARTED` with no session up.
+///
+/// @attention `cl` came from `lowlat_client_create`.
+lowlat_status lowlat_client_send_control(lowlat_client *cl,
+                                         uint8_t opcode,
+                                         uint32_t a0,
+                                         uint32_t a1,
+                                         uint32_t a2) LOWLAT_NOEXCEPT;
 
 /// Send the host's application a message.
 ///

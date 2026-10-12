@@ -179,6 +179,9 @@ struct Host {
     packetiser: Packetiser,
     /// Messages received from the client, one count per opcode.
     received: [u32; 256],
+    /// Every message received from the client, in order: opcode and the three
+    /// arguments.
+    log: Vec<(u8, u32, u32, u32)>,
     sent: [u32; 256],
     /// The client's last latency report per kind (video, sound), as the
     /// peer's argument order carries it: the figure first.
@@ -259,6 +262,7 @@ impl Host {
             negotiation: None,
             packetiser,
             received: [0; 256],
+            log: Vec::new(),
             sent: [0; 256],
             reported_us: [0; 3],
             frames: 0,
@@ -329,6 +333,8 @@ impl Host {
             let message =
                 control::parse(&self.inbound[..len]).expect("a malformed control message");
             self.received[usize::from(message.opcode)] += 1;
+            self.log
+                .push((message.opcode, message.a0, message.a1, message.a2));
             if message.opcode == op::ENCODE_LATENCY {
                 if let Some(slot) = self.reported_us.get_mut(message.a1 as usize) {
                     *slot = message.a0;
@@ -1593,6 +1599,51 @@ fn input_reaches_the_host_in_the_pictures_pixels() {
         }
     }
     assert_eq!(transitions, vec![(true, 0, 0), (false, 960, 540)]);
+}
+
+/// The application's own message reaches the host where it was sent among
+/// the keys, its arguments as they were given, on an opcode the library also
+/// speaks.
+#[test]
+fn an_application_message_reaches_the_host_in_order_and_as_given() {
+    use lowlat_client::input::Input;
+
+    let mut pair = Pair::new(23, clean());
+    pair.run_for(2000.0);
+    assert!(pair.established());
+    let key = |pressed| Input::Key {
+        code: 4,
+        mods: 0,
+        pressed,
+    };
+    let own = Input::Control {
+        opcode: op::GAMEPAD_UNPLUG,
+        a0: 0x10FF_FFFF,
+        a1: 0xA11E_0000,
+        a2: 0x0100_0000,
+    };
+    for input in [key(true), own, key(false)] {
+        pair.guest
+            .driver
+            .send_input(pair.guest.endpoint.session(), &input);
+    }
+    pair.run_for(300.0);
+
+    let input: Vec<_> = pair
+        .host
+        .log
+        .iter()
+        .copied()
+        .filter(|&(opcode, ..)| opcode == op::KEYBOARD || opcode == op::GAMEPAD_UNPLUG)
+        .collect();
+    assert_eq!(
+        input,
+        [
+            (op::KEYBOARD, 4, 0, 1),
+            (op::GAMEPAD_UNPLUG, 0x10FF_FFFF, 0xA11E_0000, 0x0100_0000),
+            (op::KEYBOARD, 4, 0, 0),
+        ]
+    );
 }
 
 /// A pad's own reports reach the host as the report and the state it
