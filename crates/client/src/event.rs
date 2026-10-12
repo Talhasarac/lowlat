@@ -97,6 +97,9 @@ pub enum Event {
     /// The room as the host describes it, with this client's own number.
     /// The body is the host's application's and is not read here.
     GuestList { number: u32, body: Vec<u8> },
+    /// The host's answer on this client's microphone changed: whether it is
+    /// taken. Every session starts with it taken.
+    Microphone { enabled: bool },
 }
 
 impl Queued for Event {
@@ -184,6 +187,8 @@ pub enum Error {
     /// An opcode the application's own message may not carry: one the library
     /// sends for the session itself, or one whose message has a body.
     Opcode,
+    /// The host said it takes no microphone; nothing was sent.
+    MicrophoneOff,
 }
 
 /// Where building a decoder stopped.

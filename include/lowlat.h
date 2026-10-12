@@ -42,7 +42,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 24
+#define LOWLAT_ABI_MINOR 25
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -408,6 +408,9 @@ typedef enum lowlat_status {
     /// A browser's offer carried no certificate digest, or one that is not
     /// a SHA-256 digest: nothing its handshake could be checked against.
     LOWLAT_ERR_FINGERPRINT = -107,
+    /// The host said it takes no microphone, so nothing was sent; it may say
+    /// otherwise later in the session (minor 25).
+    LOWLAT_ERR_MICROPHONE_OFF = -108,
     /// Nothing is lit. There is no display to capture: a headless machine, or
     /// one whose session has not started.
     LOWLAT_ERR_NO_DISPLAY = -200,
@@ -472,6 +475,9 @@ typedef enum lowlat_event_type {
     /// write, for a pad this client sends as its own reports, in the pad's
     /// own framing. Client only, minor 10.
     LOWLAT_EVENT_PAD_REPORT = 16,
+    /// The host changed its answer on this client's microphone: whether it
+    /// takes one. Every session starts with it taken. Client only, minor 25.
+    LOWLAT_EVENT_MICROPHONE = 17,
 } lowlat_event_type;
 
 /// Why an attempt finished.
@@ -1457,6 +1463,12 @@ typedef struct lowlat_pad_report_event {
     const uint8_t *report;
 } lowlat_pad_report_event;
 
+/// The host's answer on this client's microphone, when it changes.
+typedef struct lowlat_microphone_event {
+    /// Whether the host takes it: open the device on true, close it on false.
+    bool enabled;
+} lowlat_microphone_event;
+
 /// Whichever event this is.
 ///
 /// A union cannot describe itself, and the tag beside it is what says which
@@ -1478,6 +1490,7 @@ typedef union lowlat_event_body {
     lowlat_rumble_event rumble;
     lowlat_guest_list_event guest_list;
     lowlat_pad_report_event pad_report;
+    lowlat_microphone_event microphone;
 } lowlat_event_body;
 
 /// One event.
@@ -1802,6 +1815,14 @@ typedef struct lowlat_client_status {
     /// of the protocol `mapping_refused_by` names; zero for none.
     uint16_t mapping_refusal;
     uint32_t mapping_refused_by;
+    /// The microphone (minor 25): frames of ten milliseconds sent, and frames
+    /// dropped because the ring to the session thread was full.
+    uint32_t microphone_sent;
+    uint32_t microphone_dropped;
+    /// Whether the host takes this client's microphone: true until it says
+    /// otherwise, and again at each attempt's start.
+    bool microphone;
+    uint8_t microphone_reserved[3];
 } lowlat_client_status;
 
 /// What a probe of the translation in front of a client's port asks
@@ -3134,6 +3155,36 @@ lowlat_status lowlat_client_send_control(lowlat_client *cl,
                                          uint32_t a0,
                                          uint32_t a1,
                                          uint32_t a2) LOWLAT_NOEXCEPT;
+
+/// The application's microphone (docs/10-client.md section 6; minor 25):
+/// sixteen-bit mono samples at 48 kHz, as many as the call has. The library
+/// cuts them into frames of ten milliseconds, carries what does not make a
+/// whole one to the next call, and sends each as the host expects a
+/// microphone -- uncompressed when the attempt's `raw_audio` is set,
+/// compressed otherwise. It never blocks: frames cross a fixed ring to the
+/// session thread, and one that fills drops the newest frame and counts it in
+/// `lowlat_client_status`.
+///
+/// **The host decides whether it takes one.** Every session starts with it
+/// taken; a host that says it takes none raises `LOWLAT_EVENT_MICROPHONE`
+/// with `enabled` false, and from then the call is refused with
+/// `LOWLAT_ERR_MICROPHONE_OFF` -- the partial frame forgotten -- until the
+/// host says otherwise. Close the device on the first, open it on the second.
+/// A device another sample rate or channel count delivers is the
+/// application's to convert.
+///
+/// @param[in] cl The handle from `lowlat_client_create`.
+/// @param[in] samples The samples, mono.
+/// @param[in] count How many.
+/// @returns `LOWLAT_OK`; `LOWLAT_ERR_MICROPHONE_OFF` while the host takes
+/// none; `LOWLAT_ERR_NOT_STARTED` with no session up;
+/// `LOWLAT_ERR_INVALID_ARGUMENT` for null samples with a count.
+///
+/// @attention `cl` came from `lowlat_client_create`; `samples` points to `count`
+/// samples, or is null with `count` zero.
+lowlat_status lowlat_client_send_microphone(lowlat_client *cl,
+                                            const int16_t *samples,
+                                            uint32_t count) LOWLAT_NOEXCEPT;
 
 /// Send the host's application a message.
 ///

@@ -1616,8 +1616,8 @@ impl SeatHold {
     /// Whether this host is taking a guest's microphone.
     ///
     /// **Read every pass rather than latched**, because it is live: a host
-    /// that stops taking one has to tell the peer, and a peer that was never
-    /// told keeps its microphone muted.
+    /// that stops taking one has to tell the peer, which otherwise goes on
+    /// sending it.
     pub fn accept_microphone(&self) -> bool {
         self.shared.accept_microphone()
     }

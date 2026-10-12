@@ -107,6 +107,9 @@ pub enum lowlat_status {
     /// A browser's offer carried no certificate digest, or one that is not
     /// a SHA-256 digest: nothing its handshake could be checked against.
     LOWLAT_ERR_FINGERPRINT = -107,
+    /// The host said it takes no microphone, so nothing was sent; it may say
+    /// otherwise later in the session (minor 25).
+    LOWLAT_ERR_MICROPHONE_OFF = -108,
 
     /// Nothing is lit. There is no display to capture: a headless machine, or
     /// one whose session has not started.
@@ -134,7 +137,7 @@ pub enum lowlat_status {
 /// The major version, raised only when something already published changes.
 pub const LOWLAT_ABI_MAJOR: u32 = 0;
 /// The minor version, raised when surface is appended.
-pub const LOWLAT_ABI_MINOR: u32 = 24;
+pub const LOWLAT_ABI_MINOR: u32 = 25;
 
 /// Major and minor, packed.
 ///
@@ -190,7 +193,7 @@ pub extern "C" fn lowlat_features() -> u32 {
 ///
 /// A table rather than a match, because the value arriving is an integer and
 /// not necessarily one of these.
-const DESCRIPTIONS: [(lowlat_status, &CStr); 24] = [
+const DESCRIPTIONS: [(lowlat_status, &CStr); 25] = [
     (LOWLAT_OK, c"ok"),
     (LOWLAT_TIMEOUT, c"no event within the timeout"),
     (
@@ -229,6 +232,7 @@ const DESCRIPTIONS: [(lowlat_status, &CStr); 24] = [
         LOWLAT_ERR_FINGERPRINT,
         c"the offer's certificate digest is missing or malformed",
     ),
+    (LOWLAT_ERR_MICROPHONE_OFF, c"the host takes no microphone"),
     (LOWLAT_ERR_NO_DISPLAY, c"nothing is lit"),
     (
         LOWLAT_ERR_DISPLAY_UNREACHABLE,

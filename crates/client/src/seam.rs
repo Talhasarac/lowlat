@@ -27,7 +27,9 @@ use crate::config::{Backend, Caps, Config, Decoding, FrameKind, Mapping, Port, V
 use crate::driver::{Telemetry, Units};
 use crate::event::{Arrival, Ask, DecoderStage, Error, Event, LEAVE_GRACE_MS, Peer, Transport};
 use crate::frames::{Frames, Held};
-use crate::input::{Input, RING_DEPTH, ReportKind, Request, Viewport};
+use crate::input::{
+    Framer, Input, MICROPHONE_DEPTH, MicFrame, RING_DEPTH, ReportKind, Request, Viewport,
+};
 use crate::sound::{self, Packets, Sound};
 use lowlat_core::pad::{self, Product};
 
@@ -63,6 +65,10 @@ struct Attempt {
     /// Input and the viewport, in order, to the session thread. Fixed depth;
     /// a full ring drops the newest and counts it, never blocks the caller.
     requests: Option<Arc<Ring<Request, RING_DEPTH>>>,
+    /// The microphone's whole frames to the session thread, the same way, and
+    /// what the application handed over that does not make one yet.
+    microphone: Option<Arc<Ring<MicFrame, MICROPHONE_DEPTH>>>,
+    framer: Framer,
     /// The pads the application has named and which family each is sent
     /// as, so the other family is refused until an unplug.
     pads: [Option<(u32, Family)>; PADS],
@@ -621,6 +627,8 @@ impl Client {
             inject: None,
             ask: None,
             requests: None,
+            microphone: None,
+            framer: Framer::default(),
             pads: [None; PADS],
             thread: None,
             decode: None,
@@ -735,6 +743,7 @@ impl Client {
         }
         let (ask, asked) = mpsc::channel::<Ask>();
         let requests: Arc<Ring<Request, RING_DEPTH>> = Arc::new(Ring::new());
+        let microphone: Arc<Ring<MicFrame, MICROPHONE_DEPTH>> = Arc::new(Ring::new());
 
         if attempt.config.ipv4_only {
             lowlat_common::log_info!("client: attempt={} offers and checks IPv4 only", id);
@@ -770,6 +779,7 @@ impl Client {
             arrivals,
             asked,
             requests: Arc::clone(&requests),
+            microphone: Arc::clone(&microphone),
             emit: self.emit.clone(),
             telemetry: Arc::clone(&self.telemetry),
             units: self.units.clone(),
@@ -789,6 +799,7 @@ impl Client {
         attempt.inject = Some(inject);
         attempt.ask = Some(ask);
         attempt.requests = Some(requests);
+        attempt.microphone = Some(microphone);
         attempt.thread = Some(thread);
 
         // The decode thread, beside it. It opens the device itself and
@@ -1032,6 +1043,39 @@ impl Client {
             }
             _ => false,
         }
+    }
+
+    /// The application's microphone, as many samples as it has: cut into
+    /// whole frames here, the remainder carried to the next call, and handed
+    /// to the session thread (docs/10-client.md section 6). `MicrophoneOff`
+    /// while the host's answer is no, the partial frame forgotten with it;
+    /// `NoSession` without one. A full ring drops the newest frame and counts
+    /// it rather than blocking.
+    pub fn send_microphone(&mut self, samples: &[i16]) -> Result<(), Error> {
+        let Some(attempt) = self.attempt.as_mut() else {
+            return Err(Error::NoSession);
+        };
+        if self.telemetry.microphone_off.load(Ordering::Relaxed) {
+            attempt.framer.clear();
+            return Err(Error::MicrophoneOff);
+        }
+        let (Some(ring), Some(thread)) = (attempt.microphone.as_ref(), attempt.thread.as_ref())
+        else {
+            return Err(Error::NoSession);
+        };
+        let telemetry = &self.telemetry;
+        let mut pushed = false;
+        attempt.framer.feed(samples, |frame| {
+            if ring.push(*frame).is_err() {
+                telemetry.microphone_dropped.fetch_add(1, Ordering::Relaxed);
+            } else {
+                pushed = true;
+            }
+        });
+        if pushed {
+            let _ = thread.wake_handle().notify();
+        }
+        Ok(())
     }
 
     /// What the loop reports about itself.

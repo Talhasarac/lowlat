@@ -8,6 +8,7 @@
 //! is known and the control channel is written.
 
 use lowlat_core::control::{Control, op};
+use lowlat_core::microphone;
 use lowlat_core::pad::{self, Product};
 use lowlat_core::video::Rotation;
 
@@ -142,6 +143,59 @@ pub(crate) enum Request {
 
 /// Entries the ring between the two threads holds.
 pub(crate) const RING_DEPTH: usize = 1024;
+
+/// Ten milliseconds of the application's microphone, mono: what crosses to the
+/// session thread.
+pub(crate) type MicFrame = [i16; microphone::FRAME];
+
+/// Frames the microphone's own ring holds: two hundred milliseconds. Beside
+/// the input's rather than in it, whose entries are a few dozen bytes.
+pub(crate) const MICROPHONE_DEPTH: usize = 20;
+
+/// Cuts what the application hands over into whole frames, the remainder
+/// carried to the next call: **a receiver drops a tail that is not a whole
+/// frame** (docs/01-protocol.md 11.4b), so the lengths a capture device happens
+/// to deliver are never passed on.
+#[derive(Debug, Clone)]
+pub(crate) struct Framer {
+    frame: MicFrame,
+    held: usize,
+}
+
+impl Default for Framer {
+    fn default() -> Self {
+        Self {
+            frame: [0; microphone::FRAME],
+            held: 0,
+        }
+    }
+}
+
+impl Framer {
+    /// Take samples, handing every frame they complete to `whole`, in order.
+    pub(crate) fn feed(&mut self, mut samples: &[i16], mut whole: impl FnMut(&MicFrame)) {
+        while !samples.is_empty() {
+            let take = (microphone::FRAME - self.held).min(samples.len());
+            if let (Some(dst), Some(src)) = (
+                self.frame.get_mut(self.held..self.held + take),
+                samples.get(..take),
+            ) {
+                dst.copy_from_slice(src);
+            }
+            self.held += take;
+            samples = samples.get(take..).unwrap_or(&[]);
+            if self.held == microphone::FRAME {
+                whole(&self.frame);
+                self.held = 0;
+            }
+        }
+    }
+
+    /// Forget a partial frame: the host stopped taking the microphone.
+    pub(crate) fn clear(&mut self) {
+        self.held = 0;
+    }
+}
 
 /// The pad states remembered for deduplication, by identifier.
 const PADS: usize = 4;
@@ -819,6 +873,34 @@ mod tests {
         );
         assert!(m.encode(&Input::PadUnplug { pad: 0 }).is_some());
         assert!(m.encode(&Input::PadState { pad: 0, state }).is_some());
+    }
+
+    /// Whatever lengths the application hands over, frames go on whole and in
+    /// order, the remainder carried to the next call; a cleared remainder is
+    /// not sent with the next frame.
+    #[test]
+    fn the_microphone_is_cut_into_whole_frames() {
+        let samples: Vec<i16> = (0..1500).map(|i| i16::try_from(i).unwrap()).collect();
+        let mut framer = Framer::default();
+        let mut frames: Vec<MicFrame> = Vec::new();
+        let mut at = 0;
+        for len in [300, 300, 360, 540] {
+            framer.feed(&samples[at..at + len], |frame| frames.push(*frame));
+            at += len;
+        }
+        assert_eq!(frames.len(), 3, "1500 samples are three frames and 60 held");
+        assert_eq!((frames[0][0], frames[0][479]), (0, 479));
+        assert_eq!((frames[1][0], frames[1][479]), (480, 959));
+        assert_eq!((frames[2][0], frames[2][479]), (960, 1439));
+
+        framer.clear();
+        frames.clear();
+        framer.feed(&[7; 480], |frame| frames.push(*frame));
+        assert_eq!(frames.len(), 1);
+        assert!(
+            frames[0].iter().all(|&s| s == 7),
+            "the cleared remainder came back"
+        );
     }
 
     const DS5_IDLE: &[u8; pad::INPUT_LEN] =

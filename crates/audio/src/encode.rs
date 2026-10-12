@@ -13,7 +13,7 @@
 use lowlat_core::audio::Codec;
 use opus_rs::{Application, OpusEncoder};
 
-use crate::{CHANNELS, Error, FRAME, FRAME_BYTES, SAMPLE_RATE};
+use crate::{CHANNELS, Error, FRAME, SAMPLE_RATE};
 
 /// The largest packet the codec will produce for one frame. Its own ceiling is
 /// smaller; the margin costs a few hundred bytes once.
@@ -25,13 +25,19 @@ const PACKET_MAX: usize = 1500;
 /// transparent for music and still under one percent of a modest video budget.
 pub const DEFAULT_BITRATE_KBPS: u32 = 128;
 
-/// One stream's encoder.
+/// What a peer's microphone is compressed at.
+pub const MICROPHONE_BITRATE_KBPS: u32 = 64;
+
+/// One stream's encoder: the host's sound, or a peer's microphone.
 pub struct Encoder {
     opus: OpusEncoder,
+    /// Channels interleaved, and samples per channel in one frame.
+    channels: usize,
+    frame: usize,
     /// The codec takes float samples; capture gives sixteen-bit ones, because
     /// that is what the uncompressed path puts on the wire. The conversion is
-    /// one pass over 20 ms and is measured with the encode rather than beside
-    /// it.
+    /// one pass over a frame and is measured with the encode rather than
+    /// beside it.
     floats: Vec<f32>,
     packet: Vec<u8>,
 }
@@ -48,13 +54,40 @@ impl core::fmt::Debug for Encoder {
 impl Encoder {
     /// Build an encoder for this host's format.
     pub fn new(bitrate_kbps: u32) -> Result<Self, Error> {
+        Self::build(CHANNELS, FRAME, Application::Audio, bitrate_kbps)
+    }
+
+    /// Build one for a peer's microphone as the wire carries it
+    /// (docs/01-protocol.md 11.4b): mono, ten milliseconds a frame.
+    ///
+    /// **One mode only, the transform's**, never the speech or the hybrid one.
+    /// A receiver decodes any of them, but the hybrid packets the speech mode
+    /// produces for a voice were measured coming out of this crate's own
+    /// decoder at a tenth to a half of their level, where the transform's come
+    /// out whole through it and through the reference decoder alike.
+    pub fn microphone() -> Result<Self, Error> {
+        Self::build(
+            lowlat_core::microphone::CHANNELS,
+            lowlat_core::microphone::FRAME,
+            Application::RestrictedLowDelay,
+            MICROPHONE_BITRATE_KBPS,
+        )
+    }
+
+    fn build(
+        channels: usize,
+        frame: usize,
+        application: Application,
+        bitrate_kbps: u32,
+    ) -> Result<Self, Error> {
         let rate = i32::try_from(SAMPLE_RATE).map_err(|_| Error::Encode)?;
-        let mut opus =
-            OpusEncoder::new(rate, CHANNELS, Application::Audio).map_err(|_| Error::Encode)?;
+        let mut opus = OpusEncoder::new(rate, channels, application).map_err(|_| Error::Encode)?;
         opus.bitrate_bps = bits_per_second(bitrate_kbps);
         Ok(Self {
             opus,
-            floats: vec![0.0; FRAME * CHANNELS],
+            channels,
+            frame,
+            floats: vec![0.0; frame * channels],
             packet: vec![0u8; PACKET_MAX],
         })
     }
@@ -74,19 +107,36 @@ impl Encoder {
 
     /// Encode one captured frame.
     ///
-    /// `frame` is exactly [`FRAME_BYTES`] of interleaved sixteen-bit samples,
-    /// which is what capture delivers.
+    /// `frame` is exactly one frame of interleaved sixteen-bit samples, little
+    /// endian -- [`crate::FRAME_BYTES`] for the host's format -- which is what
+    /// capture delivers.
     pub fn encode(&mut self, frame: &[u8]) -> Result<&[u8], Error> {
-        if frame.len() != FRAME_BYTES {
+        if frame.len() != self.frame * self.channels * 2 {
             return Err(Error::Encode);
         }
         for (dst, pair) in self.floats.iter_mut().zip(frame.chunks_exact(2)) {
             let sample = i16::from_le_bytes([pair[0], pair[1]]);
             *dst = f32::from(sample) / 32768.0;
         }
+        self.compress()
+    }
+
+    /// Encode one frame handed over as samples, interleaved: what an
+    /// application gives a microphone.
+    pub fn encode_samples(&mut self, frame: &[i16]) -> Result<&[u8], Error> {
+        if frame.len() != self.frame * self.channels {
+            return Err(Error::Encode);
+        }
+        for (dst, &sample) in self.floats.iter_mut().zip(frame) {
+            *dst = f32::from(sample) / 32768.0;
+        }
+        self.compress()
+    }
+
+    fn compress(&mut self) -> Result<&[u8], Error> {
         let len = self
             .opus
-            .encode(&self.floats, FRAME, &mut self.packet)
+            .encode(&self.floats, self.frame, &mut self.packet)
             .map_err(|_| Error::Encode)?;
         self.packet.get(..len).ok_or(Error::Encode)
     }
@@ -120,6 +170,7 @@ fn bits_per_second(kbps: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FRAME_BYTES;
 
     /// A frame of a tone, as capture would deliver it.
     fn tone(hz: f64, amplitude: f64, offset: usize) -> Vec<u8> {
@@ -168,6 +219,49 @@ mod tests {
             mean_square > expected * 0.5 && mean_square < expected * 2.0,
             "decoded mean square {mean_square}, expected about {expected}"
         );
+    }
+
+    /// **A microphone frame is ten milliseconds of mono in the codec's voice
+    /// mode**, a packet flagged mono -- a receiver built for one channel
+    /// refuses the other -- that decodes back to the tone at its level.
+    #[test]
+    fn a_microphone_frame_decodes_back_to_the_tone() {
+        let frame = lowlat_core::microphone::FRAME;
+        let mut encoder = Encoder::microphone().expect("a microphone encoder");
+        let mut decoder = opus_rs::OpusDecoder::new(48_000, 1).expect("a decoder");
+        let mut out = vec![0f32; frame];
+        let mut energy = 0f64;
+        for step in 0..20 {
+            let samples: Vec<i16> = (0..frame)
+                .map(|i| {
+                    let t = (step * frame + i) as f64 / 48_000.0;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let sample = ((2.0 * core::f64::consts::PI * 440.0 * t).sin() * 12000.0) as i16;
+                    sample
+                })
+                .collect();
+            let packet = encoder.encode_samples(&samples).expect("encodes").to_vec();
+            assert!(!packet.is_empty());
+            assert_eq!(packet[0] & 0x04, 0, "the packet is not flagged mono");
+            assert!(
+                packet[0] >> 3 >= 16,
+                "the packet is not the transform's, config {}",
+                packet[0] >> 3
+            );
+            let decoded = decoder.decode(&packet, frame, &mut out).expect("decodes");
+            assert_eq!(decoded, 480);
+            if step == 19 {
+                energy = out.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
+            }
+        }
+        let mean_square = energy / frame as f64;
+        let expected = (12000.0f64 / 32768.0).powi(2) / 2.0;
+        assert!(
+            mean_square > expected * 0.5 && mean_square < expected * 2.0,
+            "decoded mean square {mean_square}, expected about {expected}"
+        );
+        assert!(encoder.encode_samples(&vec![0i16; frame - 1]).is_err());
+        assert!(encoder.encode_samples(&vec![0i16; frame * 2]).is_err());
     }
 
     #[test]

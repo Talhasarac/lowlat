@@ -256,21 +256,19 @@ impl Ear {
 
 /// The message that tells a peer whether this host will take its microphone.
 ///
-/// **A peer sends nothing until it is told.** Its own settings decide whether
-/// it offers one at all, and this decides whether it may; told nothing, it
-/// keeps the microphone muted and a host that only listened would receive
-/// silence and look broken from both ends ([05 §9.6](../../../docs/05-host.md)).
+/// **A `"0"` is what stops a peer.** Its own settings decide whether it offers
+/// one at all; told nothing, a peer with one sends, and a host that is not
+/// taking it would be sent a packet every ten milliseconds for nothing
+/// ([05 §9.6](../../../docs/05-host.md)). *Corrected 2026-10-12: this said a
+/// peer sends nothing until it is told; the message only ever turns one off.*
 pub(crate) fn announcement(accepting: bool) -> (u32, Vec<u8>) {
     let body = if accepting {
         b"1\0".to_vec()
     } else {
         b"0\0".to_vec()
     };
-    (ANNOUNCE_ID, body)
+    (microphone::ANNOUNCE_ID, body)
 }
-
-/// The sub-identifier the announcement travels under.
-const ANNOUNCE_ID: u32 = 18;
 
 #[cfg(test)]
 mod tests {

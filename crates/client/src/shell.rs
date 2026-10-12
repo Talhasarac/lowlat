@@ -28,7 +28,7 @@ use std::sync::atomic::Ordering;
 use crate::config;
 use crate::driver::{Driver, Telemetry, Units, pack_relayed};
 use crate::event::{Arrival, Ask, Event, Outcome};
-use crate::input::{RING_DEPTH, Request};
+use crate::input::{MICROPHONE_DEPTH, MicFrame, RING_DEPTH, Request};
 use crate::sound::Packets;
 use crate::{
     AUDIO_CHANNEL, AUDIO_RECV_SLOTS, BODY, CONTROL_RECV_SLOTS, CONTROL_SEND_SLOTS, VIDEO_CHANNEL,
@@ -62,6 +62,8 @@ pub(crate) struct Attached {
     pub asked: mpsc::Receiver<Ask>,
     /// The consumer end of the input ring; the seam holds the producer.
     pub requests: Arc<Ring<Request, RING_DEPTH>>,
+    /// The consumer end of the microphone's ring, likewise.
+    pub microphone: Arc<Ring<MicFrame, MICROPHONE_DEPTH>>,
     pub emit: events::Sender<Event>,
     pub telemetry: Arc<Telemetry>,
     pub units: Units,
@@ -112,6 +114,7 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
         arrivals,
         asked,
         requests,
+        microphone,
         emit,
         telemetry,
         units,
@@ -214,6 +217,7 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
         let arrivals = &arrivals;
         let asked = &asked;
         let requests = &requests;
+        let microphone = &microphone;
         let driving = &mut driver;
         let mut leaving = false;
         let mut ended: Option<Outcome> = None;
@@ -246,6 +250,11 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
                         driving.switch_decoder(endpoint.session(), flags);
                     }
                 }
+            }
+            // The microphone, oldest frame first; the driver decides whether
+            // the host takes it.
+            while let Some(frame) = microphone.pop() {
+                driving.send_microphone(endpoint.session(), &frame);
             }
         }) {
             Ok(turn) => turn,

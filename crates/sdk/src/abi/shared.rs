@@ -74,6 +74,9 @@ pub enum lowlat_event_type {
     /// write, for a pad this client sends as its own reports, in the pad's
     /// own framing. Client only, minor 10.
     LOWLAT_EVENT_PAD_REPORT = 16,
+    /// The host changed its answer on this client's microphone: whether it
+    /// takes one. Every session starts with it taken. Client only, minor 25.
+    LOWLAT_EVENT_MICROPHONE = 17,
 }
 
 /// Why an attempt finished.
@@ -200,6 +203,14 @@ pub struct lowlat_fatal_event {
 #[derive(Debug, Clone, Copy)]
 pub struct lowlat_blocked_event {
     pub blocked: bool,
+}
+
+/// The host's answer on this client's microphone, when it changes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct lowlat_microphone_event {
+    /// Whether the host takes it: open the device on true, close it on false.
+    pub enabled: bool,
 }
 
 /// The host ended one stream and left the session up.
@@ -398,6 +409,7 @@ pub union lowlat_event_body {
     pub rumble: lowlat_rumble_event,
     pub guest_list: lowlat_guest_list_event,
     pub pad_report: lowlat_pad_report_event,
+    pub microphone: lowlat_microphone_event,
 }
 
 /// One event.

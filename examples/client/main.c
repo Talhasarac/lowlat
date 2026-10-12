@@ -213,6 +213,13 @@ struct demo {
 	atomic_uint snd_age_max;
 	atomic_uint snd_resyncs;
 
+	// The microphone, with `LOWLAT_MIC_TONE`: a tone at that pitch sent as one
+	// from a thread of its own, a few milliseconds at a time as a capture
+	// device hands them over; calls refused because the host takes none.
+	double mic_hz;
+	MTY_Thread *mic;
+	atomic_uint mic_refused;
+
 	// The knobs: the rate asked of the host, the presentation cap, the leave.
 	uint32_t ask_fps;
 	bool asked;
@@ -1232,6 +1239,12 @@ static void pump_library(struct demo *d)
 			case LOWLAT_EVENT_BLOCKED:
 				printf("demo: input %s\n", e.body.blocked.blocked ? "blocked" : "unblocked");
 				break;
+			case LOWLAT_EVENT_MICROPHONE:
+				// A capture device would be opened or closed here; the tone
+				// keeps running and the library refuses it while closed.
+				printf("demo: the host %s the microphone\n",
+					e.body.microphone.enabled ? "takes" : "takes no");
+				break;
 			case LOWLAT_EVENT_STREAM_ENDED:
 				printf("demo: stream %u ended, status %d\n", (unsigned) e.body.stream_ended.stream,
 					(int) e.body.stream_ended.status);
@@ -1369,7 +1382,8 @@ static void report(struct demo *d)
 		"frag=%" PRIu64 " late=%" PRIu64 " dup=%" PRIu64 " oow=%" PRIu64 " nacks=%" PRIu64
 		" loss30=%.4f cursor=%u misses=%u refused=%u rumble=%u "
 		"guest=%u owner=%d rosters=%u h_rtt=%.1f h_mbps=%.2f h_enc=%.2f h_dec=%.2f "
-		"h_packets=%d h_fast=%d h_slow=%d h_cg=%d\n",
+		"h_packets=%d h_fast=%d h_slow=%d h_cg=%d mic=%u mic_dropped=%u mic_open=%d "
+		"mic_refused=%u\n",
 		d->seconds, presents, polls, pictures, repeats, skips,
 		gfx_name(d->gfx), (int) d->vsync,
 		swap_count > 0 ? (double) swap_sum_us / (double) swap_count / 1000.0 : 0.0,
@@ -1392,7 +1406,8 @@ static void report(struct demo *d)
 		m.video.nacks_sent, (double) m.video.loss_30s, st.cursor_images, st.cursor_misses,
 		st.cursor_refused, d->rumbles, st.number, d->owner, d->rosters, d->host_rtt_ms,
 		d->host_mbps, d->host_encode_ms, d->host_decode_ms, d->host_packets, d->host_fast_rts,
-		d->host_slow_rts, d->host_cg_events);
+		d->host_slow_rts, d->host_cg_events, st.microphone_sent, st.microphone_dropped,
+		(int) st.microphone, atomic_exchange(&d->mic_refused, 0));
 	// The warning every client shows for hardware that cannot keep up,
 	// gated on the reader's lag rather than on any figure of the decoder's:
 	// thirty or more messages behind for sixty consecutive seconds, cleared
@@ -1724,6 +1739,41 @@ static void *present_loop(void *opaque)
 	if (d->showing)
 		lowlat_client_release_frame(d->client, &d->shown, NULL);
 	MTY_WindowSetGFX(d->app, d->window, MTY_GFX_NONE, false);
+	return NULL;
+}
+
+// The tone thread: what a capture device would hand over, made up. Each pass
+// sends as many samples as the clock says are due since the last, so the
+// stream keeps time whatever the sleep does; the library cuts them into its
+// own frames. Before a session, and while the host takes no microphone, the
+// samples go nowhere.
+static void *tone_loop(void *opaque)
+{
+	struct demo *d = opaque;
+	static int16_t pcm[4800];
+	const double step = 6.283185307179586 * d->mic_hz / 48000.0;
+	double phase = 0.0;
+	double began = now_ms();
+	uint64_t sent = 0;
+	while (!atomic_load(&d->quit)) {
+		MTY_Sleep(5);
+		uint64_t due = (uint64_t) ((now_ms() - began) * 48.0);
+		if (due <= sent)
+			continue;
+		// A thread held up for longer than the buffer starts again from now.
+		if (due - sent > 4800)
+			sent = due - 4800;
+		uint32_t n = (uint32_t) (due - sent);
+		for (uint32_t i = 0; i < n; i++) {
+			pcm[i] = (int16_t) (sin(phase) * 8000.0);
+			phase += step;
+			if (phase > 6.283185307179586)
+				phase -= 6.283185307179586;
+		}
+		if (lowlat_client_send_microphone(d->client, pcm, n) == LOWLAT_ERR_MICROPHONE_OFF)
+			atomic_fetch_add(&d->mic_refused, 1);
+		sent += n;
+	}
 	return NULL;
 }
 
@@ -2218,12 +2268,19 @@ int main(void)
 	if (d.audio == NULL)
 		fprintf(stderr, "demo: no sound device, running silent\n");
 	d.listener = MTY_ThreadCreate(sound_loop, &d);
+	d.mic_hz = atof(env_or("LOWLAT_MIC_TONE", "0"));
+	if (d.mic_hz > 0.0) {
+		printf("demo: sending a %.0f Hz tone as the microphone\n", d.mic_hz);
+		d.mic = MTY_ThreadCreate(tone_loop, &d);
+	}
 
 	MTY_AppRun(d.app);
 
 	atomic_store(&d.quit, true);
 	MTY_ThreadDestroy(&d.presenter);
 	MTY_ThreadDestroy(&d.listener);
+	if (d.mic != NULL)
+		MTY_ThreadDestroy(&d.mic);
 	if (d.audio != NULL)
 		MTY_AudioDestroy(&d.audio);
 	raw_pads_close(&d.raw, d.client);

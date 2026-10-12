@@ -531,6 +531,14 @@ pub struct lowlat_client_status {
     /// of the protocol `mapping_refused_by` names; zero for none.
     pub mapping_refusal: u16,
     pub mapping_refused_by: u32,
+    /// The microphone (minor 25): frames of ten milliseconds sent, and frames
+    /// dropped because the ring to the session thread was full.
+    pub microphone_sent: u32,
+    pub microphone_dropped: u32,
+    /// Whether the host takes this client's microphone: true until it says
+    /// otherwise, and again at each attempt's start.
+    pub microphone: bool,
+    pub microphone_reserved: [u8; 3],
 }
 
 /// The status's size before the relay's fields were appended: the least a
@@ -1203,6 +1211,7 @@ fn refused(error: ::lowlat_client::Error) -> lowlat_status {
         Error::NoSession => LOWLAT_ERR_NOT_STARTED,
         Error::TooSmall(_) => LOWLAT_ERR_TOO_SMALL,
         Error::Report | Error::PadFamily | Error::Opcode => LOWLAT_ERR_INVALID_ARGUMENT,
+        Error::MicrophoneOff => LOWLAT_ERR_MICROPHONE_OFF,
     }
 }
 
@@ -1993,6 +2002,60 @@ pub unsafe extern "C" fn lowlat_client_send_control(
     )
 }
 
+/// The application's microphone (docs/10-client.md section 6; minor 25):
+/// sixteen-bit mono samples at 48 kHz, as many as the call has. The library
+/// cuts them into frames of ten milliseconds, carries what does not make a
+/// whole one to the next call, and sends each as the host expects a
+/// microphone -- uncompressed when the attempt's `raw_audio` is set,
+/// compressed otherwise. It never blocks: frames cross a fixed ring to the
+/// session thread, and one that fills drops the newest frame and counts it in
+/// [`lowlat_client_status`].
+///
+/// **The host decides whether it takes one.** Every session starts with it
+/// taken; a host that says it takes none raises [`LOWLAT_EVENT_MICROPHONE`]
+/// with `enabled` false, and from then the call is refused with
+/// [`LOWLAT_ERR_MICROPHONE_OFF`] -- the partial frame forgotten -- until the
+/// host says otherwise. Close the device on the first, open it on the second.
+/// A device another sample rate or channel count delivers is the
+/// application's to convert.
+///
+/// @param[in] cl The handle from [`lowlat_client_create`].
+/// @param[in] samples The samples, mono.
+/// @param[in] count How many.
+/// @returns [`LOWLAT_OK`]; [`LOWLAT_ERR_MICROPHONE_OFF`] while the host takes
+/// none; [`LOWLAT_ERR_NOT_STARTED`] with no session up;
+/// [`LOWLAT_ERR_INVALID_ARGUMENT`] for null samples with a count.
+///
+/// # Safety
+///
+/// `cl` came from [`lowlat_client_create`]; `samples` points to `count`
+/// samples, or is null with `count` zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lowlat_client_send_microphone(
+    cl: *mut lowlat_client,
+    samples: *const i16,
+    count: u32,
+) -> lowlat_status {
+    let samples: &[i16] = if samples.is_null() {
+        if count != 0 {
+            return LOWLAT_ERR_INVALID_ARGUMENT;
+        }
+        &[]
+    } else {
+        // SAFETY: the contract is that `samples` points to `count` samples.
+        unsafe { core::slice::from_raw_parts(samples, count as usize) }
+    };
+    // SAFETY: `cl` came from `lowlat_client_create`.
+    unsafe {
+        entered(cl, |handle| {
+            match handle.held().seam.send_microphone(samples) {
+                Ok(()) => LOWLAT_OK,
+                Err(error) => refused(error),
+            }
+        })
+    }
+}
+
 /// Send the host's application a message.
 ///
 /// @param[in] cl The handle from [`lowlat_client_create`].
@@ -2137,6 +2200,10 @@ pub unsafe extern "C" fn lowlat_client_get_status(
                 mapped_port: 0,
                 mapping_refusal: 0,
                 mapping_refused_by: 0,
+                microphone_sent: t.microphone_sent.load(Ordering::Relaxed),
+                microphone_dropped: t.microphone_dropped.load(Ordering::Relaxed),
+                microphone: !t.microphone_off.load(Ordering::Relaxed),
+                microphone_reserved: [0; 3],
             };
             if let Some(relayed) =
                 ::lowlat_client::driver::unpack_relayed(t.relayed.load(Ordering::Relaxed))
@@ -2911,6 +2978,13 @@ fn described(
                 blocked: lowlat_blocked_event { blocked: *blocked },
             },
         },
+        Event::Microphone { enabled } => lowlat_event {
+            kind: LOWLAT_EVENT_MICROPHONE,
+            dropped,
+            body: lowlat_event_body {
+                microphone: lowlat_microphone_event { enabled: *enabled },
+            },
+        },
         Event::StreamEnded { stream, status } => lowlat_event {
             kind: LOWLAT_EVENT_STREAM_ENDED,
             dropped,
@@ -3539,6 +3613,10 @@ mod tests {
             mapped_port: 7,
             mapping_refusal: 7,
             mapping_refused_by: 7,
+            microphone_sent: 7,
+            microphone_dropped: 7,
+            microphone: false,
+            microphone_reserved: [0; 3],
         };
         assert_eq!(
             unsafe { lowlat_client_get_status(handle, &raw mut status) },
@@ -3788,6 +3866,93 @@ mod tests {
             unsafe { lowlat_client_send_pad_state(handle, 1, &raw const state) },
             LOWLAT_ERR_NOT_STARTED
         );
+
+        unsafe { lowlat_client_end_connection(handle) };
+        unsafe { lowlat_client_destroy(handle) };
+    }
+
+    /// The microphone through the boundary: no session before an attempt
+    /// begins, open at the attempt's start in status, and once the host's
+    /// answer is no -- written here as the session thread writes it -- refused
+    /// as such and reported closed. Null samples are refused unless empty.
+    #[test]
+    fn the_microphone_is_refused_while_the_host_takes_none() {
+        let mut handle: *mut lowlat_client = core::ptr::null_mut();
+        let info = no_decoder();
+        assert_eq!(
+            unsafe { lowlat_client_create(&raw const info, &raw mut handle) },
+            LOWLAT_OK
+        );
+        let samples = [0i16; 480];
+        assert_eq!(
+            unsafe { lowlat_client_send_microphone(handle, samples.as_ptr(), 480) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_microphone(handle, core::ptr::null(), 5) },
+            LOWLAT_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_microphone(handle, core::ptr::null(), 0) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+
+        let mut ours = lowlat_credentials {
+            size: core::mem::size_of::<lowlat_credentials>() as u32,
+            port: 0,
+            reserved: 0,
+            ufrag: [0; LOWLAT_ICE_MAX],
+            pwd: [0; LOWLAT_ICE_MAX],
+            fingerprint: [0; LOWLAT_FINGERPRINT_MAX],
+            aes256: [0; LOWLAT_ICE_MAX],
+        };
+        assert_eq!(
+            unsafe {
+                lowlat_client_new_attempt(
+                    handle,
+                    core::ptr::null(),
+                    c"one".as_ptr(),
+                    lowlat_transport::LOWLAT_TRANSPORT_BUD as u32,
+                    &raw mut ours,
+                )
+            },
+            LOWLAT_OK
+        );
+        let microphone = || {
+            let mut status: lowlat_client_status = unsafe { core::mem::zeroed() };
+            status.size = core::mem::size_of::<lowlat_client_status>() as u32;
+            assert_eq!(
+                unsafe { lowlat_client_get_status(handle, &raw mut status) },
+                LOWLAT_OK
+            );
+            status.microphone
+        };
+        assert!(
+            microphone(),
+            "an attempt does not start with the microphone open"
+        );
+        assert_eq!(
+            unsafe { lowlat_client_send_microphone(handle, samples.as_ptr(), 480) },
+            LOWLAT_ERR_NOT_STARTED
+        );
+
+        unsafe { &*handle }
+            .held()
+            .seam
+            .telemetry()
+            .microphone_off
+            .store(true, Ordering::Relaxed);
+        assert_eq!(
+            unsafe { lowlat_client_send_microphone(handle, samples.as_ptr(), 480) },
+            LOWLAT_ERR_MICROPHONE_OFF
+        );
+        assert!(!microphone(), "the closed microphone reads open");
+        let text = unsafe {
+            core::ffi::CStr::from_ptr(crate::abi::lowlat_status_string(
+                LOWLAT_ERR_MICROPHONE_OFF as i32,
+            ))
+        };
+        assert_eq!(text.to_str(), Ok("the host takes no microphone"));
 
         unsafe { lowlat_client_end_connection(handle) };
         unsafe { lowlat_client_destroy(handle) };

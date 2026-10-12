@@ -25,6 +25,7 @@ use lowlat_core::control::{self, CONTROL_CHANNEL, Control, op};
 use lowlat_core::cursor;
 use lowlat_core::endpoint::Endpoint;
 use lowlat_core::init::{self, Init};
+use lowlat_core::microphone;
 use lowlat_core::relay::{self, Failure, Relay};
 use lowlat_core::session::{Health, Session};
 use lowlat_core::video::{self, METADATA_LEN, VIDEO_HEADER_LEN};
@@ -32,7 +33,7 @@ use lowlat_core::{Error, conn};
 
 use crate::cursor::{Cache, Shape};
 use crate::event::{Event, Outcome};
-use crate::input::{Input, Mapper, Viewport};
+use crate::input::{Input, Mapper, MicFrame, Viewport};
 use crate::sound::{self, Packets};
 use crate::{AUDIO_CHANNEL, UNIT_BYTES, UNIT_SLOTS, VIDEO_CHANNEL};
 use lowlat_core::pad;
@@ -299,6 +300,12 @@ pub struct Telemetry {
     pub relayed: AtomicU64,
     /// Whether the path goes through the relay.
     pub path_relayed: AtomicBool,
+    /// The microphone: closed by the host's `"0"` and open otherwise, as at
+    /// each attempt's start; frames sent, and frames dropped because the ring
+    /// to the session thread was full.
+    pub microphone_off: AtomicBool,
+    pub microphone_sent: AtomicU32,
+    pub microphone_dropped: AtomicU32,
 }
 
 /// A relayed address in one word, so it is published without a lock: the
@@ -392,6 +399,14 @@ pub struct Driver {
     loss_sampled_ms: f64,
     loss_seen: [Arrivals; CHANNELS],
     loss_ewma: [f64; CHANNELS],
+    /// The microphone: whether the host's answer lets it go out; the encoder,
+    /// built on the first compressed frame, and whether it would not build;
+    /// and the payload and the body each frame is written into.
+    microphone_open: bool,
+    microphone_encoder: Option<lowlat_audio::Encoder>,
+    microphone_refused: bool,
+    microphone_payload: Vec<u8>,
+    microphone_body: Vec<u8>,
 }
 
 impl Driver {
@@ -441,6 +456,11 @@ impl Driver {
             loss_sampled_ms: 0.0,
             loss_seen: [Arrivals::default(); CHANNELS],
             loss_ewma: [0.0; CHANNELS],
+            microphone_open: true,
+            microphone_encoder: None,
+            microphone_refused: false,
+            microphone_payload: vec![0u8; microphone::PAYLOAD_MAX],
+            microphone_body: vec![0u8; microphone::BODY_LEN],
         }
     }
 
@@ -732,6 +752,94 @@ impl Driver {
         sent
     }
 
+    /// Ten milliseconds of the application's microphone, onto the control
+    /// channel as the virtual device's message (docs/01-protocol.md 11.4b):
+    /// uncompressed when this client declared uncompressed sound, compressed
+    /// otherwise. Nothing goes out before the session is up, or while the
+    /// host's answer is no -- which is also what empties what was queued
+    /// behind a `"0"`.
+    pub fn send_microphone(&mut self, session: &mut Session<'_>, frame: &MicFrame) {
+        if !self.established || !self.microphone_open {
+            return;
+        }
+        let (len, encoding) = if self.init.raw_audio {
+            for (dst, sample) in self.microphone_payload.chunks_exact_mut(2).zip(frame) {
+                dst.copy_from_slice(&sample.to_le_bytes());
+            }
+            (frame.len() * 2, microphone::Encoding::Raw)
+        } else {
+            if self.microphone_encoder.is_none() && !self.microphone_refused {
+                match lowlat_audio::Encoder::microphone() {
+                    Ok(encoder) => self.microphone_encoder = Some(encoder),
+                    Err(error) => {
+                        self.microphone_refused = true;
+                        lowlat_common::log_warn!("client: no microphone encoder, error={error}");
+                    }
+                }
+            }
+            let Some(encoder) = self.microphone_encoder.as_mut() else {
+                return;
+            };
+            let Ok(packet) = encoder.encode_samples(frame) else {
+                return;
+            };
+            let Some(dst) = self.microphone_payload.get_mut(..packet.len()) else {
+                return;
+            };
+            dst.copy_from_slice(packet);
+            (packet.len(), microphone::Encoding::Compressed)
+        };
+        let Some(payload) = self.microphone_payload.get(..len) else {
+            return;
+        };
+        if microphone::encode(
+            &mut self.microphone_body,
+            &microphone::Packet { payload, encoding },
+        )
+        .is_err()
+        {
+            return;
+        }
+        let mut header = [0u8; control::CONTROL_HEADER_LEN];
+        let control = Control {
+            a0: u32::try_from(microphone::BODY_LEN).unwrap_or(u32::MAX),
+            a1: microphone::MICROPHONE_ARGUMENT,
+            a2: microphone::MICROPHONE_SELECTOR,
+            opcode: op::VIRTUAL_DEVICE,
+            body: &[],
+        };
+        if control::encode_header(&mut header, &control).is_err() {
+            return;
+        }
+        if session
+            .send_message(CONTROL_CHANNEL, &header, &self.microphone_body)
+            .is_ok()
+        {
+            self.count_sent(op::VIRTUAL_DEVICE);
+            self.telemetry
+                .microphone_sent
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The host's answer on this client's microphone: **a `"0"` closes it and
+    /// anything else opens it** -- told nothing, it stays open, as it is at
+    /// every session's start. The application hears of a change only.
+    fn hear_microphone_answer(&mut self, text: &[u8]) {
+        let open = text.first() != Some(&b'0');
+        if open == self.microphone_open {
+            return;
+        }
+        self.microphone_open = open;
+        // Relaxed: a flag the seam reads to refuse early, with nothing
+        // published behind it; this thread's own gate is the one that holds.
+        self.telemetry
+            .microphone_off
+            .store(!open, Ordering::Relaxed);
+        lowlat_common::log_info!("client: the host's microphone answer, open={open}");
+        self.emit.send(Event::Microphone { enabled: open });
+    }
+
     /// What a client says when the path comes up, in order: the
     /// initialization, the diagnostics opcode with every bit clear, and the
     /// declaration for each secondary stream. Stream 0 declares through the
@@ -978,10 +1086,14 @@ impl Driver {
             }),
             op::USER_DATA => {
                 if let Some((id, text)) = control::user_data(message) {
-                    self.emit.send(Event::UserData {
-                        id,
-                        text: text.to_vec(),
-                    });
+                    if id == microphone::ANNOUNCE_ID {
+                        self.hear_microphone_answer(text);
+                    } else {
+                        self.emit.send(Event::UserData {
+                            id,
+                            text: text.to_vec(),
+                        });
+                    }
                 }
             }
             // A host sends (kind, microseconds, stream).

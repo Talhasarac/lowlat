@@ -2869,9 +2869,9 @@ fn drive<M: Media>(
                 .send_message(CONTROL_CHANNEL, message, &[]);
         }
 
-        // **A peer sends no microphone audio until it is told it may.** Told
+        // **A peer with a microphone sends it until it is told not to.** Told
         // once when a seat exists, and again whenever the answer changes: a
-        // host that stops taking one and says nothing leaves a peer sending
+        // host that is not taking one and says nothing leaves a peer sending
         // into a channel nobody reads.
         if seat.is_some() {
             let accepting = seat

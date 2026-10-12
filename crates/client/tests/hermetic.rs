@@ -182,6 +182,11 @@ struct Host {
     /// Every message received from the client, in order: opcode and the three
     /// arguments.
     log: Vec<(u8, u32, u32, u32)>,
+    /// The client's microphone as this host reads it: the packets taken and
+    /// everything they decoded to, in order.
+    microphone: lowlat_audio::Decoder,
+    mic_packets: u32,
+    heard_mic: Vec<i16>,
     sent: [u32; 256],
     /// The client's last latency report per kind (video, sound), as the
     /// peer's argument order carries it: the figure first.
@@ -263,6 +268,13 @@ impl Host {
             packetiser,
             received: [0; 256],
             log: Vec::new(),
+            microphone: lowlat_audio::Decoder::new(
+                lowlat_core::microphone::CHANNELS,
+                lowlat_core::microphone::SAMPLES_MAX,
+            )
+            .unwrap(),
+            mic_packets: 0,
+            heard_mic: Vec::new(),
             sent: [0; 256],
             reported_us: [0; 3],
             frames: 0,
@@ -335,6 +347,19 @@ impl Host {
             self.received[usize::from(message.opcode)] += 1;
             self.log
                 .push((message.opcode, message.a0, message.a1, message.a2));
+            if message.opcode == op::VIRTUAL_DEVICE
+                && let Ok(Some(packet)) =
+                    lowlat_core::microphone::parse(message.a0, message.a1, message.a2, message.body)
+            {
+                let mut out = [0i16; lowlat_core::microphone::SAMPLES_MAX];
+                let compressed = packet.encoding == lowlat_core::microphone::Encoding::Compressed;
+                let decoded = self
+                    .microphone
+                    .decode(packet.payload, compressed, &mut out)
+                    .expect("the microphone decodes");
+                self.heard_mic.extend_from_slice(&out[..decoded]);
+                self.mic_packets += 1;
+            }
             if message.opcode == op::ENCODE_LATENCY {
                 if let Some(slot) = self.reported_us.get_mut(message.a1 as usize) {
                     *slot = message.a0;
@@ -596,6 +621,22 @@ impl<D: Decoder> Guest<D> {
             reconfigured: 0,
             ages: Vec::new(),
         }
+    }
+
+    /// The client again under another configuration, before anything has run:
+    /// a new driver, with the queues it fills.
+    fn configure(&mut self, config: &Config) {
+        let (emit, events) = events::queue();
+        let packets = Packets::new();
+        self.driver = Driver::new(
+            config.init(&lowlat_decode::Caps::default()),
+            self.units.clone(),
+            packets.clone(),
+            emit,
+            Arc::clone(&self.telemetry),
+        );
+        self.events = events;
+        self.sound = Sound::new(packets, Arc::clone(&self.telemetry));
     }
 
     fn turn(&mut self, now: f64) -> Option<Outcome> {
@@ -1643,6 +1684,143 @@ fn an_application_message_reaches_the_host_in_order_and_as_given() {
             (op::GAMEPAD_UNPLUG, 0x10FF_FFFF, 0xA11E_0000, 0x0100_0000),
             (op::KEYBOARD, 4, 0, 0),
         ]
+    );
+}
+
+/// The microphone of a client that declared uncompressed sound reaches the
+/// host sample for sample, a message every ten milliseconds.
+#[test]
+fn an_uncompressed_microphone_reaches_the_host_sample_for_sample() {
+    let mut pair = Pair::new(31, clean());
+    pair.guest.configure(&Config {
+        raw_audio: true,
+        ..Config::default()
+    });
+    pair.run_for(2000.0);
+    assert!(pair.established());
+    let samples: Vec<i16> = (0..4800)
+        .map(|i| ((i * 37) % 20000 - 10000) as i16)
+        .collect();
+    for frame in samples.chunks_exact(lowlat_core::microphone::FRAME) {
+        let frame: [i16; lowlat_core::microphone::FRAME] = frame.try_into().unwrap();
+        pair.guest
+            .driver
+            .send_microphone(pair.guest.endpoint.session(), &frame);
+    }
+    pair.run_for(300.0);
+
+    assert_eq!(pair.host.mic_packets, 10);
+    assert_eq!(pair.host.heard_mic, samples);
+    assert_eq!(
+        pair.guest.telemetry.microphone_sent.load(Ordering::Relaxed),
+        10
+    );
+}
+
+/// Without uncompressed sound declared the microphone is compressed, and the
+/// host's decoder gets the tone back at its level in every tenth of a second
+/// after the first -- not only once settled: a mode this decoder reads short
+/// came back right only after four hundred milliseconds.
+#[test]
+fn a_compressed_microphone_reaches_the_host_at_its_level() {
+    let mut pair = Pair::new(32, clean());
+    pair.run_for(2000.0);
+    assert!(pair.established());
+    let frame_len = lowlat_core::microphone::FRAME;
+    for step in 0..50 {
+        let frame: Vec<i16> = (0..frame_len)
+            .map(|i| {
+                let t = (step * frame_len + i) as f64 / 48_000.0;
+                ((2.0 * std::f64::consts::PI * 440.0 * t).sin() * 12000.0) as i16
+            })
+            .collect();
+        let frame: [i16; lowlat_core::microphone::FRAME] = frame.as_slice().try_into().unwrap();
+        pair.guest
+            .driver
+            .send_microphone(pair.guest.endpoint.session(), &frame);
+    }
+    pair.run_for(300.0);
+
+    assert_eq!(pair.host.mic_packets, 50);
+    let heard = &pair.host.heard_mic;
+    assert_eq!(heard.len(), 50 * frame_len);
+    let expected = 12000.0f64 * 12000.0 / 2.0;
+    for (block, tenth) in heard.chunks_exact(4800).enumerate().skip(1) {
+        let mean_square = tenth
+            .iter()
+            .map(|&s| f64::from(s) * f64::from(s))
+            .sum::<f64>()
+            / tenth.len() as f64;
+        assert!(
+            mean_square > expected * 0.5 && mean_square < expected * 2.0,
+            "the host heard mean square {mean_square} in tenth {block}, expected about {expected}"
+        );
+    }
+}
+
+/// The host's `"0"` closes the microphone and anything else opens it; every
+/// session starts open. The application is told once per change, nothing is
+/// sent while it is closed, and the answer is not handed over as the host's
+/// application message.
+#[test]
+fn the_hosts_answer_gates_the_microphone() {
+    let mut pair = Pair::new(33, clean());
+    pair.guest.configure(&Config {
+        raw_audio: true,
+        ..Config::default()
+    });
+    pair.run_for(2000.0);
+    assert!(pair.established());
+    let frame = [100i16; lowlat_core::microphone::FRAME];
+    let send = |pair: &mut Pair<Recorder>, frames: usize| {
+        for _ in 0..frames {
+            pair.guest
+                .driver
+                .send_microphone(pair.guest.endpoint.session(), &frame);
+        }
+        pair.run_for(100.0);
+    };
+    let say = |pair: &mut Pair<Recorder>, answer: &[u8]| {
+        pair.host.send_control(&Control {
+            a0: answer.len() as u32,
+            a1: lowlat_core::microphone::ANNOUNCE_ID,
+            a2: 0,
+            opcode: op::USER_DATA,
+            body: answer,
+        });
+        pair.run_for(100.0);
+    };
+
+    send(&mut pair, 1);
+    assert_eq!(pair.host.mic_packets, 1, "a session does not start open");
+    say(&mut pair, b"1\0");
+    say(&mut pair, b"0\0");
+    assert!(pair.guest.telemetry.microphone_off.load(Ordering::Relaxed));
+    send(&mut pair, 3);
+    assert_eq!(pair.host.mic_packets, 1, "a closed microphone was sent");
+    say(&mut pair, b"1\0");
+    assert!(!pair.guest.telemetry.microphone_off.load(Ordering::Relaxed));
+    send(&mut pair, 1);
+    assert_eq!(pair.host.mic_packets, 2);
+
+    let mut answers = Vec::new();
+    while let Some(event) = pair.guest.events.try_recv() {
+        match event.event {
+            Event::Microphone { enabled } => answers.push(enabled),
+            Event::UserData { id, .. } => {
+                assert_ne!(
+                    id,
+                    lowlat_core::microphone::ANNOUNCE_ID,
+                    "the answer leaked"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        answers,
+        [false, true],
+        "one event per change, none for no change"
     );
 }
 

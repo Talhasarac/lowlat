@@ -57,6 +57,18 @@ pub const CHANNELS: usize = 1;
 /// for far longer frames than that, and a length is a guest's to write.
 pub const SAMPLES_MAX: usize = 960;
 
+/// What one packet carries from a sender: ten milliseconds. **A receiver takes
+/// whole frames of this length and drops a remainder**, so a sender cuts them
+/// itself rather than passing on whatever lengths its capture delivers.
+pub const FRAME: usize = 480;
+
+/// The application message's sub-identifier under which a host says whether it
+/// takes a peer's microphone: a decimal string, `"0"` for no.
+///
+/// **It only ever turns a microphone off.** A peer told nothing sends, a `"0"`
+/// stops it, anything else lets it go on, and every session starts open.
+pub const ANNOUNCE_ID: u32 = 18;
+
 /// How the payload is encoded.
 ///
 /// **The values are not the audio channel's.** That one tags compressed as 1
