@@ -609,6 +609,17 @@ impl Driver {
         }
         match endpoint.conn().state() {
             conn::State::Established(addr) if !self.established => {
+                // The pair the session will claim for its life, both halves:
+                // a destination with a source it cannot reach is otherwise
+                // visible only as every datagram refused.
+                match endpoint.conn().local() {
+                    Some(from) => {
+                        lowlat_common::log_info!("client: path established, to={addr} from={from}");
+                    }
+                    None => {
+                        lowlat_common::log_info!("client: path established, to={addr} from=any")
+                    }
+                }
                 self.established = true;
                 self.established_ms = now_ms;
                 self.telemetry

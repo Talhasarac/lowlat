@@ -273,8 +273,8 @@ pub struct Conn<'a> {
     pending: [Option<(SocketAddr, TransactionId, Option<IpAddr>)>; MAX_PENDING],
 
     state: State,
-    /// The first candidate to answer our checks, with the local address the
-    /// answer arrived at: the path, once the peer has checked us too.
+    /// The first answer to our checks: the address it came from, with the
+    /// local address it arrived at. The path, once the peer has checked us too.
     answered: Option<(SocketAddr, Option<IpAddr>)>,
     /// Whether the peer has checked us and been answered.
     checked: bool,
@@ -526,32 +526,38 @@ impl<'a> Conn<'a> {
                 if !message.verify(self.credentials.remote_pwd) {
                     return Err(Error::Decrypt);
                 }
-                let known = self
+                if !self
                     .candidates
-                    .iter_mut()
+                    .iter()
                     .flatten()
-                    .find(|c| c.sent.contains(tid));
-                let Some(candidate) = known else {
+                    .any(|c| c.sent.contains(tid))
+                {
                     // An answer to a transaction this attempt never sent.
                     // Authenticated, so it is a duplicate or a replay rather
                     // than an error.
                     return Ok(Inbound::Redundant);
-                };
-                let addr = candidate.addr;
+                }
 
                 if !matches!(self.state, State::Checking) || self.answered.is_some() {
                     return Ok(Inbound::Redundant);
                 }
-                // The first candidate to answer wins, and nothing looks for a
-                // better path afterwards: switching mid-stream costs more than
-                // the improvement is worth.
+                // The first answer wins, and nothing looks for a better path
+                // afterwards: switching mid-stream costs more than the
+                // improvement is worth.
                 //
-                // The address the winning answer arrived at is latched with it:
-                // the peer proved this exact address pair, and every later send
-                // keeps it rather than letting the routing table move the source
-                // mid-session.
-                self.answered = Some((addr, local));
-                Ok(self.establish().unwrap_or(Inbound::Reachable(addr)))
+                // **The path is the one the answer travelled**: the address it
+                // came from, and the address it arrived at, latched together.
+                // The transaction says only that it answers one of our checks,
+                // not that it came back from where that check went: a peer that
+                // has already chosen its path answers every later check over
+                // that path, from another address and possibly the other
+                // family. The address checked, paired with where such an answer
+                // arrived, is a path the peer is not on -- across families, a
+                // destination the source it claims cannot reach. Every later
+                // send keeps the pair rather than letting the routing table move
+                // the source mid-session.
+                self.answered = Some((from, local));
+                Ok(self.establish().unwrap_or(Inbound::Reachable(from)))
             }
         }
     }
@@ -859,7 +865,7 @@ pub(crate) fn derive_transaction_id(seed: &[u8; 16], counter: u32) -> Transactio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::net::{IpAddr, Ipv4Addr};
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     const SEED: [u8; 16] = [0x11; 16];
     const OURS: &str = "loca";
@@ -1488,6 +1494,41 @@ mod tests {
             Some(proven),
             "the address the winning answer arrived at was not latched"
         );
+    }
+
+    /// The regression for a live failure. A peer that has already chosen its
+    /// path answers every later check over that path, so the answer to a check
+    /// sent to one of its addresses can come from another -- here from the
+    /// other family. The path is the one the answer travelled: the address it
+    /// came from, and the address it arrived at. The address the check went to
+    /// paired with where the answer arrived is a v4 destination claiming a v6
+    /// source, which no system will send.
+    #[test]
+    fn an_answer_from_another_address_is_the_path_it_came_over() {
+        let mut conn = conn();
+        let checked = addr(1, 4000);
+        let answering = SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            4000,
+        );
+        let arrived = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2));
+        conn.add_candidate(checked, Kind::Direct).unwrap();
+
+        let sent = drain(&mut conn, 0.0);
+        let (egress, buf) = sent.iter().find(|(e, _)| e.to == checked).copied().unwrap();
+        let mut response = [0u8; 256];
+        let len = answer(&buf, egress.len, addr(9, 5000), &mut response);
+        assert_eq!(
+            conn.process_input(&response[..len], answering, Some(arrived))
+                .unwrap(),
+            Inbound::Reachable(answering)
+        );
+        assert_eq!(
+            check_us(&mut conn, answering, Some(arrived)),
+            Inbound::PathEstablished(answering)
+        );
+        assert_eq!(conn.path(), Some(answering));
+        assert_eq!(conn.local(), Some(arrived));
     }
 
     /// The regression for a real wide-area failure. A peer behind symmetric
