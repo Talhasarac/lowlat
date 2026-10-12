@@ -748,6 +748,17 @@ impl Client {
         if attempt.config.ipv4_only {
             lowlat_common::log_info!("client: attempt={} offers and checks IPv4 only", id);
         }
+        // Gathered before the session thread starts, which is handed them: a
+        // reflexive answer that repeats one is not offered again.
+        let hosts: Vec<SocketAddr> = if attempt.config.relay.is_none() {
+            lowlat_net::host_addresses(attempt.config.shared_address_space)
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, bound))
+                .filter(|addr| attempt.config.admits(*addr))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let args = crate::shell::Attached {
             socket,
             servers: attempt
@@ -757,6 +768,7 @@ impl Client {
                 .copied()
                 .filter(|server| attempt.config.admits(*server))
                 .collect(),
+            hosts: hosts.clone(),
             relay: attempt.config.relay.clone(),
             relay_seed,
             mapping: self.mapper.as_ref().map(Mapper::reader),
@@ -826,12 +838,7 @@ impl Client {
         // relay has one; the session thread raises it and the readiness
         // marker after it.
         if attempt.config.relay.is_none() {
-            let shared = attempt.config.shared_address_space;
-            for ip in lowlat_net::host_addresses(shared) {
-                let addr = SocketAddr::new(ip, bound);
-                if !attempt.config.admits(addr) {
-                    continue;
-                }
+            for addr in hosts {
                 self.emit.send(Event::Candidate {
                     addr,
                     from_stun: false,

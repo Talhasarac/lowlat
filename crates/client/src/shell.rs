@@ -42,6 +42,9 @@ const REPORT_EVERY: u32 = 16;
 pub(crate) struct Attached {
     pub socket: Socket,
     pub servers: Vec<SocketAddr>,
+    /// The host candidates the seam raises as the thread starts. A reflexive
+    /// answer that repeats one is not raised again.
+    pub hosts: Vec<SocketAddr>,
     /// The relay a relay attempt goes through, and the seed its transaction
     /// identifiers are derived from.
     pub relay: Option<config::Relay>,
@@ -101,6 +104,7 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
     let Attached {
         socket,
         servers,
+        hosts,
         relay,
         relay_seed,
         mapping,
@@ -336,6 +340,11 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
         }
         for addr in fresh {
             reported.push(addr);
+            // Raised already, as a host candidate: where nothing translates --
+            // any server on IPv6 -- the answer is this machine's own address.
+            if hosts.contains(&addr) {
+                continue;
+            }
             emit.send(Event::Candidate {
                 addr,
                 from_stun: addr.is_ipv4(),

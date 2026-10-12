@@ -1059,6 +1059,13 @@ impl Admission {
         let floor = self.floor.clone();
         let emit = self.emit.clone();
         let servers = self.config.servers.clone();
+        // Gathered before the loop starts, which is handed them: a reflexive
+        // answer that repeats one is not raised again.
+        let hosts: Vec<SocketAddr> = lowlat_net::host_addresses(self.config.shared_address_space)
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, bound))
+            .collect();
+        let offered = hosts.clone();
         let seats = self.stream.as_ref().map(Stream::seats);
         let video = self.config.stream.as_ref().map(|s| (s.width, s.height));
         let ours = (local.ufrag.clone(), local.pwd.clone());
@@ -1081,6 +1088,7 @@ impl Admission {
                     driven: Driven {
                         attempt_id,
                         emit,
+                        hosts,
                         microphone,
                         pad_sink,
                         arrivals,
@@ -1114,10 +1122,10 @@ impl Admission {
         // get a different answer per integration. The port is the one that was
         // actually bound, which is not the one that was asked for as soon as a
         // second guest walks.
-        for ip in lowlat_net::host_addresses(self.config.shared_address_space) {
+        for addr in offered {
             self.emit.send(Event::Candidate {
                 attempt: id.to_string(),
-                addr: SocketAddr::new(ip, bound),
+                addr,
                 from_stun: false,
                 lan: true,
             });
@@ -1554,6 +1562,9 @@ struct Attached {
 struct Driven {
     attempt_id: String,
     emit: crate::events::Sender,
+    /// The host candidates raised at approval. A reflexive answer that
+    /// repeats one is not raised again.
+    hosts: Vec<SocketAddr>,
     arrivals: mpsc::Receiver<Arrival>,
     /// Application messages the seam wants sent to this guest.
     said: mpsc::Receiver<Said>,
@@ -3176,6 +3187,12 @@ fn drive<M: Media>(
             .collect();
         for addr in fresh {
             reported.push(addr);
+            // Raised already, at approval, as a host candidate: where nothing
+            // translates -- any server on IPv6 -- the answer is this machine's
+            // own address.
+            if args.hosts.contains(&addr) {
+                continue;
+            }
             args.emit.send(Event::Candidate {
                 attempt: args.attempt_id.clone(),
                 addr,
@@ -3871,6 +3888,102 @@ mod tests {
             "something other than a candidate came before the marker: {candidates:?}"
         );
         seam.end_connection("a");
+    }
+
+    /// Two reflexive servers on loopback, answered by one thread strictly in
+    /// order: the first reports `first` at the port it saw, and only then the
+    /// second reports `second`. Whatever offers the second answer has the
+    /// first.
+    fn in_order(
+        first: std::net::IpAddr,
+        second: std::net::IpAddr,
+    ) -> ([SocketAddr; 2], std::thread::JoinHandle<()>) {
+        use lowlat_core::stun::{self, Message};
+
+        let sockets = [(); 2].map(|()| {
+            let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            socket
+                .set_read_timeout(Some(core::time::Duration::from_secs(5)))
+                .unwrap();
+            socket
+        });
+        let addrs = [0, 1].map(|index| sockets[index].local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for (socket, report) in sockets.iter().zip([first, second]) {
+                let mut buf = [0u8; 256];
+                loop {
+                    let Ok((len, from)) = socket.recv_from(&mut buf) else {
+                        return;
+                    };
+                    let Ok(request) = Message::parse(&buf[..len]) else {
+                        continue;
+                    };
+                    let seen = SocketAddr::new(report, from.port());
+                    let mut out = [0u8; 256];
+                    let len = stun::encode_binding_response(
+                        &mut out,
+                        request.transaction_id(),
+                        seen,
+                        "any",
+                    )
+                    .unwrap();
+                    let _ = socket.send_to(&out[..len], from);
+                    break;
+                }
+            }
+        });
+        (addrs, thread)
+    }
+
+    /// **A reflexive answer that repeats a host candidate is not offered
+    /// again.** A server that reports one of this machine's own addresses at
+    /// the guest's port -- what every server on IPv6 does, where nothing
+    /// translates -- names a candidate raised at approval; a server that
+    /// reports anything else is still offered.
+    #[test]
+    fn a_reflexive_answer_that_repeats_a_host_candidate_is_not_offered_again() {
+        let host = *lowlat_net::host_addresses(false)
+            .first()
+            .expect("no host candidate: this machine offers no private or IPv6 address");
+        let elsewhere = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 9));
+        let (servers, answering) = in_order(host, elsewhere);
+
+        let mut seam = Admission::new(Config {
+            microphone: None,
+            pad_sink: None,
+            exclusive_pointer: false,
+            rumble_probe: false,
+            exclusive_hold_ms: crate::floor::HOLD_MS,
+            cg_level: 1,
+            base_port: 0,
+            shared_address_space: false,
+            max_guests: 1,
+            servers: servers.to_vec(),
+            stream: None,
+        });
+        let events = seam.take_events().expect("the queue");
+        seam.new_attempt("a", peer()).expect("register");
+        seam.begin_p2p("a", 0).expect("approve");
+
+        let mut offered: Vec<SocketAddr> = Vec::new();
+        while !offered.iter().any(|addr| addr.ip() == elsewhere) {
+            let taken = events
+                .recv_timeout(core::time::Duration::from_secs(10))
+                .unwrap_or_else(|| {
+                    panic!("the second server's answer was never offered: {offered:?}")
+                });
+            if let Event::Candidate { addr, .. } = taken.event {
+                offered.push(addr);
+            }
+        }
+        answering.join().unwrap();
+        seam.end_connection("a");
+
+        assert_eq!(
+            offered.iter().filter(|addr| addr.ip() == host).count(),
+            1,
+            "a host candidate was offered again: {offered:?}"
+        );
     }
 
     /// A browser whose certificate is not the one its offer named is a
