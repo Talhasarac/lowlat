@@ -1228,6 +1228,16 @@ full ring drops the newest message and counts it, and never blocks the caller. A
 fills is a session thread that is not running, and by then what the host holds is its own
 release-all problem.
 
+**The application may send a message of its own** (*2026-10-12*, minor 24): a header with no
+body, its opcode and three arguments sent exactly as given, for a host that understands more
+than the protocol does on an opcode the protocol already has. It crosses the same ring as the
+input, so it keeps its place among the keys sent before and after it, which a message on any
+other queue would not. The library reads none of it: on an opcode the library also speaks,
+nothing the library keeps for that opcode changes -- a message on the pad unplug's opcode
+forgets no pad -- and a host that does not know the message reads the opcode's own meaning,
+which is the application's to weigh. The opcodes the library sends for the session itself, and
+those whose message has a body, are refused ([06 §3b](06-api.md)).
+
 **The application's event loop must not be paced by its display** (*found at C3's gate*). A
 toolkit that reads one pad event per pass of its loop delivers a moving stick at the loop's
 rate, and a loop that presents with vsync runs at the display's; the kernel's queue then

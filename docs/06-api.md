@@ -352,7 +352,8 @@ input, minor 7 the sound, minor 8 the preferences and the handle, minor 9 the cu
 metrics, minor 10 the pad reports, minor 14 the relay, minor 15 the picture's range, minor 16
 its arrival time, minor 17 the range asked for, minor 18 the client's deliberate panic, minor
 19 the handle on Windows and the kind switched live, minor 22 the port and its mapping, minor
-23 the translation in front of it); the header is the truth.
+23 the translation in front of it, minor 24 the application's own message); the header is the
+truth.
 
 ```c
 lowlat_status lowlat_client_create(const lowlat_client_create_info *info, lowlat_client **out);
@@ -398,6 +399,8 @@ lowlat_status lowlat_client_send_pad_report(lowlat_client *cl, uint32_t pad, uin
                                             uint32_t kind, const uint8_t *report,
                                             uint32_t len);                  /* minor 10 */
 lowlat_status lowlat_client_send_release_all(lowlat_client *cl);
+lowlat_status lowlat_client_send_control(lowlat_client *cl, uint8_t opcode, uint32_t a0,
+                                         uint32_t a1, uint32_t a2);         /* minor 24 */
 
 lowlat_status lowlat_client_acquire_audio(lowlat_client *cl, uint32_t timeout_ms,
                                           int16_t *samples, uint32_t *count);
@@ -840,6 +843,20 @@ an application makes up from a device that reports positions is its own to scale
 call never blocks**: reports cross a fixed ring to the
 session thread, and a ring that fills -- a thread that is not running -- drops the newest and
 counts it in `lowlat_client_status.input_dropped`.
+
+**The application's own message** (minor 24, *2026-10-12*): `lowlat_client_send_control(cl,
+opcode, a0, a1, a2)` puts a header of the application's choosing on the control channel, for a
+host that understands more than the protocol does on an opcode the protocol already has. No
+body; the three arguments are written big endian as every header's are, so a host that reads
+them the other way round gets them swapped by the caller. It crosses the input's ring, keeping
+its place among the input around it, and never blocks. **The library reads none of it**: a
+message on an opcode the library also speaks changes nothing the library keeps, so one on the
+pad unplug's opcode forgets no pad -- and **a host that does not know the message reads the
+opcode's own meaning**, there an unplug of the pad the third argument names. Refused with
+`LOWLAT_ERR_INVALID_ARGUMENT`, session or not: the opcodes the library sends for the session
+itself (10, 11, 13, 21, 35), which sent behind its back leave the host and the library
+disagreeing about the session, and those whose message has a body (17, 23, 31, 32), which a
+header alone misframes ([10 §8](10-client.md)).
 
 **Status and metrics mirror the host's** (§3): the same named channels, seen from the
 receiving side, plus the decoder's state (none yet, built, failed), the backend in use, the
@@ -1331,6 +1348,9 @@ stable port with no mapping, where it had a port the system picked per attempt.
 `lowlat_client_probe_nat` with `lowlat_nat_probe`, `lowlat_client_get_nat` with
 `lowlat_nat_info`, `lowlat_nat_mapping`, and `LOWLAT_NAT_TYPE_*`, `LOWLAT_NAT_STATE_*` and
 `LOWLAT_NAT_SOURCE_*`. Nothing moves.
+
+**Minor 24** (2026-10-12) is the application's own message ([§3b](#3b-client)):
+`lowlat_client_send_control`. Nothing moves.
 
 **This surface is ours and carries no inherited compatibility.** It was designed here rather
 than adopted, so before the first major version a name that turns out to be wrong is corrected

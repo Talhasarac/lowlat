@@ -3,6 +3,37 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-12 - C5.24: the application's own control message
+
+### Decided
+- **An application may put a header of its own on the control channel** ([10 §8](10-client.md),
+  [06 §3b](06-api.md), minor 24): `lowlat_client_send_control(cl, opcode, a0, a1, a2)`, for a
+  host that understands more than the protocol does on an opcode the protocol already has. One
+  call for any such message rather than one per message: what a host makes of it is between
+  the host and the application, and a host that does not know it reads the opcode's own
+  meaning.
+- **Sent exactly as given, header only.** The three arguments are written big endian as every
+  header's are -- a host that reads them the other way round has them swapped by the caller --
+  and the library reads none of it, so a message on an opcode it also speaks changes nothing it
+  keeps: one on the pad unplug's opcode forgets no pad. No body: a body's length and framing
+  are each opcode's own.
+- **In order with the input.** It crosses the input's ring rather than the queue user data
+  takes, so it keeps its place among the keys around it; it never blocks, and a full ring
+  drops and counts it as it does input.
+- **Refused, session or not**, for the opcodes the library sends for the session itself (10,
+  11, 13, 21, 35), which sent behind its back leave the host and the library disagreeing about
+  the session, and for those whose message has a body (17, 23, 31, 32).
+
+### Checked
+- The header's thirteen bytes for a message whose caller swapped its arguments; a pad's
+  deduplicated state and its family surviving a message on the unplug's opcode, where a real
+  unplug frees both; every refused opcode before and during an attempt; and the message
+  reaching a host between two keys with its arguments intact. Each shown failing with what it
+  guards broken: the arguments swapped, the message dropped, the pad forgotten by the mapping
+  and by the attempt, the refusal opened, and the refusal made to wait for an attempt.
+- Windows: clippy clean and 969 tests. Linux, on a clean clone: the same forms clean and 1257
+  tests pass, the two dual-stack name tests failing under WSL as before.
+
 ## 2026-10-09 - W1.11: the static library
 
 ### Decided

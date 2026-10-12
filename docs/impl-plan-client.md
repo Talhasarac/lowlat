@@ -1332,6 +1332,9 @@ slower decoder ever reopens them.
 
 Newest first.
 
+- 2026-10-12: the application may send a header of its own on the control channel (minor
+  24), as given and in order with the input; the library's own opcodes and those with a body
+  are refused.
 - 2026-10-09: the decoder is built for the codec its parameter set names, not the header's
   byte, which a host of the earlier generation writes as the first codec over HEVC too.
 - 2026-10-05: an attempt may be confined to IPv4 (minor 21), to exercise the IPv4 path's
