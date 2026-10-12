@@ -2180,6 +2180,21 @@ fn desktop_extents(width: u32, height: u32, rotation: Rotation, place: Option<Pl
     }
 }
 
+/// What a seated guest is to be told about its microphone on this pass, if
+/// anything: the answer when it differs from the last one said, and nothing
+/// when it does not.
+///
+/// **Asked every pass, said only on a change.** A peer follows every answer
+/// rather than the first, so a host that stops taking a microphone mid-session
+/// and later takes one again has to say both.
+fn microphone_answer(announced: &mut Option<bool>, accepting: bool) -> Option<(u32, Vec<u8>)> {
+    if *announced == Some(accepting) {
+        return None;
+    }
+    *announced = Some(accepting);
+    Some(crate::microphone::announcement(accepting))
+}
+
 /// One guest's loop, from approval until teardown.
 ///
 /// Everything it borrows is owned here, on this thread, which is what lets the
@@ -2877,8 +2892,7 @@ fn drive<M: Media>(
             let accepting = seat
                 .as_ref()
                 .is_some_and(crate::stream::SeatHold::accept_microphone);
-            if announced != Some(accepting) {
-                let (id, body) = crate::microphone::announcement(accepting);
+            if let Some((id, body)) = microphone_answer(&mut announced, accepting) {
                 send_said(
                     shell.endpoint().session(),
                     &Said {
@@ -2888,7 +2902,6 @@ fn drive<M: Media>(
                         body,
                     },
                 );
-                announced = Some(accepting);
                 lowlat_common::log_info!(
                     "guest: attempt={} microphone accepted={accepting}",
                     args.attempt_id
@@ -3384,6 +3397,39 @@ mod tests {
         let kind = lowlat_core::pad::OutputKind::Feature;
         assert!(!seam.send_pad_report(1, 3, kind, &[]));
         assert!(!seam.send_pad_report(1, 3, kind, &[0; 65]));
+    }
+
+    /// **A seated guest hears the microphone answer once, and again on every
+    /// change.** The guest's loop asks every pass: a host not taking one says
+    /// so at once, an answer already said is not said again, and one that
+    /// stops taking a microphone mid-session and then takes one again says
+    /// each, since a peer follows every answer rather than the first.
+    #[test]
+    fn the_microphone_answer_is_said_once_and_again_on_each_change() {
+        let yes = Some((18, b"1\0".to_vec()));
+        let no = Some((18, b"0\0".to_vec()));
+
+        let mut refusing = None;
+        assert_eq!(microphone_answer(&mut refusing, false), no);
+
+        let mut announced = None;
+        assert_eq!(microphone_answer(&mut announced, true), yes);
+        assert_eq!(
+            microphone_answer(&mut announced, true),
+            None,
+            "an answer already said went out again"
+        );
+        assert_eq!(
+            microphone_answer(&mut announced, false),
+            no,
+            "a host that stopped taking the microphone did not say so"
+        );
+        assert_eq!(microphone_answer(&mut announced, false), None);
+        assert_eq!(
+            microphone_answer(&mut announced, true),
+            yes,
+            "a host that took the microphone again did not say so"
+        );
     }
 
     #[test]

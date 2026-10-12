@@ -5023,6 +5023,30 @@ mod tests {
         );
     }
 
+    /// **A seat already held follows the microphone answer as it changes.**
+    /// The guest's loop reads it through its seat on every pass, so a host that
+    /// changes its answer mid-session has to reach the seat taken before the
+    /// change -- read here through that seat, not out of the cell the setter
+    /// has just written.
+    #[test]
+    fn a_held_seat_follows_a_live_microphone_answer() {
+        let (_shared, stream, _arrivals) = parked();
+        let held = stream
+            .seats()
+            .take(wake_handle(), wake_handle())
+            .expect("a seat");
+        let mut settings = stream.audio();
+        for accept in [true, false, true] {
+            settings.accept_microphone = accept;
+            stream.set_audio(&settings);
+            assert_eq!(
+                held.accept_microphone(),
+                accept,
+                "the seat did not follow the host's answer"
+            );
+        }
+    }
+
     /// A seat carries its occupant's declaration and not the last one's.
     #[test]
     fn a_claimed_seat_declares_nothing_until_its_guest_does() {
