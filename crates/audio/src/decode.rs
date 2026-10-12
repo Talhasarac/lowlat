@@ -10,7 +10,7 @@
 //! The output is always samples. A peer picks the encoding and the side that
 //! receives does not have to care which it picked ([06 §13](../../../docs/06-api.md)).
 
-use opus_rs::OpusDecoder;
+use rusty_opus::OpusDecoder;
 
 use crate::{Error, SAMPLE_RATE};
 
@@ -106,13 +106,19 @@ impl Decoder {
             None => build(self.channels)?,
         };
         let scratch = &mut self.scratch;
-        // **Contained, and the state is thrown away rather than reused.** This
-        // decoder is a port that has been measured to panic on a malformed
-        // packet, and these packets are a peer's to malform; a panic crossing
-        // into the loop that called this would end the session, and one caught
-        // and then decoded against again would be reading whatever the unwind
-        // left behind.
+        // **Contained, and the state is thrown away rather than reused.** These
+        // packets are a peer's to malform and a codec is a large parser. This
+        // one has not been seen to panic -- none in two hundred thousand random
+        // packets, where the port before it panicked on one in six hundred --
+        // but a panic crossing into the loop that called this would end the
+        // session, and one caught and then decoded against again would be
+        // reading whatever the unwind left behind.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A codec that does not return, made to order, because the one in
+            // use will not oblige: the test that proves this containment runs
+            // needs a panic inside exactly this call.
+            #[cfg(test)]
+            assert!(payload != tests::PANICS, "the codec did not return");
             decoder.decode(payload, room, scratch.as_mut_slice())
         }));
         match outcome {
@@ -234,54 +240,47 @@ mod tests {
         assert!(stereo().decode(&payload, false, &mut out).is_err());
     }
 
+    /// What a test hands the decoder to make the codec panic inside the call
+    /// the containment wraps.
+    pub(super) const PANICS: &[u8] = b"\xFFthe codec panics";
+
     /// **Nothing a peer can send may end the session**, whatever it does to
     /// the codec -- and this proves the containment runs rather than assuming
-    /// it. Sweeping random payloads with a fixed seed, seventeen of forty
-    /// thousand ended in a panic rather than an error; each one of those would
-    /// have taken a session with it.
-    ///
-    /// **The panic is a property of the decoder's state, not of one packet.**
-    /// The same bytes handed to a fresh decoder decode without complaint,
-    /// which is why the reproducer here is a sequence rather than a packet --
-    /// and why a fuzz target for this has to feed sequences too.
+    /// it. The codec in use has not been seen to panic, so the panic is made
+    /// to order inside the contained call ([`PANICS`]); the sweep of random
+    /// payloads that used to find one in the port before it found seventeen in
+    /// forty thousand.
     #[test]
     fn a_packet_that_panics_the_codec_is_contained_and_the_decoder_survives() {
-        for (mut decoder, channels) in [(mono(), 1), (stereo(), CHANNELS)] {
+        let mut host = Encoder::new(crate::encode::DEFAULT_BITRATE_KBPS).expect("an encoder");
+        let mut microphone = Encoder::microphone().expect("a microphone encoder");
+        let stereo_packet = host.encode(&[0u8; FRAME_BYTES]).expect("encodes").to_vec();
+        let mono_packet = microphone
+            .encode_samples(&[0i16; lowlat_core::microphone::FRAME])
+            .expect("encodes")
+            .to_vec();
+        for (mut decoder, channels, packet) in [
+            (mono(), 1, mono_packet),
+            (stereo(), CHANNELS, stereo_packet),
+        ] {
             let mut out = vec![0i16; FRAME * CHANNELS];
-            let mut seed = 0x00C0_FFEEu32;
-            'sweep: for length in 1..=200usize {
-                for _ in 0..200 {
-                    let payload: Vec<u8> = (0..length)
-                        .map(|_| {
-                            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                            (seed >> 24) as u8
-                        })
-                        .collect();
-                    let _ = decoder.decode(&payload, true, &mut out);
-                    if decoder.panicked() > 0 {
-                        break 'sweep;
-                    }
-                }
-            }
-            assert!(
-                decoder.panicked() > 0,
-                "the containment never ran at {channels} channels, so this test proves nothing"
+            assert!(decoder.decode(PANICS, true, &mut out).is_err());
+            assert_eq!(
+                decoder.panicked(),
+                1,
+                "the containment never ran at {channels} channels"
             );
 
             // **And the peer is not finished.** One packet that ended badly
             // must not cost the rest of the conversation, which is the half a
             // bare catch gets wrong: the state it unwound through is thrown
-            // away and the next packet builds a decoder that never saw it.
-            let samples: Vec<i16> = (4..).take(3 * channels).collect();
-            let mut good = Vec::new();
-            for sample in &samples {
-                good.extend_from_slice(&sample.to_le_bytes());
-            }
-            let taken = decoder
-                .decode(&good, false, &mut out)
+            // away, and the next packet builds a codec that never saw it and
+            // decodes through it.
+            let frames = decoder
+                .decode(&packet, true, &mut out)
                 .expect("the decoder did not recover");
-            assert_eq!(taken, 3);
-            assert_eq!(&out[..samples.len()], &samples[..]);
+            assert!(frames > 0, "the rebuilt codec produced nothing");
+            assert_eq!(decoder.panicked(), 1);
         }
     }
 

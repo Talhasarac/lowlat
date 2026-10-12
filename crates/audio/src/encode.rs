@@ -11,7 +11,7 @@
 //! the stream.
 
 use lowlat_core::audio::Codec;
-use opus_rs::{Application, OpusEncoder};
+use rusty_opus::{Application, OpusEncoder};
 
 use crate::{CHANNELS, Error, FRAME, SAMPLE_RATE};
 
@@ -60,11 +60,12 @@ impl Encoder {
     /// Build one for a peer's microphone as the wire carries it
     /// (docs/01-protocol.md 11.4b): mono, ten milliseconds a frame.
     ///
-    /// **One mode only, the transform's**, never the speech or the hybrid one.
-    /// A receiver decodes any of them, but the hybrid packets the speech mode
-    /// produces for a voice were measured coming out of this crate's own
-    /// decoder at a tenth to a half of their level, where the transform's come
-    /// out whole through it and through the reference decoder alike.
+    /// **One mode only, the transform's**, never the speech or the hybrid one:
+    /// the mode with the least delay, four milliseconds under the others, and
+    /// one every receiver decodes whole. *(First chosen because this crate's
+    /// earlier decoder read the speech mode's hybrid packets at a tenth to a
+    /// half of their level; the decoder that replaced it reads them as the
+    /// reference does.)*
     pub fn microphone() -> Result<Self, Error> {
         Self::build(
             lowlat_core::microphone::CHANNELS,
@@ -190,7 +191,7 @@ mod tests {
     fn a_frame_becomes_a_packet_that_decodes_back_to_the_tone() {
         let mut encoder = Encoder::new(DEFAULT_BITRATE_KBPS).expect("an encoder");
         let mut decoder =
-            opus_rs::OpusDecoder::new(i32::try_from(SAMPLE_RATE).expect("a rate"), CHANNELS)
+            rusty_opus::OpusDecoder::new(i32::try_from(SAMPLE_RATE).expect("a rate"), CHANNELS)
                 .expect("a decoder");
         let mut out = vec![0f32; FRAME * CHANNELS];
 
@@ -221,14 +222,14 @@ mod tests {
         );
     }
 
-    /// **A microphone frame is ten milliseconds of mono in the codec's voice
-    /// mode**, a packet flagged mono -- a receiver built for one channel
-    /// refuses the other -- that decodes back to the tone at its level.
+    /// **A microphone frame is ten milliseconds of mono in the codec's
+    /// transform mode**, a packet flagged mono that decodes back to the tone at
+    /// its level.
     #[test]
     fn a_microphone_frame_decodes_back_to_the_tone() {
         let frame = lowlat_core::microphone::FRAME;
         let mut encoder = Encoder::microphone().expect("a microphone encoder");
-        let mut decoder = opus_rs::OpusDecoder::new(48_000, 1).expect("a decoder");
+        let mut decoder = rusty_opus::OpusDecoder::new(48_000, 1).expect("a decoder");
         let mut out = vec![0f32; frame];
         let mut energy = 0f64;
         for step in 0..20 {

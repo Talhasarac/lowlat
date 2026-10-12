@@ -14,9 +14,11 @@ lowlat-common.workspace = true
 # that agree today.
 lowlat-core.workspace = true
 # The codec, as a pure-Rust port rather than as bindings: no runtime library to
-# find, nothing new that is `unsafe`, and a bitstream the reference decoder was
-# measured to read correctly. BSD-3-Clause, no transitive dependencies.
-opus-rs.workspace = true
+# find, and a decoder measured matching the reference decoder to one step of a
+# sample on every stream tried, hybrid packets included. Its `unsafe` is SIMD
+# kernels picked at run time, each with a scalar twin it is tested against.
+# BSD-3-Clause, no dependencies, no build script.
+rusty-opus.workspace = true
 
 [dev-dependencies]
 lowlat-common = { workspace = true, features = ["alloc-counter"] }
