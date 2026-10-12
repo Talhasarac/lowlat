@@ -3,6 +3,30 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-12 - Client and host: each address offered once
+
+### Fixed
+- **An attempt offered its IPv6 address twice** ([03 §3](03-connectivity.md)), the client and
+  the host alike. The host candidates were raised as the attempt began and the reflexive
+  answers by the session's loop, which skipped only the answers it had raised itself. Nothing
+  translates IPv6, so a reflexive server on that family reports the IPv6 host candidate
+  itself, at the same port, and the loop raised it again, marked the same. Harmless on the
+  wire, where a repeat is dropped, but a second message through signaling and a second event
+  to an application that relays what it is given. The loop is now handed the host candidates
+  and skips an answer that repeats one; an answer that differs from every one is raised as
+  before, and what the answers say of the translation is still read from all of them.
+
+### Checked
+- A test on each side drives a real attempt against two reflexive servers on loopback,
+  answered strictly in order: the first reports one of this machine's own addresses at the
+  attempt's port, the second another address, whose arrival proves the first was in hand.
+  Each failed on the old code with the address offered twice.
+- Windows 977 tests; Linux, on a clean clone, every form clean and 1268 tests, the two
+  dual-stack name tests failing under WSL as before. Live against a stock host with a
+  dual-stack reflexive server: the client's IPv6 address offered once, before the readiness
+  marker, where it had gone out twice in all six runs earlier that day, and the path
+  established over IPv6.
+
 ## 2026-10-12 - Audio: the codec library replaced
 
 ### Decided

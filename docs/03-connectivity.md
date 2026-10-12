@@ -101,6 +101,10 @@ Gathering rules:
   peer sees is the source we would send from; an interface commonly carries a
   stable, a temporary and a route-local global address at once, and offering all
   three makes the peer spend checks discovering which one answers.
+- **An address is offered once, whichever probe found it** (*2026-10-12*). On v6 nothing
+  translates, so a reflexive server on that family reports the host candidate itself, at the
+  same port; that answer is not raised again. A reflexive answer that differs from every host
+  candidate is raised as before.
 - **Only private address space is offered.** A host candidate exists to
   advertise what a reflexive probe cannot see. A publicly routable address is
   discoverable that way already, so offering it here as well is a duplicate that
