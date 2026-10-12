@@ -14,6 +14,13 @@ pub mod abi;
 /// runtime, which is the application's to choose (06 section 3b). The shared
 /// library is linked with them already, so naming them again changes nothing
 /// there.
+///
+/// **They reach a link only inside an object the link pulls in**, which is
+/// why the release profile stays fat LTO with one codegen unit: every entry
+/// point then shares the one object these are in. Split into partitions -- a
+/// debug build, thin LTO, more codegen units -- they can land in one nothing
+/// references, and an application's link fails on the system functions named
+/// here after a change that had nothing to do with them.
 #[cfg(all(windows, target_env = "msvc"))]
 #[used]
 // SAFETY: a section of linker directives, never read by anything at run time;
