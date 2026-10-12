@@ -74,7 +74,13 @@ path is relayed and where. A relay that does not answer, refuses the
 credential, or lets the allocation go ends the session with its own outcome.
 `LOWLAT_LEGACY_CIPHER` offers no media key, so the host answers for the
 legacy 128-bit cipher, keyed from its certificate digest, as an older client
-would. `LOWLAT_HEVC`, `LOWLAT_10BIT` and `LOWLAT_444` are the preferences the
+would. `LOWLAT_MIC_TONE=440` sends a tone at that pitch as the microphone,
+since the toolkit captures no sound: a few milliseconds at a time from a thread
+of its own, as a device would hand them over, compressed unless
+`LOWLAT_RAW_AUDIO` declared uncompressed sound. The line each second carries
+what went (`mic`, `mic_dropped`), the host's answer (`mic_open`) and the calls
+it refused (`mic_refused`), and the host's change of answer is printed when it
+comes. `LOWLAT_HEVC`, `LOWLAT_10BIT` and `LOWLAT_444` are the preferences the
 attempt starts with, masked by what the decoder takes; Ctrl+Shift+C cycles
 them live. `LOWLAT_HANDLE` asks for pictures as device handles, which the
 toolkit's renderer imports and draws with nothing copied through this

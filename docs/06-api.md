@@ -329,7 +329,7 @@ with and what `lowlat_host_set_audio_config` takes:
 | `enabled` | Switching it off gives the sound device back and restores the speakers, exactly as the last guest leaving does. Switching it on takes the device again -- **including on a host that started with it off**, which is what makes this field live rather than a settled one wearing a setter. |
 | `bitrate_kbps` | Read on the frame that uses it, so a change costs no rebuild and no discontinuity a listener would hear. **A rate of zero or one past the ceiling is refused** rather than clamped in silence, because the codec would clamp its own and the application would be told yes and given something else. |
 | `allow_uncompressed` | **A permission, not a request, and off by default.** A guest asks for the uncompressed form in its own initialization; this is whether a host will serve it. It costs an order of magnitude more of the uplink than the compressed form, and that comes out of what is left for the picture ([05 §9](05-host.md)). A guest denied it is sent the compressed form, priced as the compressed form, and told it is the compressed form. |
-| `accept_microphone` | Whether a guest's microphone is taken, **off by default**. It is two things at once and they cannot be separated: this host decodes what arrives, and it tells the peer it will -- **a peer sends nothing until it is told**, so nothing arrives while this is clear however the guest configured itself. It costs a packet every ten milliseconds on the channel that carries control messages ([05 §9.6](05-host.md)), which is why it is a decision rather than something switched on by polling for it. Live, like the rest: switching it off tells every connected peer to stop. |
+| `accept_microphone` | Whether a guest's microphone is taken, **off by default**. It is two things at once and they cannot be separated: this host decodes what arrives, and it tells the peer whether it will -- **a peer with a microphone sends it until it is told no**, so this host says no while this is clear rather than being sent what it does not read (*corrected 2026-10-12*: this said a peer sends nothing until it is told). It costs a packet every ten milliseconds on the channel that carries control messages ([05 §9.6](05-host.md)), which is why it is a decision rather than something switched on by polling for it. Live, like the rest: switching it off tells every connected peer to stop. |
 | `mute_local` | Silences the speakers at the desk while a guest is connected, off by default. On a device that applies its own mute the tap is ahead of it, so a guest still hears everything. **On a device whose mute the sound server applies, nothing is silenced and the log says why** -- the mix the mute reaches is the one being captured, so obeying would silence every guest ([05 §9.4](05-host.md)); the setting is still accepted, because the device can change under a running host. **It restores rather than unmutes**: a device somebody had already muted stays muted, and one they unmuted mid-session is not muted again. |
 | `device` | Empty means the default output's monitor, **followed as the default changes**. A named one is checked against the enumeration at the call and refused with `LOWLAT_ERR_INVALID_ARGUMENT` if it is not there, because a name that does not resolve is substituted by the sound server rather than refused -- and the loop that opens it runs long after the call returned, so the call is the only place that can say no. Refused changes nothing: the host keeps the device it has. **The start does not check**, because a host whose sound server is not up yet must still be able to stream pictures. |
 
@@ -352,8 +352,8 @@ input, minor 7 the sound, minor 8 the preferences and the handle, minor 9 the cu
 metrics, minor 10 the pad reports, minor 14 the relay, minor 15 the picture's range, minor 16
 its arrival time, minor 17 the range asked for, minor 18 the client's deliberate panic, minor
 19 the handle on Windows and the kind switched live, minor 22 the port and its mapping, minor
-23 the translation in front of it, minor 24 the application's own message); the header is the
-truth.
+23 the translation in front of it, minor 24 the application's own message, minor 25 the
+microphone); the header is the truth.
 
 ```c
 lowlat_status lowlat_client_create(const lowlat_client_create_info *info, lowlat_client **out);
@@ -401,6 +401,8 @@ lowlat_status lowlat_client_send_pad_report(lowlat_client *cl, uint32_t pad, uin
 lowlat_status lowlat_client_send_release_all(lowlat_client *cl);
 lowlat_status lowlat_client_send_control(lowlat_client *cl, uint8_t opcode, uint32_t a0,
                                          uint32_t a1, uint32_t a2);         /* minor 24 */
+lowlat_status lowlat_client_send_microphone(lowlat_client *cl, const int16_t *samples,
+                                            uint32_t count);                /* minor 25 */
 
 lowlat_status lowlat_client_acquire_audio(lowlat_client *cl, uint32_t timeout_ms,
                                           int16_t *samples, uint32_t *count);
@@ -823,6 +825,23 @@ in status, which is a caller that stopped calling. Status carries the packets de
 dropped and refused, those waiting, the last packet's age between the wire and the call, and
 the codec the decoder was built for (`LOWLAT_AUDIO_OPUS`, `LOWLAT_AUDIO_PCM`).
 
+**The microphone goes the other way** (minor 25, *2026-10-12*, [10 §6](10-client.md)):
+`lowlat_client_send_microphone(cl, samples, count)` takes sixteen-bit mono samples at 48 kHz,
+as many as the call has -- a device delivering another rate or layout is the application's to
+convert -- and the library cuts them into frames of ten milliseconds, carrying the remainder to
+the next call, because a host takes whole frames and drops the rest. Each frame goes to the
+host as its microphone: uncompressed when the attempt's `raw_audio` is set, compressed
+otherwise, as the stream's own declaration decides. The call never blocks; frames cross a fixed
+ring of two hundred milliseconds to the session thread, and a full one drops the newest and
+counts it. **The host decides whether it takes one**: every attempt starts with it taken, and a
+host that says it takes none raises `LOWLAT_EVENT_MICROPHONE` (`lowlat_microphone_event {
+enabled }`) and has the call refused with `LOWLAT_ERR_MICROPHONE_OFF` -- the partial frame
+forgotten, nothing sent -- until it says otherwise, which raises the event again; the event
+comes on a change only. The application opens its device on the one and closes it on the other.
+The host's answer arrives as an application message under a sub-identifier the protocol
+reserves, and the library reads it rather than handing it over. Status gains `microphone` (the
+answer), `microphone_sent` and `microphone_dropped`.
+
 **Input is one call per kind** (minor 6): key, mouse button, wheel, motion, pad button, pad
 axis, pad state, pad unplug and release-all, each with its arguments in the signature rather
 than in a tagged structure, so a call site is checked where it is written and a binding
@@ -874,7 +893,8 @@ stayed up and the host streamed on until the application disconnected).
 hotspot, suppressed; minor 9), relative mode (`LOWLAT_EVENT_RELATIVE`, on the transition
 alone, with the position the pointer reappears at on the way out in the window's units, so
 the application confines and hides its pointer on entry and warps it once on exit), blocked
-and unblocked, rumble, the guest list, stream ended with a reason, host mode.
+and unblocked, rumble, the guest list, stream ended with a reason, host mode, and the host's
+answer on the microphone (minor 25).
 
 ## §4 Signaling seam
 
@@ -1351,6 +1371,13 @@ stable port with no mapping, where it had a port the system picked per attempt.
 
 **Minor 24** (2026-10-12) is the application's own message ([§3b](#3b-client)):
 `lowlat_client_send_control`. Nothing moves.
+
+**Minor 25** (2026-10-12) is the client's microphone ([§3b](#3b-client)):
+`lowlat_client_send_microphone`, `LOWLAT_EVENT_MICROPHONE` with `lowlat_microphone_event`,
+`LOWLAT_ERR_MICROPHONE_OFF`, and `microphone_sent`, `microphone_dropped` and `microphone`
+appended to `lowlat_client_status`. Nothing moves, and a caller built against an earlier minor
+gets the fields it knows. The host's microphone answer, which reached the application as an
+application message until this minor, is read by the library and raised as the event instead.
 
 **This surface is ours and carries no inherited compatibility.** It was designed here rather
 than adopted, so before the first major version a name that turns out to be wrong is corrected

@@ -1037,6 +1037,25 @@ protocol's rate is refused per packet and counted. The pipeline hop between the 
 the device -- one wake and one decode, a fraction of a millisecond -- is not where the
 latency is.
 
+**The microphone goes the other way, on the control channel** (*built 2026-10-12*, minor 25;
+the wire is [01 §11.4b](01-protocol.md)). The application hands over sixteen-bit mono samples
+at 48 kHz from its device, in whatever lengths the device delivers; the library cuts them into
+frames of ten milliseconds on the caller's thread, because a host takes whole frames and drops
+a remainder, and passes them through a ring of two hundred milliseconds to the session thread,
+which sends one message a frame. **The encoding follows the stream's own declaration**, as it
+does on every established client: uncompressed when the client declared uncompressed sound,
+compressed otherwise -- in the codec's transform mode alone, never its speech or hybrid one,
+because the hybrid packets the speech mode produces for a voice were measured coming out of
+this library's own decoder at a tenth to a half of their level, while the transform's come out
+whole through it and through the reference decoder alike. **The host decides whether it takes
+one**: every session starts with the microphone taken, a host's `"0"` stops it and anything else
+lets it go on, and the library raises an event on each change, refuses the samples while the
+answer is no and forgets the partial frame with it, so a device left open costs nothing on the
+wire. That answer is the one application message the library reads rather than hands over.
+The cost is the wire's: a message of 1932 bytes every ten milliseconds whatever it carries,
+head-of-line with the input on the reliable channel ([05 §9.6](05-host.md)) -- the reason a host
+says no when it is not taking one.
+
 ## §7 Initialization and the control vocabulary
 
 The client sends the fourteen-key initialization of [01 §11.5](01-protocol.md), whose `_flags`
@@ -1053,7 +1072,7 @@ reads channel 0 for:
 | 9 cursor | decodes the picture if one came or is named from the cache, and raises a cursor event with it at native size, the hotspot in its pixels, the *suppressed* flag and the position in window units; a name the cache does not hold delivers the rest without a picture; the forget bit empties the cache; the first stream only |
 | 10 disconnect | records the status the host gave and ends; zero is not an ending ([01 §11.2](01-protocol.md)) |
 | 16 blocked | raises the blocked or unblocked event |
-| 17 user data | hands the body to the application with its sub-identifier, opaque ([01 §11.2a](01-protocol.md)) |
+| 17 user data | hands the body to the application with its sub-identifier, opaque ([01 §11.2a](01-protocol.md)); except sub-identifier 18, the host's answer on the microphone, which the library reads (§6) |
 | 20 rumble | raises the rumble event for the pad named, the two motors as eight-bit values |
 | 21 encode latency | stores the host's figure for the stream named |
 | 25 guest list | hands the body to the application with the recipient's own number, opaque; the number goes into status |

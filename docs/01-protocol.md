@@ -1004,15 +1004,25 @@ static.
 
 **48 kHz mono, ten milliseconds a packet.** A sender folds whatever its device captured down to
 one channel before encoding, so the layout question is settled before it leaves; compressed
-packets are the codec's voice mode, and uncompressed is 960 bytes of sixteen-bit samples. A
+packets are the codec's in whichever of its modes the sender chose -- commonly its voice mode,
+the transform mode alone from this library's client ([10 §6](10-client.md)) -- and uncompressed
+is 960 bytes of sixteen-bit samples. A
 receiver bounds what it will decode rather than trusting the length: the codec can be asked for
 far longer frames than ten milliseconds, and the length is the sender's to write.
 
-**A peer sends nothing until it is told it may.** The host announces whether it will take a
+**A host's answer only ever turns a microphone off.** The host announces whether it will take a
 microphone as an application message (§11.2a) under sub-identifier 18, whose body is a decimal
-string: `"0"` means no and anything else means yes. A peer told no -- or never told at all --
-keeps its microphone muted however it is configured itself, so a host that merely listens
-receives silence.
+string: `"0"` means no and anything else means yes. A peer told no keeps its microphone muted
+however it is configured itself; **a peer told nothing sends**, and every session starts that
+way, so a host that is not taking one says so. *Corrected 2026-10-12: this said a peer sends
+nothing until it is told it may; a peer's state is reset to sending at every session and set
+only by a `"0"`.*
+
+**A sender's encoding follows its own declaration**: compressed unless its initialization
+declared uncompressed sound (`rawAudio`, §11.5), uncompressed if it did. Nothing negotiates
+it; a receiver reads each packet's encoding byte. **A receiver takes whole ten-millisecond
+frames and drops a remainder**, so a sender cuts its capture into them rather than passing on
+whatever lengths its device delivers.
 
 **It costs what it costs, on the channel that carries control.** A packet every ten milliseconds
 of 1932 bytes is around 193 kB/s in two fragments, roughly 200 fragments a second, reliable and

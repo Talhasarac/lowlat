@@ -3,6 +3,50 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-12 - C5.25: the client's microphone
+
+### Decided
+- **The client sends the application's microphone** ([10 §6](10-client.md),
+  [06 §3b](06-api.md), minor 25): `lowlat_client_send_microphone(cl, samples, count)`,
+  sixteen-bit mono at 48 kHz in whatever lengths the device delivers. The library cuts frames of
+  ten milliseconds and carries the remainder to the next call, because a host takes whole frames
+  and drops the rest; the frames cross a fixed ring to the session thread and the call never
+  blocks.
+- **Compressed unless uncompressed sound was declared**, as the stream's own declaration decides,
+  and compressed **in the codec's transform mode alone**: the hybrid packets its speech mode
+  produces for a voice came out of this library's own decoder at a tenth to a half of their
+  level, where the transform's come out whole through it and through the reference decoder
+  alike. That decoder is also what this host reads a peer's microphone with, so the codec
+  library is replaced next.
+- **opus-rs 0.1.32 is taken**: 0.1.31 encoded the transform mode at ten milliseconds of mono at
+  about a fifth of its level, through the reference decoder too.
+- **The host's answer is the library's to read** and is raised as `LOWLAT_EVENT_MICROPHONE`, on a
+  change only: every session starts with the microphone taken, a `"0"` stops it, and while it is
+  stopped the call is refused with `LOWLAT_ERR_MICROPHONE_OFF` and the partial frame forgotten,
+  so a device left open costs nothing on the wire.
+- **The demo sends a tone as its microphone** with `LOWLAT_MIC_TONE`, since its toolkit captures
+  no sound.
+
+### Fixed
+- **What a host's microphone answer means was written backwards** ([01 §11.4b](01-protocol.md),
+  [05 §9.6](05-host.md), [06 §3](06-api.md)): it only ever turns a peer's microphone off, and a
+  peer told nothing sends. This host's announcements were already right; their stated reason is
+  corrected.
+
+### Checked
+- The frames' cut, the transform-mode encoder at level through its own decoder, an uncompressed
+  microphone reaching a host sample for sample, a compressed one at its level in every tenth of a
+  second after the first, the host's answer gating the microphone with one event a change and
+  none handed over as an application message, and the boundary's refusal. Each shown failing
+  with what it guards broken: the remainder dropped, the samples written big endian, the speech
+  mode, a `"0"` ignored, an event on every answer, the answer handed over, the refusal skipped.
+  The speech mode first passed the level check, which had been reading only the settled last
+  tenth; it reads every tenth now.
+- The demo builds clean under the strictest warnings with the tone in it.
+- Windows: clippy clean and 975 tests. Linux, on a clean clone: the same forms clean and 1263
+  tests pass, the two dual-stack name tests failing under WSL as before, and the demo compiles
+  clean there too. Not yet run against a host.
+
 ## 2026-10-12 - C5.24: the application's own control message
 
 ### Decided

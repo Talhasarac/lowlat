@@ -1116,8 +1116,10 @@ is running.
 
 **Taken only when a host says it will**, off by default. Two things follow from that one
 setting, and they are the same decision: this host decodes what arrives, and it tells the peer
-it will -- a peer sends nothing at all until it is told, so a host that merely listened would
-receive silence and look broken from both ends ([01 §11.4b](01-protocol.md)).
+whether it will -- a peer with a microphone sends it until it is told no, so a host that is not
+taking one says so rather than being sent a packet every ten milliseconds for nothing
+([01 §11.4b](01-protocol.md)). *Corrected 2026-10-12: this said a peer sends nothing until it is
+told; the message only ever turns a microphone off.*
 
 **It is not on the audio channel.** It arrives on the control channel, which makes it reliable
 and ordered and puts it head-of-line with the guest list, the cursor and the latency reports: a

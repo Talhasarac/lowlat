@@ -288,7 +288,9 @@ the rules are [10 §6](10-client.md).
   every packet, another asks for uncompressed. Against a host on the same machine the demo
   plays into a sink the host does not capture, or it echoes.
 - [x] The microphone the other way is **deferred**: the enable and the uplink are known, the
-  capture device is the application's, and nothing in v1 needs it.
+  capture device is the application's, and nothing in v1 needs it. *Built 2026-10-12 as C5.25,
+  minor 25 ([10 §6](10-client.md)): mono samples in, ten-millisecond frames cut by the library,
+  uncompressed or compressed as the declaration says, the host's answer read as an event.*
 
 **Gate:**
 
@@ -1290,7 +1292,8 @@ for any address, and destroys an allocation that sends toward loopback.
   is one shared texture per plane, finished on the device before it can be acquired, so it
   needs no fence.*
 - **A second stream, the browser pipe, pen and touch, the microphone uplink.** Each is known
-  and none is needed for a client that streams.
+  and none is needed for a client that streams. *The microphone uplink built 2026-10-12
+  (C5.25).*
 - **A session that changes its frame kind**: `lowlat_frame.kind` is already per frame, so a
   mixed-kind session is expressible without a change to the surface; what it needs is a
   queue that holds both kinds of slot at once. Not needed by anything that streams today.
@@ -1332,6 +1335,10 @@ slower decoder ever reopens them.
 
 Newest first.
 
+- 2026-10-12: the client sends the application's microphone (minor 25), in frames of ten
+  milliseconds, compressed in the codec's transform mode alone unless uncompressed sound was
+  declared, gated by the host's answer; the codec library is to be replaced next, its decoder
+  having been measured reading a peer's hybrid packets short.
 - 2026-10-12: the application may send a header of its own on the control channel (minor
   24), as given and in order with the input; the library's own opcodes and those with a body
   are refused.
