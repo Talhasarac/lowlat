@@ -3,6 +3,46 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-12 - Audio: the codec library replaced
+
+### Decided
+- **rusty-opus 1.0.1 replaces opus-rs**, for the host's sound and a guest's microphone on the
+  host, and for the host's sound and the application's microphone on the client
+  ([10 §6](10-client.md)). Measured in this system's own configurations beside the reference
+  decoder: every stream tried decodes to within one step of a sample of the reference
+  decoder's output, the hybrid packets a voice produces included -- which the old decoder
+  read at a tenth to a half of their level, so a stock client's microphone reached this host
+  quiet; two hundred thousand random packets were decoded or refused with no panic, where the
+  old decoder panicked on one in six hundred; a stereo packet handed to a mono decoder is
+  decoded as the reference decodes it rather than refused; neither half allocates per frame;
+  and each costs about what the reference does. Its `unsafe` is SIMD kernels chosen at run
+  time, each documented and tested against a scalar twin; BSD-3-Clause, no dependencies, no
+  build script, and its research and profiling features, the only parts that read the
+  environment or write a file, are off unless asked for.
+- **opus-pure was measured beside it and not taken.** It is a fork of an earlier release of
+  the same codebase and decodes identically, but its encoder allocates four or five times a
+  frame, which a frame path here may not, and it needs a newer compiler than this workspace
+  declares.
+- **The microphone's mode is unchanged**, the transform alone; its reason is restated, since
+  the decoder it was chosen around is gone: the least delay of the modes, and one every
+  receiver decodes whole.
+
+### Changed
+- **The decoder's containment stays, as a guard rather than a repair**, and its test makes its
+  panic to order inside the contained call, since the codec in use will not panic for it; the
+  rebuilt codec is then shown decoding a real packet.
+
+### Checked
+- The audio crate's tests unchanged and passing on the new codec -- levels both ways, the
+  transform mode's packets, the bitrate live, a frame encoded and a packet decoded without an
+  allocation -- and the containment's test shown failing with the panic moved outside the
+  contained call. The supply-chain gate passes: advisories, bans, licenses and sources.
+- Windows 976 tests; Linux, on a clean clone, every form clean and 1266 tests, the two
+  dual-stack name tests failing under WSL as before. Live against a stock host: the client's
+  microphone, compressed by the new encoder, recorded at the host's virtual microphone for
+  twenty seconds at exactly its level and pitch with no tenth silent; the host's stereo sound
+  decoded at its full rate for the whole run, none refused and no panic contained.
+
 ## 2026-10-12 - Core: the path is the one the winning answer travelled
 
 ### Fixed

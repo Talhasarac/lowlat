@@ -1044,10 +1044,11 @@ frames of ten milliseconds on the caller's thread, because a host takes whole fr
 a remainder, and passes them through a ring of two hundred milliseconds to the session thread,
 which sends one message a frame. **The encoding follows the stream's own declaration**, as it
 does on every established client: uncompressed when the client declared uncompressed sound,
-compressed otherwise -- in the codec's transform mode alone, never its speech or hybrid one,
-because the hybrid packets the speech mode produces for a voice were measured coming out of
-this library's own decoder at a tenth to a half of their level, while the transform's come out
-whole through it and through the reference decoder alike. **The host decides whether it takes
+compressed otherwise -- in the codec's transform mode alone, never its speech or hybrid one:
+the mode with the least delay, four milliseconds under the others, and one every receiver
+decodes whole. *(First chosen because this library's earlier decoder read the speech mode's
+hybrid packets for a voice at a tenth to a half of their level; the decoder that replaced it
+on 2026-10-12 reads them as the reference does.)* **The host decides whether it takes
 one**: every session starts with the microphone taken, a host's `"0"` stops it and anything else
 lets it go on, and the library raises an event on each change, refuses the samples while the
 answer is no and forgets the partial frame with it, so a device left open costs nothing on the

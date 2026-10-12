@@ -1289,7 +1289,9 @@ decides what to do with them.
   accumulated state rather than of any one packet** -- the same bytes decode cleanly on a fresh
   decoder, so the regression test replays a sequence and the fuzz target feeds sequences. A
   contained panic throws the state away and counts itself; the count travels in the guest line
-  beside the ordinary refusals.*
+  beside the ordinary refusals.* *(2026-10-12: the codec is replaced, and the one in use has
+  not been seen to panic -- none in two hundred thousand random packets -- so the containment
+  stays as a guard rather than a repair, and its test makes its panic to order.)*
 - [x] **Live against a real peer.** *Passed 2026-08-23: 11,266 packets from a stock client with
   nothing dropped, nothing refused and no contained panic. It took one fix -- the selectors are
   the header's second and third arguments, not its first two, the first being the declared length

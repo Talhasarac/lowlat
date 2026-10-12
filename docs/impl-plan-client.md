@@ -1335,6 +1335,9 @@ slower decoder ever reopens them.
 
 Newest first.
 
+- 2026-10-12: the codec library is replaced, in both directions and on both sides: the new
+  decoder reads every stream tried to within one step of a sample of the reference decoder,
+  hybrid packets included, has not been seen to panic, and neither half allocates per frame.
 - 2026-10-12: the client sends the application's microphone (minor 25), in frames of ten
   milliseconds, compressed in the codec's transform mode alone unless uncompressed sound was
   declared, gated by the host's answer; the codec library is to be replaced next, its decoder

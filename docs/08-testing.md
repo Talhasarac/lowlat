@@ -269,10 +269,12 @@ what keeps the exemption from spreading.
   or refused under the three network scripts. Uncompressed sound is compared sample for sample
   across the run; compressed sound is held to each channel's level once the codec has
   settled, because a lossy codec's output is not its input and a swapped or mixed channel
-  reads wrong on level alone. The decoder's containment is proved by a test that first makes
-  the codec panic and then decodes again, and the fuzz target feeds one input to a mono and a
-  stereo decoder as a sequence of packets with the harness's abort-on-panic hook silenced, so
-  a contained panic is not reported as a crash and an escaping one still is.
+  reads wrong on level alone. The decoder's containment is proved by a test that makes a panic
+  inside the contained call -- the codec in use has not been seen to panic, so the panic is made
+  to order -- and then decodes a real packet through the rebuilt codec, and the fuzz target
+  feeds one input to a mono and a stereo decoder as a sequence of packets with the harness's
+  abort-on-panic hook silenced, so a contained panic is not reported as a crash and an
+  escaping one still is.
 - **The browser pipe has two live rows and neither can be replaced by a hermetic one.** A
   stock browser client, unmodified, streaming from the service; and `examples/web-client` on
   two browser families, driven through their developer-tools protocols so a run is scripted
