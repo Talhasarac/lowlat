@@ -50,7 +50,11 @@ four: without one a direct attempt offers only this machine's own addresses,
 which a host behind its own translator cannot answer. `LOWLAT_IPV4_ONLY`
 offers and checks IPv4 addresses only: no IPv6 candidate of this machine's,
 none of the host's checked, so a host that IPv6 would reach directly is
-reached across the translation on IPv4 instead. `LOWLAT_NAT=1` asks those
+reached across the translation on IPv4 instead. Every candidate is printed as
+it goes and comes -- this machine's as the library raises it, the host's as
+signaling delivers it, and each side's readiness marker -- stamped with the
+local time to the millisecond, as the library's own lines are, so a connect
+can be read against the host's log. `LOWLAT_NAT=1` asks those
 servers at start, before the attempt, where they see the port, and prints the
 translation in front of it: the number game consoles give it, how it maps,
 where the first server saw the port, and the gateway's mapping beside it --

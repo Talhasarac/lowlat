@@ -103,6 +103,7 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -377,6 +378,50 @@ static double now_ms(void)
 #endif
 }
 
+// The local time of day to the millisecond, the clock a host's own log
+// stamps its lines with, so the two can be read side by side.
+static void wall_time(char *out, size_t size)
+{
+#if defined(_WIN32)
+	SYSTEMTIME t;
+	GetLocalTime(&t);
+	snprintf(out, size, "%02u:%02u:%02u.%03u", (unsigned) t.wHour, (unsigned) t.wMinute,
+		(unsigned) t.wSecond, (unsigned) t.wMilliseconds);
+#else
+	struct timespec ts;
+	struct tm t;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	localtime_r(&ts.tv_sec, &t);
+	snprintf(out, size, "%02d:%02d:%02d.%03ld", t.tm_hour, t.tm_min, t.tm_sec,
+		ts.tv_nsec / 1000000);
+#endif
+}
+
+// A line of the demo's own, stamped with the time of day. Formatted whole
+// and written in one call, so a line from another thread cannot land
+// inside it.
+static void demo_log(const char *format, ...)
+{
+	char stamp[16];
+	char line[512];
+	wall_time(stamp, sizeof stamp);
+	va_list args;
+	va_start(args, format);
+	vsnprintf(line, sizeof line, format, args);
+	va_end(args);
+	printf("%s demo: %s\n", stamp, line);
+}
+
+// A candidate as it goes to the host or comes from it, an IPv6 address
+// bracketed so its port does not read as one more group of it.
+static void print_candidate(const char *whose, const char *address, uint16_t port, bool lan,
+	bool reflexive)
+{
+	bool v6 = strchr(address, ':') != NULL;
+	demo_log("%s candidate %s%s%s:%u%s%s", whose, v6 ? "[" : "", address, v6 ? "]" : "",
+		(unsigned) port, lan ? " lan" : "", reflexive ? " reflexive" : "");
+}
+
 static uint64_t resident_mb(void)
 {
 #if defined(_WIN32)
@@ -436,7 +481,9 @@ static const char *gfx_name(MTY_GFX gfx)
 static void log_line(uint32_t level, const char *message, void *opaque)
 {
 	(void) opaque;
-	fprintf(stderr, "%s%s\n", level <= LOWLAT_LOG_WARN ? "! " : "  ", message);
+	char stamp[16];
+	wall_time(stamp, sizeof stamp);
+	fprintf(stderr, "%s %s%s\n", stamp, level <= LOWLAT_LOG_WARN ? "! " : "  ", message);
 }
 
 // The toolkit's own lines, which say when a draw could not be made: a
@@ -1208,10 +1255,13 @@ static void pump_library(struct demo *d)
 				printf("demo: pointer %s\n", d->relative ? "captured by the host" : "returned");
 				break;
 			case LOWLAT_EVENT_CANDIDATE:
+				print_candidate("our", e.body.candidate.address, e.body.candidate.port,
+					e.body.candidate.lan, e.body.candidate.from_stun);
 				signaling_candidate(&d->sig, e.body.candidate.address, e.body.candidate.port,
 					e.body.candidate.lan, e.body.candidate.from_stun, false);
 				break;
 			case LOWLAT_EVENT_READY:
+				demo_log("our readiness marker");
 				signaling_candidate(&d->sig, "0.0.0.0", 0, false, false, true);
 				break;
 			case LOWLAT_EVENT_ESTABLISHED: {
@@ -1306,8 +1356,14 @@ static void pump_signaling(struct demo *d)
 			}
 			d->begun = true;
 		}
-		if (e == SIGNALING_CANDIDATE)
+		if (e == SIGNALING_CANDIDATE) {
+			if (candidate.sync)
+				demo_log("their readiness marker");
+			else
+				print_candidate("their", candidate.address, candidate.port, candidate.lan,
+					candidate.reflexive);
 			lowlat_client_add_candidate(d->client, d->attempt, &candidate);
+		}
 	}
 }
 
