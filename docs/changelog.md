@@ -3,6 +3,32 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-12 - Core: the path is the one the winning answer travelled
+
+### Fixed
+- **A session could claim a source of the other family toward its peer**
+  ([03 §5](03-connectivity.md)). The path was the address our answered check had been sent to,
+  paired with the address the answer arrived at. A peer that has already chosen its path
+  answers every later check over that path, so an answer can come back from another address
+  and from the other family: against a peer that had settled on IPv6 first, the answer to an
+  IPv4 check arrived over IPv6, the session claimed an IPv6 source toward an IPv4 address, the
+  system refused every datagram, and the peer, hearing nothing, ended the attempt. Whether it
+  happened was a race over which family the peer settled on first. **The path is now the one
+  the answer travelled**, the address it came from and the address it arrived at -- which is
+  where the peer is, so both ends meet on one path. The client and the host alike: both punch
+  with the same engine.
+
+### Changed
+- **The client logs the path it latched, both halves** -- `client: path established, to=...
+  from=...` -- where only the destination was visible before.
+
+### Checked
+- A check to an IPv4 address answered from an IPv6 one establishes the IPv6 path with the IPv6
+  address the answer arrived at; shown failing against the old rule. The existing connectivity
+  tests pass unchanged, the namespace topologies included. Against a stock host with both
+  families, six connects each latched the same IPv6 pair at both ends and streamed, and IPv4
+  only still latches its IPv4 pair and streams; the race itself did not come up in those six.
+
 ## 2026-10-12 - C5.25: the client's microphone
 
 ### Decided

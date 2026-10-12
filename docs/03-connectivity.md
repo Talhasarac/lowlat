@@ -170,7 +170,7 @@ once, when a reflexive candidate exists:
 for each remote candidate, in arrival order:
     send binding request        -> full TTL, authenticated, repeating
     on binding response:
-        the first candidate to answer is the path to be
+        the first answer is the path to be: where it came from, where it arrived
 on binding request from the peer:
     answer it                   -> before and after a path, always
 once both have happened:
@@ -200,9 +200,20 @@ first.)*
   re-selects the source per send, and on a multihomed host a routing change moves it
   mid-session -- the peer's filter then sees a stranger where its session was. Checks and
   reflexive probes before the path exists leave unpinned, because nothing is proven yet.
-- The first candidate to answer wins. There is no priority ordering and no attempt to find a
-  better path afterward; the cost of switching mid-stream exceeds the benefit.
-- **A path is both directions** (2026-09-23): a candidate has answered our check, and the peer
+- The first answer wins. There is no priority ordering and no attempt to find a better path
+  afterward; the cost of switching mid-stream exceeds the benefit.
+- **The path is the one the winning answer travelled** (2026-10-12): the address it came from,
+  and the address it arrived at. The transaction identifier says only that it answers one of
+  our checks, not that it came back from where that check went. **A peer that has already
+  chosen its path answers every later check over that path**, from another address and
+  possibly the other family, and its own path is wherever its answers came from -- so taking
+  the answer's source is also what keeps the two ends on one path. *(Corrected 2026-10-12:
+  this section said the first candidate to answer wins, meaning the address the check was
+  sent to. Against a peer that had chosen its IPv6 path first, the answer to our IPv4 check
+  came back over IPv6, and the session paired the peer's IPv4 address with the IPv6 address
+  the answer arrived at: every datagram claimed a source of the other family, the system
+  refused each one, and the peer, which never heard from us, ended the attempt.)*
+- **A path is both directions** (2026-09-23): a check of ours has been answered, and the peer
   has checked us and been answered. The peer adopts its own path only when its own check is
   answered, which can be a whole check interval after ours, and until then it reads every
   datagram as a check. A path taken on our answer alone sent the session's first records --
