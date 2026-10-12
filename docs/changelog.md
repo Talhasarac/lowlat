@@ -71,7 +71,14 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - The demo builds clean under the strictest warnings with the tone in it.
 - Windows: clippy clean and 975 tests. Linux, on a clean clone: the same forms clean and 1263
   tests pass, the two dual-stack name tests failing under WSL as before, and the demo compiles
-  clean there too. Not yet run against a host.
+  clean there too.
+- **Live against stock hosts** (added later the same day). The demo's tone, recorded at a stock
+  host's virtual microphone every tenth of a second for twenty seconds: uncompressed at exactly
+  its level, peak for peak; compressed within three hundredths of a decibel; the pitch right and
+  no tenth silent in either. That host switching its microphone off and back on under the
+  connected demo reached the application as two events, under half a second and just over one
+  second after the switches, with every call between them refused and nothing sent. A second
+  host heard both encodings at a steady level by its owner's meter.
 
 ## 2026-10-12 - C5.24: the application's own control message
 

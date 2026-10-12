@@ -1016,7 +1016,12 @@ string: `"0"` means no and anything else means yes. A peer told no keeps its mic
 however it is configured itself; **a peer told nothing sends**, and every session starts that
 way, so a host that is not taking one says so. *Corrected 2026-10-12: this said a peer sends
 nothing until it is told it may; a peer's state is reset to sending at every session and set
-only by a `"0"`.*
+only by a `"0"`.* **A host says it as a peer joins, and again to every peer whenever its answer
+changes**: one that stops taking a microphone mid-session says no within a couple of seconds,
+and says yes the same way when it takes one again, so a peer's microphone follows the host for
+the life of the session rather than the answer it joined with. *(Added 2026-10-12: a host
+switched its microphone off and back on under a connected peer, and each answer reached the peer
+within two seconds of the switch, its microphone stopping and resuming with them.)*
 
 **A sender's encoding follows its own declaration**: compressed unless its initialization
 declared uncompressed sound (`rawAudio`, §11.5), uncompressed if it did. Nothing negotiates
