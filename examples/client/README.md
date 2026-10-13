@@ -20,26 +20,32 @@ version and its halves. `make check` runs the toolkit's websocket reader,
 which the signaling reads through, against a loopback server that sends
 messages in fragments; it needs no library and no network.
 
-On Windows the same demo builds with Visual Studio's own tools, from its x64
-developer environment:
+On Windows the demo builds with CMake and Ninja from presets, as an
+application that links the library into itself builds: with clang-cl, which
+finds Visual Studio and the Windows SDK itself, so no developer environment is
+needed,
 
-    nmake
+    cmake --preset win-x64-clang-release
+    cmake --build --preset win-x64-clang-release
     set LOWLAT_PEER=<the host's peer id>
     set LOWLAT_SESSION=<a session token>
-    nmake run
+    build\win-x64-clang-release\client.exe
 
-`nmake` reads `makefile`, beside the `GNUmakefile` GNU make reads. It builds
-the toolkit once through the toolkit's own makefile, which needs `fxc` (the
-Windows SDK's) and `glslangValidator` (Khronos' shader compiler) on the path,
-the library in release, and the demo, and copies `lowlat.dll` beside
-`client.exe`, where the system's loader finds it; `nmake LOWLAT_LIB=<dir>`
-copies and links a library already built there. The C runtime is linked
-statically throughout. The library there carries the client half, and its
-decoder is the software one: `LOWLAT_FFMPEG_DIR` names the directory of an
-LGPL FFmpeg build's DLLs, or the pair sits beside `client.exe`. Pictures are
-drawn as planes through Direct3D 11, or 12 or Vulkan with `LOWLAT_GFX=d3d12`
-or `vk`. The first run asks the firewall to let the demo receive, since the
-session arrives over UDP. `LOWLAT_PAD_RAW` is Linux's.
+or with Visual Studio's own compiler from its x64 developer environment
+(`win-x64-release`); each has a debug twin. The library is linked in from its
+static build, which cargo is asked for on every build and remakes only when a
+crate changed (`-DLOWLAT_LIB=<file>` names one built elsewhere), so
+`client.exe` is the one file; a release build optimises the demo's own code
+across its files at the link. The toolkit is built once, when it has not been,
+through its own makefile, which needs the developer environment, with `fxc`
+(the Windows SDK's) and `glslangValidator` (Khronos' shader compiler) on the
+path. The C and C++ runtimes are linked statically throughout. The library
+there carries the client half; for its software decoder `LOWLAT_FFMPEG_DIR`
+names the directory of an LGPL FFmpeg build's DLLs, or the pair sits beside
+`client.exe`. Pictures are drawn as planes through Direct3D 11, or 12 or
+Vulkan with `LOWLAT_GFX=d3d12` or `vk`. The first run asks the firewall to let
+the demo receive, since the session arrives over UDP. `LOWLAT_PAD_RAW` is
+Linux's.
 
 The token is what `lowlat-login` produces; the peer id is the host's, as its
 service prints it. `LOWLAT_DEVICE` names a render node for the decoder (the

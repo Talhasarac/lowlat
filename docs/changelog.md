@@ -3,6 +3,32 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-13 - Demo: CMake on Windows, the library linked in
+
+### Changed
+- **The demo's Windows build is CMake** ([examples/client](../examples/client)), with the
+  presets an application that links the library into itself uses: clang-cl's, which find
+  Visual Studio and the Windows SDK themselves and need no developer environment, and Visual
+  Studio's compiler's, from its x64 one, each in release and debug
+  ([W1](impl-plan-windows.md), amended). The nmake makefile is gone; the GNU makefile stays
+  for Linux, CI and packaging, and the toolkit is still built once by its own makefile.
+- **The library is linked in** from its static build, asked of cargo on every build, which
+  answers at once when no crate changed: `client.exe` is the one file, 2.65 MB against 3.17 MB
+  for the program and the library's DLL. A release build optimises the demo's own code across
+  its files at the link, whole with Visual Studio's compiler and thin with clang-cl; the
+  library comes optimised whole already.
+
+### Checked
+- All four presets build at `/W4 /WX`, clang-cl's in a process with no developer environment;
+  the release builds carry the link-time flags, no build imports the library's DLL, and each
+  starts with nothing beside it. Every string the demo prints is in both release builds.
+- Against an established host, both release builds, two sessions of a minute each with the
+  preferences, the decoders and the kind walked, the microphone's tone and the translation's
+  probe: every timed event at the same second as the build before, sound and microphone alike,
+  none dropped. Decode 2.11 and 2.04 ms against 2.14, arrival to present 6.8 and 7.1 ms against
+  7.5: within one run's spread of the next, so no gain or loss is claimed for the link-time
+  optimisation.
+
 ## 2026-10-13 - Demo: C++20, a file per part
 
 ### Changed

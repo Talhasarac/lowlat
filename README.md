@@ -171,10 +171,12 @@ says which one was loaded, and the header is the same for both. The client demo 
 `make -C examples/client`, which builds the application toolkit from its vendored tree
 first; that needs a C and a C++20 compiler, the shader compiler (`glslang-tools`) and the
 ALSA, PNG and JPEG headers. On Windows the library builds with the client half alone
-whatever the features say, and the demo is `nmake` in `examples/client` from Visual
-Studio's x64 developer environment, with Khronos' `glslangValidator` on the path for the
-toolkit. The build workflow produces both libraries as tarballs, the client one with the
-demo inside, each with a `FEATURES` line read from its own copy.
+whatever the features say, and the demo builds with CMake from `examples/client`'s presets,
+clang-cl's with no developer environment or Visual Studio's compiler from its x64 one, the
+library linked in from its static build; the toolkit's one build needs that environment,
+with Khronos' `glslangValidator` on the path. The build workflow produces both libraries as
+tarballs, the client one with the demo inside, each with a `FEATURES` line read from its
+own copy.
 
 ## Installing
 

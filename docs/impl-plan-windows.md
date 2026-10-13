@@ -131,6 +131,10 @@ once, here; the design is [10 §4.2 and §5.2](10-client.md), the boundary
 - **The library and the demo link the C runtime statically**, so neither needs a
   redistributable, and the demo's makefile for the platform's compiler sits beside the GNU
   one. The client ships as a zip: the library, its import library, the header and the demo.
+  (*Amended 2026-10-13*: the demo's Windows build is CMake, with the presets an application
+  that links the library into itself uses, clang-cl's needing no developer environment; it
+  links the library from its static build, and a release build optimises the demo's own
+  code at the link. The GNU makefile stays for Linux.)
 - **The demo's toolkit gains two things**: a choice of the GPU its device is made on, for a
   menu, and a pad's feature reports read and written by the toolkit's own controller id. A
   Sony pad's input reports come from the toolkit's events and its output reports go out
