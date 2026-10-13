@@ -3,6 +3,37 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-13 - Demo: C++20, a file per part
+
+### Changed
+- **The client demo is C++20** ([examples/client](../examples/client)), on the same toolkit
+  and the same two makefiles: the atomics are the standard library's, the pointer's buffers
+  vectors, the library's structs set up by their size, and every function the library or the
+  toolkit calls back is noexcept, so nothing unwinds through either. The key table is
+  generated as a constexpr table, C++ having no index designators. MSVC builds the demo with
+  warnings as errors, the toolkit's header outside them; the GNU build links the C++ runtime
+  in, so the packaged demo asks the machine for none.
+- **A file per part, each holding its own state**: the app and its window, the knobs, the
+  session, signaling, the presenting thread, what the window shows, keyboard and mouse, pads,
+  sound, the line each second, the clocks and lines. The struct of a hundred fields that
+  every function reached into is gone; each header says which thread calls what, and the line
+  each second takes each part's figures through a call that returns and clears them. The
+  knobs are read once at start, but for a relay's password, read at each attempt and kept
+  nowhere.
+
+### Fixed
+- The flag saying a session's rate was asked for was written by two threads, the presenting
+  one and the reconnect; it is atomic now.
+
+### Checked
+- MSVC at `/W4 /WX` and g++ 14 with the GNU build's warnings, clean. On Linux the demo links
+  against the client-only library as CI links it, `make check` passes, and the binary needs
+  none of the machine's C++ runtime. Every string the demo prints is in the new binary as in
+  the C one, compared from the binaries. Against an established host, two sessions of a minute
+  each with the preferences, the decoders and the kind walked, the microphone's tone and the
+  translation's probe: the same events in the same order at the same seconds, and the decode,
+  sound and microphone figures alike; on Linux too, under WSL, decoding on the GPU.
+
 ## 2026-10-12 - Client and host: each address offered once
 
 ### Fixed

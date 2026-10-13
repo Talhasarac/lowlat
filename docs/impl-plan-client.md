@@ -12,7 +12,7 @@ so references into the host plan keep resolving.
 
 ## The gate that matters
 
-**Gate C: the C demo, on the application toolkit it will ship with, streams from an
+**Gate C: the demo, on the application toolkit it will ship with, streams from an
 established host it does not control.** Picture first; then input; then sound; then the rest.
 It is Gate A's mirror. Everything before it is unverified in the only way that counts, and it
 is passed **at every phase from C2 on** rather than once at the end: each phase adds a feature
@@ -135,7 +135,8 @@ plays both roles.
   there with the stage named; a client with nowhere to draw may ask for none.
 - [x] **`examples/client`**: the C demo on the toolkit, one file for signaling, one for the
   session; window, present, nothing else, and a line of figures a second. It logs in with
-  the same tool the host uses.
+  the same tool the host uses. (*2026-10-13*: C++20 now, a file per part, each holding its
+  own state.)
 
 **Gate:**
 

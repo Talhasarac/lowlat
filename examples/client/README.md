@@ -1,22 +1,24 @@
 # The client demo
 
 A window that shows a host's desktop: the library decodes, this presents.
-Pure C on the application toolkit (`third_party/matoya`), one file for the
-session and the window and one for the signaling service, which the library
-does not speak ([docs/06-api.md](../../docs/06-api.md) section 4).
+C++20 on the application toolkit (`third_party/matoya`), a file per part, each
+holding its own state: the session, the signaling service, which the library
+does not speak ([docs/06-api.md](../../docs/06-api.md) section 4), the
+presenting thread, the window's picture and pointer, keyboard and mouse, pads,
+sound, and the line each second. The knobs are listed in `config.h`.
 
     make
     LOWLAT_PEER=<the host's peer id> LOWLAT_SESSION=<a session token> make run
 
 `make` builds the toolkit from its tree, the library in release, and the demo;
 the toolkit's build needs the shader compiler and the ALSA, PNG and JPEG
-headers. `make LOWLAT_LIB=<dir>` links a library already built there instead,
-with a run path of `../lib` relative to the binary, which is how the build
-workflow packages the demo beside the client-only library. The demo's first
-line names the library it loaded, its version and its halves. `make check`
-runs the toolkit's websocket reader, which the signaling reads through,
-against a loopback server that sends messages in fragments; it needs no
-library and no network.
+headers, and the demo's a C++20 compiler. `make LOWLAT_LIB=<dir>` links a
+library already built there instead, with a run path of `../lib` relative to
+the binary, which is how the build workflow packages the demo beside the
+client-only library. The demo's first line names the library it loaded, its
+version and its halves. `make check` runs the toolkit's websocket reader,
+which the signaling reads through, against a loopback server that sends
+messages in fragments; it needs no library and no network.
 
 On Windows the same demo builds with Visual Studio's own tools, from its x64
 developer environment:

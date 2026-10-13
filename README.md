@@ -42,7 +42,7 @@ What works today, measured on one desktop (KDE Plasma on Wayland, Debian 13):
   reaches, through a relay on the host's own machine behind the one port its router forwards,
   with no part taken by the host; streamed that way for twelve minutes against an established
   host at 26 ms against 27 direct, and against this project's own host with a relay beside
-  it. The C demo on the application toolkit is
+  it. The demo on the application toolkit, in C++20, is
   [examples/client](examples/client).
 
 What does not, yet:
@@ -169,12 +169,12 @@ The library builds in two forms: whole, and with the client half alone
 (`cargo build -p lowlat-sdk --no-default-features --features client`); `lowlat_features()`
 says which one was loaded, and the header is the same for both. The client demo is
 `make -C examples/client`, which builds the application toolkit from its vendored tree
-first; that needs a C compiler, the shader compiler (`glslang-tools`) and the ALSA, PNG
-and JPEG headers. On Windows the library builds with the client half alone whatever the
-features say, and the demo is `nmake` in `examples/client` from Visual Studio's x64
-developer environment, with Khronos' `glslangValidator` on the path for the toolkit. The
-build workflow produces both libraries as tarballs, the client one with the demo inside,
-each with a `FEATURES` line read from its own copy.
+first; that needs a C and a C++20 compiler, the shader compiler (`glslang-tools`) and the
+ALSA, PNG and JPEG headers. On Windows the library builds with the client half alone
+whatever the features say, and the demo is `nmake` in `examples/client` from Visual
+Studio's x64 developer environment, with Khronos' `glslangValidator` on the path for the
+toolkit. The build workflow produces both libraries as tarballs, the client one with the
+demo inside, each with a `FEATURES` line read from its own copy.
 
 ## Installing
 
