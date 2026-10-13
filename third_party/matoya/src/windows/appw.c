@@ -1174,7 +1174,7 @@ void MTY_AppRun(MTY_App *ctx)
 		}
 
 		// XInput
-		if (focus)
+		if (focus && !(ctx->flags & MTY_APP_FLAG_NO_CONTROLLERS))
 			xip_state(ctx->xip, ctx->deduper, ctx->event_func, ctx->opaque);
 
 		// Tray retry in case of failure
@@ -1864,7 +1864,9 @@ MTY_Window MTY_WindowCreate(MTY_App *app, const char *title, const MTY_Frame *fr
 
 	if (window == 0) {
 		AddClipboardFormatListener(ctx->hwnd);
-		mty_hid_win32_listen(ctx->hwnd);
+
+		if (!(app->flags & MTY_APP_FLAG_NO_CONTROLLERS))
+			mty_hid_win32_listen(ctx->hwnd);
 	}
 
 	except:

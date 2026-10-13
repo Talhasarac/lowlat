@@ -1,10 +1,11 @@
-# The client demo: the C++ example on the application toolkit.
+# The client demo: the C++ example on the application toolkit and SDL.
 #
 #   make            builds the toolkit, the library and the demo
 #   make run        runs it; LOWLAT_PEER and LOWLAT_SESSION must be set
 #
 # The toolkit is built from its own tree with its own makefile; the library
-# is the SDK crate's release build; the demo links the two. Nothing here
+# is the SDK crate's release build; SDL, for the pads and the sound, is the
+# system's, found by pkg-config; the demo links the three. Nothing here
 # knows a package manager.
 #
 # LOWLAT_LIB names a directory holding a built liblowlat.so instead: no
@@ -34,8 +35,12 @@ CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-fiel
 CFLAGS  := -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wno-unused-parameter \
            -I$(ROOT)/include -I$(MATOYA)/src
 LIBS    := $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a \
-           -L$(LIBDIR) -llowlat -Wl,-rpath,$(RPATH) \
-           -lc -ldl -lpthread -lm
+           -L$(LIBDIR) -llowlat -Wl,-rpath,$(RPATH)
+# Asked only when the demo is built: the probes and the check need no SDL. A
+# static SDL (scripts/build-sdl3.sh) takes the system's libraries after it.
+SDL_CFLAGS = $(shell pkg-config --cflags sdl3)
+SDL_LIBS   = $(shell pkg-config --libs sdl3)
+SYSLIBS := -lc -ldl -lpthread -lm
 
 SOURCES := main.cc app.cc clocks.cc config.cc input.cc logs.cc pads.cc present.cc report.cc \
            session.cc signaling.cc sound.cc view.cc
@@ -47,7 +52,8 @@ all: client
 # The C++ runtime is linked in, so a packaged demo needs no particular one on
 # the machine it lands on.
 client: $(SOURCES) $(HEADERS) $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a $(LIBDEP)
-	$(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LIBS) -static-libstdc++
+	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $(SOURCES) $(LIBS) $(SDL_LIBS) $(SYSLIBS) \
+		-static-libstdc++
 
 $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a:
 	TERM=xterm $(MAKE) -C $(MATOYA)

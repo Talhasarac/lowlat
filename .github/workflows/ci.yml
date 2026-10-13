@@ -34,12 +34,14 @@ jobs:
       # its shader headers are made at build time rather than committed, and
       # the three libraries whose headers it compiles against -- it opens
       # every library at run time, but these three it declares from the
-      # system's own headers.
+      # system's own headers -- and the headers SDL's sound and pad backends
+      # are built against, which it likewise loads at run time.
       - name: Install a graphics driver for the conversion test
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 mesa-vulkan-drivers libegl1 libgl1-mesa-dri libgbm1 vulkan-tools \
-            glslang-tools bsdextrautils libasound2-dev libpng-dev libjpeg-dev
+            glslang-tools bsdextrautils libasound2-dev libpng-dev libjpeg-dev \
+            libpulse-dev libpipewire-0.3-dev libudev-dev
 
       # What the software driver on this runner offers, in the log, so a test
       # refused an interface can be read against the driver rather than
@@ -104,11 +106,18 @@ jobs:
             echo "a host symbol in the client-only library"; exit 1
           fi
 
+      # SDL, for the demo's pads and sound, which this runner's system does
+      # not package: its release, built static.
+      - name: Build SDL for the demo
+        run: bash scripts/build-sdl3.sh "$RUNNER_TEMP/sdl3"
+
       # The demo linked against that copy: the one thing that links the client
       # symbols the way an application does, so a name the client half lost
       # fails here, at the link, rather than in somebody's integration. A
       # feature bit only says which half was asked for.
       - name: Build the demo against the client-only library
+        env:
+          PKG_CONFIG_PATH: ${{ runner.temp }}/sdl3/lib/pkgconfig
         run: make -C examples/client LOWLAT_LIB="$RUNNER_TEMP/client-only/lib" client
 
       # The websocket reader the demo's signaling reads through, against a

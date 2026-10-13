@@ -65,6 +65,17 @@ rather than from `deps/bin/`, which is not carried: no executable is kept in thi
 |---|---|
 | `makefile` | the two shader rules call `glslangValidator` rather than `deps\bin\glslangValidator`; the compiler is Khronos' glslang, upstream's own copy of which is 11.10.0 |
 
+An application that reads its controllers itself can keep the toolkit off them. Upstream reads
+every controller whatever the application asks: on Windows it registers for their raw input,
+writes an output report of its own on a PlayStation pad's first report (the motors stopped, a
+lightbar colour of its choosing) and polls XInput; on Linux it opens their input nodes.
+
+| file | change |
+|---|---|
+| `src/matoya.h` | `MTY_APP_FLAG_NO_CONTROLLERS`: no controller is opened, read or written, and no controller event is raised |
+| `src/windows/appw.c` | with the flag, the main window registers for no controller's raw input, so the HID layer learns of no device and writes to none, and XInput is not polled |
+| `src/unix/linux/x11/app.c` | with the flag, the input-node layer is not made |
+
 Nothing else is touched: no other renderer, no other platform code, no shader. A diff against
 the upstream commit lists exactly the files above. The Direct3D 11 renderer's own import of a
 hardware frame -- the planes' shared handles, opened again with a new view at every draw --

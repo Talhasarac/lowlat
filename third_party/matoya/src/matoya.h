@@ -150,6 +150,9 @@ typedef enum {
                                         ///<   privileged permissions for the calling application.
 	MTY_APP_FLAG_ALT_FULLSCREEN = 0x04, ///< On macOS, make fullscreen mode feel more like
 	                                    ///<   borderless windowed mode on Windows.
+	MTY_APP_FLAG_NO_CONTROLLERS = 0x08, ///< On Windows and Linux, leave controllers alone: none is
+	                                    ///<   opened, read or written, and no controller events
+	                                    ///<   are generated.
 	MTY_APP_FLAG_MAKE_32        = INT32_MAX,
 } MTY_AppFlag;
 

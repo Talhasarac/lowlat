@@ -29,7 +29,7 @@ static bool app_func(void *opaque) noexcept
 	session::leave_when_due(t);
 	if (_quit.load())
 		return false;
-	pads::poll(t, report::established());
+	pads::poll(report::established());
 	view::place();
 	if (report::tick(t))
 		session::walk(report::seconds(), report::established());
@@ -56,12 +56,6 @@ static void event_func(const MTY_Event *evt, void *opaque) noexcept
 		case MTY_EVENT_MOTION:
 			input::motion(&evt->motion);
 			break;
-		case MTY_EVENT_CONTROLLER:
-			pads::controller(&evt->controller);
-			break;
-		case MTY_EVENT_DISCONNECT:
-			pads::disconnected(&evt->controller);
-			break;
 		case MTY_EVENT_FOCUS:
 			input::focus(evt->focus);
 			break;
@@ -78,7 +72,8 @@ static void event_func(const MTY_Event *evt, void *opaque) noexcept
 
 bool create()
 {
-	_app = MTY_AppCreate((MTY_AppFlag) 0, app_func, event_func, NULL);
+	// The pads are SDL's, so the toolkit leaves them alone.
+	_app = MTY_AppCreate(MTY_APP_FLAG_NO_CONTROLLERS, app_func, event_func, NULL);
 	if (_app == NULL) {
 		fprintf(stderr, "demo: no app\n");
 		return false;

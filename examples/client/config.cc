@@ -75,13 +75,6 @@ int read()
 	// and this one is told.
 	s.raw_pads = getenv("LOWLAT_PAD_RAW") != NULL;
 	s.raw_pads_only = s.raw_pads && strcmp(getenv("LOWLAT_PAD_RAW"), "only") == 0;
-#if !defined(__linux__)
-	if (s.raw_pads) {
-		fprintf(stderr, "demo: LOWLAT_PAD_RAW reads a pad's own node, which is Linux's; "
-			"here the toolkit reads the pads\n");
-		return 2;
-	}
-#endif
 
 	s.decoder = strcmp(decoder, "none") == 0 ? LOWLAT_DECODER_NONE
 		: strcmp(decoder, "open") == 0 ? LOWLAT_DECODER_OPEN

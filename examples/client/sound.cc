@@ -4,9 +4,10 @@
 
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include <atomic>
+
+#include <SDL3/SDL.h>
 
 #include "lowlat.h"
 #include "matoya.h"
@@ -18,13 +19,13 @@
 
 namespace sound {
 
-static MTY_Audio *_audio;
+// The output, as a stream SDL's own thread pulls from: stereo sixteen-bit at
+// 48 kHz, four bytes a frame.
+static SDL_AudioStream *_stream;
 static MTY_Thread *_listener;
 static MTY_Thread *_mic;
-// Whether the device is playing, and whether it only just started: the
-// listening thread's alone.
+// Whether the device is playing: the listening thread's alone.
 static bool _playing;
-static bool _just_started;
 
 static std::atomic_uint _packets;
 static std::atomic_uint _frames;
@@ -72,7 +73,7 @@ static void *tone_loop(void *opaque) noexcept
 }
 
 // The listening thread: one packet at a time from the library, straight
-// onto the device. The wait is the library's, long, so the thread costs
+// into the stream. The wait is the library's, long, so the thread costs
 // nothing between packets; without a device it still acquires, so the
 // figures are there on a box with no sound.
 static void *sound_loop(void *opaque) noexcept
@@ -94,34 +95,36 @@ static void *sound_loop(void *opaque) noexcept
 		lowlat_client_status st{.size = sizeof(lowlat_client_status)};
 		lowlat_client_get_status(client, &st);
 		uint32_t queued = 0;
-		if (_audio != NULL) {
-			queued = MTY_AudioGetQueued(_audio);
-			// The device's queue reads zero once more right after playback
-			// (re)starts, before the device has reported anything; that
-			// read is not a resync, and neither is the zero that follows a
-			// flush this already counted. So a resync is counted while the
-			// device is playing: the queue past the ceiling (the device
-			// flushes on this call), or at zero (it ran dry), and then the
-			// device is priming again until the floor is reached.
+		if (_stream != NULL) {
+			// What the stream holds that the device has not pulled yet; the
+			// device's own period is ahead of it.
+			int bytes = SDL_GetAudioStreamQueued(_stream);
+			queued = bytes > 0 ? (uint32_t) bytes / (4 * 48) : 0;
+			// A resync, counted while the device plays: the stream ran dry,
+			// or holds more than the ceiling. Either way the device stops
+			// and is primed again from empty to the floor.
 			const char *reason = NULL;
-			if (_playing && !_just_started && queued == 0)
+			if (_playing && queued == 0)
 				reason = "empty";
 			else if (_playing && queued > 150)
 				reason = "over";
+			uint32_t held = queued;
 			if (reason != NULL) {
 				uint32_t n = _resyncs.fetch_add(1) + 1;
 				printf("demo: sound resync t=%.1f n=%u queued_ms=%u age_ms=%u reason=%s\n",
 					(clocks::now_ms() - clocks::started_ms()) / 1000.0, n, queued,
 					st.audio_age_ms, reason);
 				fflush(stdout);
+				SDL_PauseAudioStreamDevice(_stream);
+				SDL_ClearAudioStream(_stream);
 				_playing = false;
+				held = 0;
 			}
-			_just_started = false;
-			if (!_playing && queued + count / 48 >= 75) {
+			SDL_PutAudioStreamData(_stream, pcm, (int) (count * 4));
+			if (!_playing && held + count / 48 >= 75) {
+				SDL_ResumeAudioStreamDevice(_stream);
 				_playing = true;
-				_just_started = true;
 			}
-			MTY_AudioQueue(_audio, pcm, count);
 		}
 		_packets.fetch_add(1);
 		_frames.fetch_add(count);
@@ -141,17 +144,14 @@ static void *sound_loop(void *opaque) noexcept
 
 void start()
 {
-	// The device: stereo sixteen-bit at 48 kHz, 75 ms queued before it
-	// plays and a flush past 150, which is the window a desktop client
-	// runs. Without one the demo runs silent and still counts.
-	MTY_AudioFormat format;
-	memset(&format, 0, sizeof format);
-	format.sampleFormat = MTY_AUDIO_SAMPLE_FORMAT_INT16;
-	format.sampleRate = 48000;
-	format.channels = 2;
-	format.channelMask = MTY_AUDIO_CHANNEL_CFG_STEREO;
-	_audio = MTY_AudioCreate(format, 75, 150, NULL, true);
-	if (_audio == NULL)
+	// The device: stereo sixteen-bit at 48 kHz, waiting until 75 ms are
+	// queued and emptied past 150, which is the window a desktop client
+	// runs. A stream opened this way starts with its device paused. Without
+	// one the demo runs silent and still counts.
+	SDL_AudioSpec spec{.format = SDL_AUDIO_S16, .channels = 2, .freq = 48000};
+	if (SDL_InitSubSystem(SDL_INIT_AUDIO))
+		_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+	if (_stream == NULL)
 		fprintf(stderr, "demo: no sound device, running silent\n");
 	_listener = MTY_ThreadCreate(sound_loop, NULL);
 	double mic_hz = config::get().mic_hz;
@@ -166,8 +166,11 @@ void stop()
 	MTY_ThreadDestroy(&_listener);
 	if (_mic != NULL)
 		MTY_ThreadDestroy(&_mic);
-	if (_audio != NULL)
-		MTY_AudioDestroy(&_audio);
+	if (_stream != NULL) {
+		SDL_DestroyAudioStream(_stream);
+		_stream = NULL;
+	}
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 Second take_second()

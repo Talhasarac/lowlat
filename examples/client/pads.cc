@@ -5,14 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(__linux__)
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#endif
+#include <SDL3/SDL.h>
 
 #include "app.h"
 #include "config.h"
@@ -20,73 +13,9 @@
 
 namespace pads {
 
-// The Sony pads read raw from their own nodes, while the knob says so.
-
-#define RAW_PADS 4
-
-struct raw_pad {
-	int fd;                    // -1 when the slot is empty
-	unsigned node;             // the hidraw number
-	uint32_t id;               // as named to the library
-	uint32_t type;             // one of lowlat_pad_type
-	bool wireless;             // the wireless framing on the node
-	uint8_t seq;               // a wireless DualSense's output sequence
-};
-
-static raw_pad _raw[RAW_PADS];
-// The second's counts: input reports sent, and the host's writes put on the
-// nodes.
-static uint32_t _raw_reports;
-static uint32_t _raw_outputs;
-
-static void raw_init()
-{
-	for (size_t i = 0; i < RAW_PADS; i++)
-		_raw[i].fd = -1;
-}
-
-#if defined(__linux__)
-
 #define VENDOR_SONY 0x054C
-#define BUS_USB 3
-#define BUS_BLUETOOTH 5
-// The pads are named to the library apart from the toolkit's controller
-// numbers, so a rumble message can be told to the right side, and **below
-// 256**: an established host keys its pads on the low eight bits of the
-// identifier for the state, button, axis and unplug messages and on the
-// whole identifier for the report message, so a report under a wider
-// identifier never reaches the pad the states made (docs/01-protocol.md
-// 11.1), and its rumble comes back under the eight-bit one. The toolkit
-// numbers its controllers by descriptor, so this starts well above where
-// those sit.
-#define ID_BASE 200
-#define SCAN_EVERY_MS 1000.0
 
-// When the nodes were last looked for.
-static double _scanned_ms;
-
-// The raw node's feature-report reads and writes.
-#define HIDIOCGFEATURE(len) _IOC(_IOC_WRITE | _IOC_READ, 'H', 0x07, len)
-#define HIDIOCSFEATURE(len) _IOC(_IOC_WRITE | _IOC_READ, 'H', 0x06, len)
-
-// The two feature reports the host's driver asks for, per product and
-// transport: calibration and firmware, identifier and length.
-struct feature {
-	uint8_t id;
-	uint32_t len;
-};
-
-static void features_of(uint32_t type, bool wireless, struct feature out[2])
-{
-	if (type == LOWLAT_PAD_TYPE_DS4) {
-		out[0] = feature{(uint8_t) (wireless ? 0x05 : 0x02), wireless ? 41u : 37u};
-		out[1] = feature{0xA3, 49};
-	} else {
-		out[0] = feature{0x05, 41};
-		out[1] = feature{0x20, 64};
-	}
-}
-
+// Which product a Sony pad is; zero for one the report path does not carry.
 static uint32_t type_of(unsigned product)
 {
 	switch (product) {
@@ -97,63 +26,121 @@ static uint32_t type_of(unsigned product)
 	}
 }
 
-// The node's identity from its device's uevent: bus, vendor, product, and
-// whether it is one of a host's own virtual pads. A demo run on the host's
-// machine would otherwise read the pad the host made from its reports and
-// send it back, which is an echo.
-static bool identity(unsigned node, unsigned *bus, unsigned *vendor, unsigned *product,
-	bool *virtual_pad)
+// Whether a device is one of the pads a host on this same machine made from
+// this demo's own: sending it back would make more of them. Such a pad names
+// its location as the host's. Linux's alone: no host of this library makes
+// pads elsewhere.
+static bool hosts_own(const char *path)
 {
-	char path[96];
-	snprintf(path, sizeof path, "/sys/class/hidraw/hidraw%u/device/uevent", node);
-	FILE *f = fopen(path, "r");
+#if defined(__linux__)
+	unsigned node;
+	char file[96];
+	if (sscanf(path, "/dev/hidraw%u", &node) == 1)
+		snprintf(file, sizeof file, "/sys/class/hidraw/hidraw%u/device/uevent", node);
+	else if (sscanf(path, "/dev/input/event%u", &node) == 1)
+		snprintf(file, sizeof file, "/sys/class/input/event%u/device/phys", node);
+	else
+		return false;
+	FILE *f = fopen(file, "r");
 	if (f == NULL)
 		return false;
-	bool found = false;
-	*virtual_pad = false;
+	bool own = false;
 	char line[160];
-	while (fgets(line, sizeof line, f) != NULL) {
-		if (sscanf(line, "HID_ID=%x:%x:%x", bus, vendor, product) == 3)
-			found = true;
-		if (strncmp(line, "HID_PHYS=lowlat/", 16) == 0)
-			*virtual_pad = true;
-	}
+	while (fgets(line, sizeof line, f) != NULL)
+		if (strncmp(line, "HID_PHYS=lowlat/", 16) == 0 || strncmp(line, "lowlat/", 7) == 0)
+			own = true;
 	fclose(f);
-	return found;
+	return own;
+#else
+	(void) path;
+	return false;
+#endif
 }
 
-static raw_pad *by_id(uint32_t id)
+// The Sony pads read raw through SDL's HID layer, while the knob says so.
+
+#define RAW_PADS 4
+// The raw pads are named to the library apart from the gamepads, so a rumble
+// message can be told to the right side, and **below 256**: an established
+// host keys its pads on the low eight bits of the identifier for the state,
+// button, axis and unplug messages and on the whole identifier for the report
+// message, so a report under a wider identifier never reaches the pad the
+// states made (docs/01-protocol.md 11.1), and its rumble comes back under the
+// eight-bit one.
+#define RAW_ID_BASE 200
+
+struct raw_pad {
+	SDL_hid_device *dev;       // NULL when the slot is empty
+	char path[256];            // where it was opened, to know it again
+	uint32_t id;               // as named to the library
+	uint32_t type;             // one of lowlat_pad_type
+	bool wireless;             // the wireless framing on the device
+	bool features_due;         // its feature reports go ahead of its next input report
+	uint8_t seq;               // a wireless DualSense's output sequence
+};
+
+static raw_pad _raw[RAW_PADS];
+// The system's device list as it was when the pads were last looked for.
+static Uint32 _raw_seen;
+static bool _raw_scanned;
+static bool _was_established;
+// The second's counts: input reports sent, and the host's writes put on the
+// pads.
+static uint32_t _raw_reports;
+static uint32_t _raw_outputs;
+
+// The two feature reports the host's driver asks for, per product and
+// transport: calibration and firmware, identifier and length.
+struct feature {
+	uint8_t id;
+	uint32_t len;
+};
+
+static void features_of(uint32_t type, bool wireless, feature out[2])
+{
+	if (type == LOWLAT_PAD_TYPE_DS4) {
+		out[0] = feature{(uint8_t) (wireless ? 0x05 : 0x02), wireless ? 41u : 37u};
+		out[1] = feature{0xA3, 49};
+	} else {
+		out[0] = feature{0x05, 41};
+		out[1] = feature{0x20, 64};
+	}
+}
+
+static raw_pad *raw_by_id(uint32_t id)
 {
 	for (size_t i = 0; i < RAW_PADS; i++)
-		if (_raw[i].fd >= 0 && _raw[i].id == id)
+		if (_raw[i].dev != NULL && _raw[i].id == id)
 			return &_raw[i];
 	return NULL;
 }
 
 static void drop(raw_pad *p)
 {
-	printf("demo: pad %u on hidraw%u gone\n", p->id, p->node);
-	::close(p->fd);
-	p->fd = -1;
+	printf("demo: pad %u gone\n", p->id);
+	SDL_hid_close(p->dev);
+	p->dev = NULL;
 	lowlat_client *client = session::client();
 	if (client != NULL)
 		lowlat_client_send_pad_unplug(client, p->id);
 }
 
 // The feature reports, read from the pad and sent ahead of its first input
-// report; one the pad does not answer is left to the host's default.
+// report in each session: the host's driver asks for them when the device
+// appears, and the library keeps none from one session to the next. One the
+// pad does not answer is left to the host's default.
 static void send_features(raw_pad *p)
 {
-	struct feature features[2];
+	feature features[2];
 	features_of(p->type, p->wireless, features);
 	for (size_t i = 0; i < 2; i++) {
 		uint8_t buf[64];
 		memset(buf, 0, sizeof buf);
 		buf[0] = features[i].id;
-		int got = ioctl(p->fd, HIDIOCGFEATURE(features[i].len), buf);
+		int got = SDL_hid_get_feature_report(p->dev, buf, features[i].len);
 		if (got <= 0) {
 			printf("demo: pad %u feature 0x%02x not answered (%s)\n", p->id, features[i].id,
-				strerror(errno));
+				SDL_GetError());
 			continue;
 		}
 		lowlat_status s = lowlat_client_send_pad_report(session::client(), p->id, p->type,
@@ -164,132 +151,121 @@ static void send_features(raw_pad *p)
 	}
 }
 
-// Look for pads that appeared, every so often, once the session is up: a
-// report before that has no session to travel on, and the feature reports go
-// first.
-static void raw_scan(double now_ms, bool established)
+// Look for pads that appeared, whenever the system's device list changed,
+// once the session is up: a report before that has no session to travel on.
+static void raw_scan(bool established)
 {
-	if (!established || (_scanned_ms != 0.0 && now_ms - _scanned_ms < SCAN_EVERY_MS))
+	if (!established)
 		return;
-	_scanned_ms = now_ms;
+	Uint32 seen = SDL_hid_device_change_count();
+	if (_raw_scanned && seen == _raw_seen)
+		return;
+	_raw_scanned = true;
+	_raw_seen = seen;
 
-	DIR *dir = opendir("/sys/class/hidraw");
-	if (dir == NULL)
-		return;
-	struct dirent *entry;
-	while ((entry = readdir(dir)) != NULL) {
-		unsigned node;
-		if (sscanf(entry->d_name, "hidraw%u", &node) != 1)
+	SDL_hid_device_info *list = SDL_hid_enumerate(VENDOR_SONY, 0);
+	for (SDL_hid_device_info *d = list; d != NULL; d = d->next) {
+		uint32_t type = type_of(d->product_id);
+		bool usb = d->bus_type == SDL_HID_API_BUS_USB;
+		bool bluetooth = d->bus_type == SDL_HID_API_BUS_BLUETOOTH;
+		if (type == 0 || (!usb && !bluetooth) || hosts_own(d->path))
 			continue;
 		bool open_already = false;
 		for (size_t i = 0; i < RAW_PADS; i++)
-			if (_raw[i].fd >= 0 && _raw[i].node == node)
+			if (_raw[i].dev != NULL && strcmp(_raw[i].path, d->path) == 0)
 				open_already = true;
 		if (open_already)
 			continue;
-		unsigned bus, vendor, product;
-		bool virtual_pad;
-		if (!identity(node, &bus, &vendor, &product, &virtual_pad) || vendor != VENDOR_SONY)
-			continue;
-		if (virtual_pad)
-			continue;
-		if ((bus != BUS_USB && bus != BUS_BLUETOOTH) || type_of(product) == 0)
-			continue;
 		raw_pad *slot = NULL;
 		for (size_t i = 0; i < RAW_PADS && slot == NULL; i++)
-			if (_raw[i].fd < 0)
+			if (_raw[i].dev == NULL)
 				slot = &_raw[i];
 		if (slot == NULL)
 			break;
-		char path[32];
-		snprintf(path, sizeof path, "/dev/hidraw%u", node);
-		int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
-		if (fd < 0) {
-			// Once, not every second: the seat's access rule is what
-			// grants it, and a node without it stays without it.
+		SDL_hid_device *dev = SDL_hid_open_path(d->path);
+		if (dev == NULL) {
+			// Once, not at every change: on Linux the seat's access rule is
+			// what grants the node, and a node without it stays without it.
 			static bool said;
 			if (!said)
-				printf("demo: %s not readable (%s); the seat's access rule grants it\n", path,
-					strerror(errno));
+				printf("demo: %s not opened (%s)\n", d->path, SDL_GetError());
 			said = true;
 			continue;
 		}
 		*slot = raw_pad{
-			.fd = fd,
-			.node = node,
-			.id = ID_BASE + node,
-			.type = type_of(product),
-			.wireless = bus == BUS_BLUETOOTH,
+			.dev = dev,
+			.path = {},
+			.id = RAW_ID_BASE + (uint32_t) (slot - _raw),
+			.type = type,
+			.wireless = bluetooth,
+			.features_due = true,
 			.seq = 0,
 		};
-		printf("demo: pad %u is %s %04x on hidraw%u over %s, read raw\n", slot->id,
-			slot->type == LOWLAT_PAD_TYPE_DS4 ? "DualShock 4" : "DualSense", product, node,
-			slot->wireless ? "Bluetooth" : "USB");
-		send_features(slot);
+		snprintf(slot->path, sizeof slot->path, "%s", d->path);
+		printf("demo: pad %u is %s %04x over %s, read raw\n", slot->id,
+			type == LOWLAT_PAD_TYPE_DS4 ? "DualShock 4" : "DualSense", d->product_id,
+			bluetooth ? "Bluetooth" : "USB");
 	}
-	closedir(dir);
+	SDL_hid_free_enumeration(list);
 }
 
-// Every report the nodes have queued, to the library.
-static void raw_pump()
+// Every report the pads have queued: to the library once the session is up,
+// the feature reports first; read and dropped before, so a session starts
+// from the pad's present rather than its past.
+static void raw_pump(bool established)
 {
 	for (size_t i = 0; i < RAW_PADS; i++) {
 		raw_pad *p = &_raw[i];
-		if (p->fd < 0)
+		if (p->dev == NULL)
 			continue;
-		// Everything queued, not one report a pass: a wired DualSense
-		// reports several hundred times a second.
+		if (established && p->features_due) {
+			p->features_due = false;
+			send_features(p);
+		}
+		// Everything queued, not one report a pass: a wired pad reports 250
+		// times a second.
 		for (;;) {
-			uint8_t buf[LOWLAT_PAD_REPORT_MAX];
-			ssize_t n = read(p->fd, buf, sizeof buf);
+			uint8_t buf[1024];
+			int n = SDL_hid_read_timeout(p->dev, buf, sizeof buf, 0);
+			if (n == 0)
+				break;
 			if (n < 0) {
-				if (errno == EAGAIN || errno == EINTR)
-					break;
 				drop(p);
 				break;
 			}
-			if (n == 0) {
-				drop(p);
-				break;
-			}
+			if (!established)
+				continue;
+			// A wireless report is its first 78 bytes, whatever length the
+			// system hands it out at.
+			uint32_t len = (uint32_t) n;
+			if (p->wireless && len > LOWLAT_PAD_REPORT_MAX)
+				len = LOWLAT_PAD_REPORT_MAX;
 			lowlat_status s = lowlat_client_send_pad_report(session::client(), p->id, p->type,
-				LOWLAT_PAD_REPORT_INPUT, buf, (uint32_t) n);
+				LOWLAT_PAD_REPORT_INPUT, buf, len);
 			if (s == LOWLAT_OK)
 				_raw_reports++;
 			else if (config::get().trace_pads)
-				printf("demo: pad %u report %zd bytes id 0x%02x -> %s\n", p->id, n, buf[0],
+				printf("demo: pad %u report %u bytes id 0x%02x -> %s\n", p->id, len, buf[0],
 					lowlat_status_string(s));
 		}
 	}
-}
-
-// Whether a pad the toolkit reports is one this side reads raw instead: the
-// vendor's, from the start, so the host never gets a state for it under the
-// toolkit's name before its node is open here. A node this side cannot open
-// is said once, and that pad is then dead rather than sent both ways.
-static bool raw_owns_vendor(uint16_t vid)
-{
-	return vid == VENDOR_SONY;
 }
 
 // The host's write, back to the pad it names. False when the pad is not one
 // read here.
 static bool raw_write(const lowlat_pad_report_event *e)
 {
-	raw_pad *p = by_id(e->pad);
+	raw_pad *p = raw_by_id(e->pad);
 	if (p == NULL)
 		return false;
 	int done;
-	if (e->kind == LOWLAT_PAD_REPORT_FEATURE) {
-		uint8_t buf[LOWLAT_PAD_REPORT_MAX];
-		memcpy(buf, e->report, e->len);
-		done = ioctl(p->fd, HIDIOCSFEATURE(e->len), buf);
-	} else {
-		done = (int) write(p->fd, e->report, e->len);
-	}
+	if (e->kind == LOWLAT_PAD_REPORT_FEATURE)
+		done = SDL_hid_send_feature_report(p->dev, e->report, e->len);
+	else
+		done = SDL_hid_write(p->dev, e->report, e->len);
 	if (done < 0)
 		printf("demo: pad %u write of %u bytes failed (%s)\n", p->id, (unsigned) e->len,
-			strerror(errno));
+			SDL_GetError());
 	else
 		_raw_outputs++;
 	if (config::get().trace_pads) {
@@ -308,8 +284,8 @@ static bool raw_write(const lowlat_pad_report_event *e)
 static void seal(uint8_t *report, size_t len)
 {
 	uint8_t seed = 0xA2;
-	uint32_t crc = MTY_CRC32(0, &seed, 1);
-	crc = MTY_CRC32(crc, report, len - 4);
+	Uint32 crc = SDL_crc32(0, &seed, 1);
+	crc = SDL_crc32(crc, report, len - 4);
 	memcpy(report + len - 4, &crc, 4);
 }
 
@@ -317,7 +293,7 @@ static void seal(uint8_t *report, size_t len)
 // lights untouched. False when the pad is not one read here.
 static bool raw_rumble(uint32_t pad, uint8_t low, uint8_t high)
 {
-	raw_pad *p = by_id(pad);
+	raw_pad *p = raw_by_id(pad);
 	if (p == NULL)
 		return false;
 	// The motors alone: the flags name them and nothing else, so a lightbar
@@ -351,307 +327,250 @@ static bool raw_rumble(uint32_t pad, uint8_t low, uint8_t high)
 	}
 	if (p->wireless)
 		seal(report, len);
-	if (write(p->fd, report, len) < 0)
-		printf("demo: pad %u rumble write failed (%s)\n", p->id, strerror(errno));
+	if (SDL_hid_write(p->dev, report, len) < 0)
+		printf("demo: pad %u rumble write failed (%s)\n", p->id, SDL_GetError());
 	else
 		_raw_outputs++;
 	return true;
 }
 
-static void raw_close()
-{
-	for (size_t i = 0; i < RAW_PADS; i++)
-		if (_raw[i].fd >= 0)
-			drop(&_raw[i]);
-}
+// The gamepads SDL reports, sent as the sixteen-button pad: the latest state
+// of each that changed, once a pass, since SDL reports every axis change --
+// several hundred a second from a moving stick.
 
-#else
+#define PADS 8
 
-// No pad node to read here: the toolkit reads the Sony pads on this platform
-// (docs/impl-plan-windows.md, W1.9), and the demo refuses LOWLAT_PAD_RAW, so
-// every call the loop makes finds no pad.
-
-static void raw_scan(double now_ms, bool established)
-{
-	(void) now_ms;
-	(void) established;
-}
-
-static void raw_pump()
-{
-}
-
-static bool raw_owns_vendor(uint16_t vid)
-{
-	(void) vid;
-	return false;
-}
-
-static bool raw_write(const lowlat_pad_report_event *e)
-{
-	(void) e;
-	return false;
-}
-
-static bool raw_rumble(uint32_t pad, uint8_t low, uint8_t high)
-{
-	(void) pad;
-	(void) low;
-	(void) high;
-	return false;
-}
-
-static void raw_close()
-{
-}
-
-#endif
-
-// The toolkit's pads, sent once per pass, the latest state of each: the
-// toolkit reports on every axis event, which is several hundred a second
-// from a moving stick.
-struct toolkit_pad {
-	uint32_t id;
-	lowlat_pad_state state;
-	bool pending;
-	// What sysfs says of the pad, looked up once: whether its kernel
-	// driver names the face buttons by letter rather than by position,
-	// and whether it is a pad the host on this same machine made (see
-	// pad_facts).
-	bool known;
-	bool letter_named;
-	bool hosts_own;
+struct gamepad {
+	SDL_Gamepad *pad;          // NULL when the slot is empty
+	SDL_JoystickID which;      // SDL's name for it
+	uint32_t id;               // as named to the library: the slot's number
+	bool pending;              // changed since it was last sent
 };
 
-static toolkit_pad _pads[8];
+static gamepad _pads[PADS];
 static uint32_t _events;
 static uint32_t _sent;
 static uint32_t _rumbles;
 
-// An axis scaled from the range the device reports to the wire's: sticks
-// signed sixteen bit, triggers a byte.
-static int32_t scaled(const MTY_Axis *a, int32_t lo, int32_t hi)
+static gamepad *by_which(SDL_JoystickID which)
 {
-	int32_t span = (int32_t) a->max - (int32_t) a->min;
-	if (span <= 0)
-		return 0;
-	int64_t v = ((int64_t) a->value - a->min) * (hi - lo);
-	return (int32_t) (lo + (v + span / 2) / span);
+	for (size_t i = 0; i < PADS; i++)
+		if (_pads[i].pad != NULL && _pads[i].which == which)
+			return &_pads[i];
+	return NULL;
 }
 
-// What sysfs says of a pad the toolkit reports, found by its identity.
-//
-// **Letter-named buttons.** The input layer has two names for each of the
-// upper face buttons, and two conventions for using them: the PlayStation
-// driver reports the button's position (north, west), the Xbox driver
-// reports its letter -- and the letter codes are the position codes crossed
-// (X is the north code, Y the west). The toolkit reads every pad by
-// position, which puts an Xbox pad's X and Y on the wrong bits.
-//
-// **The host's own pads.** A demo run on the host's machine sees the pads
-// that host made from this demo's own states -- the toolkit reports them
-// like any other -- and sending them back makes more of them, up to the
-// host's cap. Such a pad names its location as the host's. The toolkit
-// gives no node for a controller, only its identity, so a real pad of the
-// same identity on that machine is kept out with them.
-//
-// Both are Linux's: elsewhere a pad is taken as the toolkit reports it.
-static void pad_facts(uint16_t vid, uint16_t pid, bool *letter_named, bool *hosts_own)
+static gamepad *by_id(uint32_t id)
 {
-	*letter_named = false;
-	*hosts_own = false;
-#if !defined(__linux__)
-	(void) vid;
-	(void) pid;
-#else
-	DIR *dir = opendir("/sys/class/input");
-	if (dir == NULL)
-		return;
-	struct dirent *entry;
-	while ((entry = readdir(dir)) != NULL) {
-		unsigned node;
-		if (sscanf(entry->d_name, "event%u", &node) != 1)
-			continue;
-		char path[128];
-		unsigned v = 0, p = 0;
-		snprintf(path, sizeof path, "/sys/class/input/event%u/device/id/vendor", node);
-		FILE *f = fopen(path, "r");
-		if (f == NULL || fscanf(f, "%x", &v) != 1)
-			v = 0;
-		if (f != NULL)
-			fclose(f);
-		snprintf(path, sizeof path, "/sys/class/input/event%u/device/id/product", node);
-		f = fopen(path, "r");
-		if (f == NULL || fscanf(f, "%x", &p) != 1)
-			p = 0;
-		if (f != NULL)
-			fclose(f);
-		if (v != vid || p != pid)
-			continue;
-		snprintf(path, sizeof path, "/sys/class/input/event%u/device/phys", node);
-		f = fopen(path, "r");
-		if (f != NULL) {
-			char phys[64] = {0};
-			if (fgets(phys, sizeof phys, f) != NULL && strncmp(phys, "lowlat/", 7) == 0)
-				*hosts_own = true;
-			fclose(f);
-		}
-		snprintf(path, sizeof path, "/sys/class/input/event%u/device/device/driver", node);
-		char driver[256];
-		ssize_t n = readlink(path, driver, sizeof driver - 1);
-		if (n <= 0)
-			continue;
-		driver[n] = '\0';
-		const char *name = strrchr(driver, '/');
-		if (strcmp(name != NULL ? name + 1 : driver, "xpad") == 0)
-			*letter_named = true;
-	}
-	closedir(dir);
-#endif
+	for (size_t i = 0; i < PADS; i++)
+		if (_pads[i].pad != NULL && _pads[i].id == id)
+			return &_pads[i];
+	return NULL;
 }
 
-// A whole pad from the toolkit's report, kept as the latest state for the
-// pad and sent on the next pass. Axes are found by their usage rather
-// than their slot, because the toolkit numbers slots in the order the device
-// lists its axes; a pad's sticks are X, Y, Z and Rz and its triggers Rx and
-// Ry on that page. The toolkit hands every stick over as a signed sixteen-bit
-// value with a stick pushed away from the player positive, which is the
-// wire's own convention, so the values pass through as they are. (Until
-// 2026-09-19 the vertical axes were negated here, on a misread trace, and a
-// game on an established host looked the wrong way up.)
-void controller(const MTY_ControllerEvent *c)
+// Whether a gamepad is one this side leaves alone: every one with the knob at
+// "only", a Sony pad read raw instead -- never opened as a gamepad, since
+// that makes SDL write its own lights on it -- and one the host on this
+// machine made.
+static bool left_alone(SDL_JoystickID which)
 {
 	const config::Settings &knobs = config::get();
-	if (knobs.raw_pads_only || (knobs.raw_pads && raw_owns_vendor(c->vid)))
-		return;
-	_events++;
-	size_t slot = sizeof _pads / sizeof _pads[0];
-	for (size_t i = 0; i < sizeof _pads / sizeof _pads[0]; i++) {
-		if (_pads[i].id == c->id)
-			slot = i;
-		else if (slot == sizeof _pads / sizeof _pads[0] && _pads[i].id == 0)
-			slot = i;
+	if (knobs.raw_pads_only)
+		return true;
+	if (knobs.raw_pads && SDL_GetGamepadVendorForID(which) == VENDOR_SONY
+		&& type_of(SDL_GetGamepadProductForID(which)) != 0)
+		return true;
+	const char *path = SDL_GetGamepadPathForID(which);
+	if (path != NULL && hosts_own(path)) {
+		printf("demo: %s is the host's own on this machine; not sent\n", path);
+		return true;
 	}
-	if (slot == sizeof _pads / sizeof _pads[0])
+	return false;
+}
+
+static void added(SDL_JoystickID which)
+{
+	if (by_which(which) != NULL || left_alone(which))
 		return;
-	if (_pads[slot].id != c->id || !_pads[slot].known) {
-		_pads[slot].id = c->id;
-		_pads[slot].known = true;
-		pad_facts(c->vid, c->pid, &_pads[slot].letter_named, &_pads[slot].hosts_own);
-		if (_pads[slot].hosts_own)
-			printf("demo: pad %u (%04x:%04x) is the host's own on this machine; not sent\n",
-				c->id, c->vid, c->pid);
-		else if (_pads[slot].letter_named)
-			printf("demo: pad %u (%04x:%04x) names its buttons by letter; X and Y read back\n",
-				c->id, c->vid, c->pid);
+	gamepad *slot = NULL;
+	for (size_t i = 0; i < PADS && slot == NULL; i++)
+		if (_pads[i].pad == NULL)
+			slot = &_pads[i];
+	if (slot == NULL)
+		return;
+	SDL_Gamepad *pad = SDL_OpenGamepad(which);
+	if (pad == NULL) {
+		printf("demo: gamepad %u not opened (%s)\n", (unsigned) which, SDL_GetError());
+		return;
 	}
-	if (_pads[slot].hosts_own)
-		return;
-	bool crossed = _pads[slot].letter_named;
-	lowlat_pad_state fresh{.size = sizeof(lowlat_pad_state)};
-	lowlat_pad_state *p = &fresh;
-	const struct { MTY_CButton from; uint16_t to; } BITS[] = {
-		{MTY_CBUTTON_A, LOWLAT_PAD_STATE_A}, {MTY_CBUTTON_B, LOWLAT_PAD_STATE_B},
-		{MTY_CBUTTON_X, (uint16_t) (crossed ? LOWLAT_PAD_STATE_Y : LOWLAT_PAD_STATE_X)},
-		{MTY_CBUTTON_Y, (uint16_t) (crossed ? LOWLAT_PAD_STATE_X : LOWLAT_PAD_STATE_Y)},
-		{MTY_CBUTTON_BACK, LOWLAT_PAD_STATE_BACK}, {MTY_CBUTTON_START, LOWLAT_PAD_STATE_START},
-		{MTY_CBUTTON_LEFT_THUMB, LOWLAT_PAD_STATE_LSTICK},
-		{MTY_CBUTTON_RIGHT_THUMB, LOWLAT_PAD_STATE_RSTICK},
-		{MTY_CBUTTON_LEFT_SHOULDER, LOWLAT_PAD_STATE_LSHOULDER},
-		{MTY_CBUTTON_RIGHT_SHOULDER, LOWLAT_PAD_STATE_RSHOULDER},
-		{MTY_CBUTTON_GUIDE, LOWLAT_PAD_STATE_GUIDE},
-		{MTY_CBUTTON_TOUCHPAD, LOWLAT_PAD_STATE_TOUCHPAD},
-		{MTY_CBUTTON_DPAD_UP, LOWLAT_PAD_STATE_DPAD_UP},
-		{MTY_CBUTTON_DPAD_DOWN, LOWLAT_PAD_STATE_DPAD_DOWN},
-		{MTY_CBUTTON_DPAD_LEFT, LOWLAT_PAD_STATE_DPAD_LEFT},
-		{MTY_CBUTTON_DPAD_RIGHT, LOWLAT_PAD_STATE_DPAD_RIGHT},
+	// Pending from the start, so the host has the pad before it is touched.
+	*slot = gamepad{
+		.pad = pad,
+		.which = which,
+		.id = (uint32_t) (slot - _pads),
+		.pending = true,
 	};
-	for (size_t i = 0; i < sizeof BITS / sizeof BITS[0]; i++)
-		if (c->buttons[BITS[i].from])
-			p->buttons |= BITS[i].to;
-	for (uint8_t i = 0; i < c->numAxes && i < MTY_CAXIS_MAX; i++) {
-		const MTY_Axis *a = &c->axes[i];
-		switch (a->usage) {
-			case 0x30: p->lx = (int16_t) scaled(a, -32768, 32767); break;
-			case 0x31: p->ly = (int16_t) scaled(a, -32768, 32767); break;
-			case 0x32: p->rx = (int16_t) scaled(a, -32768, 32767); break;
-			case 0x35: p->ry = (int16_t) scaled(a, -32768, 32767); break;
-			case 0x33: p->lt = (uint8_t) scaled(a, 0, 255); break;
-			case 0x34: p->rt = (uint8_t) scaled(a, 0, 255); break;
-			default: break;
-		}
-	}
-	// A trigger pulled far enough is a button on some pads and only an axis
-	// on others; the wire carries the axis.
-	if (c->buttons[MTY_CBUTTON_LEFT_TRIGGER] && p->lt == 0)
-		p->lt = 255;
-	if (c->buttons[MTY_CBUTTON_RIGHT_TRIGGER] && p->rt == 0)
-		p->rt = 255;
-	_pads[slot].id = c->id;
-	_pads[slot].state = fresh;
-	_pads[slot].pending = true;
-	if (knobs.trace_pads) {
-		printf("pad %u (%04x:%04x):", c->id, c->vid, c->pid);
-		for (uint8_t i = 0; i < c->numAxes && i < MTY_CAXIS_MAX; i++)
-			printf(" u%02x=%d[%d..%d]", c->axes[i].usage, c->axes[i].value, c->axes[i].min,
-				c->axes[i].max);
-		printf(" -> lx=%d ly=%d rx=%d ry=%d lt=%u rt=%u buttons=%04x\n", p->lx, p->ly, p->rx,
-			p->ry, p->lt, p->rt, p->buttons);
-	}
+	const char *name = SDL_GetGamepadName(pad);
+	printf("demo: pad %u is %s (%04x:%04x)\n", slot->id, name != NULL ? name : "a gamepad",
+		SDL_GetGamepadVendor(pad), SDL_GetGamepadProduct(pad));
 }
 
-void disconnected(const MTY_ControllerEvent *c)
+static void removed(SDL_JoystickID which)
 {
-	const config::Settings &knobs = config::get();
-	if (knobs.raw_pads_only || (knobs.raw_pads && raw_owns_vendor(c->vid)))
+	gamepad *p = by_which(which);
+	if (p == NULL)
 		return;
-	bool sent_ever = true;
-	for (size_t i = 0; i < sizeof _pads / sizeof _pads[0]; i++)
-		if (_pads[i].id == c->id) {
-			sent_ever = !_pads[i].hosts_own;
-			_pads[i] = toolkit_pad{};
-		}
-	if (sent_ever)
-		lowlat_client_send_pad_unplug(session::client(), c->id);
+	printf("demo: pad %u gone\n", p->id);
+	lowlat_client_send_pad_unplug(session::client(), p->id);
+	SDL_CloseGamepad(p->pad);
+	*p = gamepad{};
 }
 
-// The latest state of each pad that reported since the last pass.
+static void changed(SDL_JoystickID which)
+{
+	_events++;
+	gamepad *p = by_which(which);
+	if (p != NULL)
+		p->pending = true;
+}
+
+// SDL's sticks grow down and to the right; the wire's up is positive, and
+// -32768 has no negation in sixteen bits.
+static int16_t up(int16_t v)
+{
+	return v == INT16_MIN ? INT16_MAX : (int16_t) -v;
+}
+
+// A stick within 2000 of its centre is centred and the rest lose their lowest
+// bit, the ends kept exact: what an established client sends, and what keeps
+// a pad at rest from sending its jitter.
+static int16_t clean(int16_t v)
+{
+	if (v > -2000 && v < 2000)
+		return 0;
+	if (v == INT16_MIN || v == INT16_MAX)
+		return v;
+	return (int16_t) (v & 0xFFFE);
+}
+
+static lowlat_pad_state state_of(SDL_Gamepad *pad)
+{
+	static constexpr struct {
+		SDL_GamepadButton from;
+		uint16_t to;
+	} BUTTONS[] = {
+		{SDL_GAMEPAD_BUTTON_SOUTH, LOWLAT_PAD_STATE_A},
+		{SDL_GAMEPAD_BUTTON_EAST, LOWLAT_PAD_STATE_B},
+		{SDL_GAMEPAD_BUTTON_WEST, LOWLAT_PAD_STATE_X},
+		{SDL_GAMEPAD_BUTTON_NORTH, LOWLAT_PAD_STATE_Y},
+		{SDL_GAMEPAD_BUTTON_BACK, LOWLAT_PAD_STATE_BACK},
+		{SDL_GAMEPAD_BUTTON_START, LOWLAT_PAD_STATE_START},
+		{SDL_GAMEPAD_BUTTON_LEFT_STICK, LOWLAT_PAD_STATE_LSTICK},
+		{SDL_GAMEPAD_BUTTON_RIGHT_STICK, LOWLAT_PAD_STATE_RSTICK},
+		{SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, LOWLAT_PAD_STATE_LSHOULDER},
+		{SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, LOWLAT_PAD_STATE_RSHOULDER},
+		{SDL_GAMEPAD_BUTTON_GUIDE, LOWLAT_PAD_STATE_GUIDE},
+		{SDL_GAMEPAD_BUTTON_TOUCHPAD, LOWLAT_PAD_STATE_TOUCHPAD},
+		{SDL_GAMEPAD_BUTTON_DPAD_UP, LOWLAT_PAD_STATE_DPAD_UP},
+		{SDL_GAMEPAD_BUTTON_DPAD_DOWN, LOWLAT_PAD_STATE_DPAD_DOWN},
+		{SDL_GAMEPAD_BUTTON_DPAD_LEFT, LOWLAT_PAD_STATE_DPAD_LEFT},
+		{SDL_GAMEPAD_BUTTON_DPAD_RIGHT, LOWLAT_PAD_STATE_DPAD_RIGHT},
+	};
+	lowlat_pad_state st{.size = sizeof(lowlat_pad_state)};
+	for (const auto &b : BUTTONS)
+		if (SDL_GetGamepadButton(pad, b.from))
+			st.buttons |= b.to;
+	st.lx = clean(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX));
+	st.ly = clean(up(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY)));
+	st.rx = clean(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX));
+	st.ry = clean(up(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY)));
+	// The triggers run 0 to 32767, the wire's 0 to 255.
+	st.lt = (uint8_t) (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) >> 7);
+	st.rt = (uint8_t) (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) >> 7);
+	return st;
+}
+
+// The latest state of each gamepad that changed, while the window is in
+// front: a pad reaches the host only then, as the keys and the mouse do. What
+// changed meanwhile waits, so the state a pad holds goes when the window comes
+// back, and a state with no session up waits for the session.
 static void flush()
 {
-	for (size_t i = 0; i < sizeof _pads / sizeof _pads[0]; i++) {
-		if (!_pads[i].pending)
+	if (!MTY_AppIsActive(app::toolkit()))
+		return;
+	for (size_t i = 0; i < PADS; i++) {
+		gamepad *p = &_pads[i];
+		if (p->pad == NULL || !p->pending)
 			continue;
-		_pads[i].pending = false;
-		if (lowlat_client_send_pad_state(session::client(), _pads[i].id, &_pads[i].state)
-			== LOWLAT_OK)
+		lowlat_pad_state st = state_of(p->pad);
+		lowlat_status s = lowlat_client_send_pad_state(session::client(), p->id, &st);
+		if (s == LOWLAT_ERR_NOT_STARTED)
+			continue;
+		p->pending = false;
+		if (s == LOWLAT_OK)
 			_sent++;
+		if (config::get().trace_pads)
+			printf("pad %u: lx=%d ly=%d rx=%d ry=%d lt=%u rt=%u buttons=%04x -> %s\n", p->id,
+				st.lx, st.ly, st.rx, st.ry, st.lt, st.rt, st.buttons, lowlat_status_string(s));
 	}
 }
 
 void start()
 {
-	raw_init();
+	if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
+		fprintf(stderr, "demo: no gamepads (%s)\n", SDL_GetError());
+	if (config::get().raw_pads && SDL_hid_init() != 0)
+		fprintf(stderr, "demo: no raw pads (%s)\n", SDL_GetError());
 }
 
-void poll(double now_ms, bool established)
+void poll(bool established)
 {
-	if (config::get().raw_pads) {
-		raw_scan(now_ms, established);
-		raw_pump();
+	SDL_PumpEvents();
+	SDL_Event ev;
+	while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0) {
+		switch (ev.type) {
+			case SDL_EVENT_GAMEPAD_ADDED:
+				added(ev.gdevice.which);
+				break;
+			case SDL_EVENT_GAMEPAD_REMOVED:
+				removed(ev.gdevice.which);
+				break;
+			case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+				changed(ev.gaxis.which);
+				break;
+			case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+			case SDL_EVENT_GAMEPAD_BUTTON_UP:
+				changed(ev.gbutton.which);
+				break;
+			default:
+				break;
+		}
 	}
+	if (config::get().raw_pads) {
+		// A new session has none of the pads' feature reports.
+		if (established && !_was_established)
+			for (size_t i = 0; i < RAW_PADS; i++)
+				_raw[i].features_due = true;
+		raw_scan(established);
+		raw_pump(established);
+	}
+	_was_established = established;
 	flush();
 }
 
 void rumble(const lowlat_rumble_event *r)
 {
-	// Eight bits each on the wire; the toolkit takes sixteen, and a byte
-	// broadcast into both halves maps the ends exactly. A pad read raw gets
-	// a motor-only report of its own instead.
+	// Eight bits each on the wire and sixteen in SDL: a byte broadcast into
+	// both halves maps the ends exactly. It runs until the host's next word,
+	// which stops it with zeros. A pad read raw gets a motor-only report of
+	// its own instead.
 	_rumbles++;
 	if (config::get().raw_pads && raw_rumble(r->pad, r->low, r->high))
 		return;
-	MTY_AppRumbleController(app::toolkit(), r->pad, (uint16_t) (r->low | (r->low << 8)),
-		(uint16_t) (r->high | (r->high << 8)));
+	gamepad *p = by_id(r->pad);
+	if (p != NULL)
+		SDL_RumbleGamepad(p->pad, (Uint16) (r->low | (r->low << 8)),
+			(Uint16) (r->high | (r->high << 8)), 0);
 }
 
 void written(const lowlat_pad_report_event *e)
@@ -662,7 +581,17 @@ void written(const lowlat_pad_report_event *e)
 
 void close()
 {
-	raw_close();
+	for (size_t i = 0; i < RAW_PADS; i++)
+		if (_raw[i].dev != NULL)
+			drop(&_raw[i]);
+	for (size_t i = 0; i < PADS; i++)
+		if (_pads[i].pad != NULL) {
+			SDL_CloseGamepad(_pads[i].pad);
+			_pads[i] = gamepad{};
+		}
+	if (config::get().raw_pads)
+		SDL_hid_exit();
+	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
 
 Second take_second()

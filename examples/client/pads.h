@@ -1,40 +1,39 @@
-// Pads: the toolkit's controllers, sent as the sixteen-button pad every host
-// takes, and the Sony pads read raw from their own nodes beside them
-// (docs/10-client.md section 8), sent as their own report. The app thread's.
+// Pads: every controller through SDL, sent as the sixteen-button pad every
+// host takes, or a DualShock 4 or a DualSense as its own report
+// (docs/10-client.md section 8). The app thread's.
 //
-// The toolkit has no HID path on Linux, so a DualShock 4 or a DualSense that
-// is to travel as its own report is read here: its raw node found by
-// identity, polled in the demo's loop, its feature reports read once at open
-// and sent ahead of the first input report, and what the host's device is
-// written put back on the node. The toolkit's own events for these pads are
-// dropped while this is on, so nothing is sent twice. A rumble goes to the
-// pad the host named.
+// SDL's gamepads give the states, the latest of each pad that changed sent
+// once a pass while the window is in front. A Sony pad that is to travel as
+// its own report is read through SDL's HID layer instead and never opened as
+// a gamepad, so nothing but the host writes it: its feature reports read and
+// sent ahead of its first input report in each session, every input report
+// sent as it came, and what the host's device is written put back on it. A
+// rumble goes to the pad the host named.
 
 #pragma once
 
 #include <stdint.h>
 
 #include "lowlat.h"
-#include "matoya.h"
 
 namespace pads {
 
-// Before the session: the raw pads' slots, empty.
+// Before the session, on the main thread, which the loop runs on: SDL's
+// gamepads. This is the demo's first call into SDL, which makes the main
+// thread the one SDL is pumped on.
 void start();
-// Every pass of the loop: the raw pads looked for once the session is up and
-// read, and the latest state of each toolkit pad that reported, sent.
-void poll(double now_ms, bool established);
-void controller(const MTY_ControllerEvent *c);
-void disconnected(const MTY_ControllerEvent *c);
+// Every pass of the loop: SDL's events taken, the raw pads looked for once the
+// session is up and read, and the latest state of each gamepad that changed
+// sent while the window is in front.
+void poll(bool established);
 // The host's rumble, and its writes for a pad read raw.
 void rumble(const lowlat_rumble_event *r);
 void written(const lowlat_pad_report_event *e);
-// At the end: each raw pad's node closed, and the pad said unplugged.
+// At the end: each raw pad closed and said unplugged, then SDL's gamepads.
 void close();
 
-// The second's counts, read and cleared: states sent, the toolkit's pad
-// events, and the raw pads' input reports sent and the host's writes put on
-// their nodes.
+// The second's counts, read and cleared: states sent, SDL's pad events, and
+// the raw pads' input reports sent and the host's writes put on them.
 struct Second {
 	uint32_t sent;
 	uint32_t events;

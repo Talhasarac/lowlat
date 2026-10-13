@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-# The client demo on Windows: the C++ example on the application toolkit, built as an
+# The client demo on Windows: the C++ example on the application toolkit and SDL, built as an
 # application that links the library into itself is -- the library from its static build, the
 # static runtime, the same presets -- with its own code optimised across its files at the link
 # in Release. The GNU build is GNUmakefile beside this one.
@@ -64,6 +64,11 @@ set_target_properties(lowlat PROPERTIES
     IMPORTED_LOCATION "${LOWLAT_LIB}"
     INTERFACE_LINK_OPTIONS "$<$<CONFIG:Debug>:/NODEFAULTLIB:libcmt.lib>")
 
+# --- SDL --------------------------------------------------------------------------------------
+# The pads and the sound, static from vcpkg: vcpkg.json beside this file names the version, the
+# presets the toolchain and the static triplet.
+find_package(SDL3 CONFIG REQUIRED)
+
 # --- the demo ---------------------------------------------------------------------------------
 add_executable(client
     main.cc
@@ -91,8 +96,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(client PRIVATE -Wno-missing-designated-field-initializers)
 endif()
 
-# What the toolkit calls into on this platform.
-target_link_libraries(client PRIVATE lowlat matoya
+# SDL names what it calls into itself; the rest is what the toolkit calls into on this platform.
+target_link_libraries(client PRIVATE lowlat matoya SDL3::SDL3
     user32 gdi32 shell32 ole32 oleaut32 uuid advapi32 ws2_32 bcrypt crypt32 winmm wininet
     winhttp userenv setupapi cfgmgr32 iphlpapi shlwapi imm32 hid dxgi d3d11 d3d12 d3dcompiler
     dxguid dwmapi dwrite propsys shcore xinput windowscodecs)

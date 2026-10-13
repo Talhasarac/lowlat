@@ -1,8 +1,9 @@
-// Sound: the host's, played on the toolkit's device from a thread of its own,
-// and with LOWLAT_MIC_TONE a tone sent as the microphone from another. The
-// device's own buffer paces playback and absorbs the drift; a resync is the
-// device flushing, seen here as its queue at zero after it had been fed, or
-// past the ceiling before a queue.
+// Sound: the host's, played through SDL on the default output from a thread
+// of its own, and with LOWLAT_MIC_TONE a tone sent as the microphone from
+// another. The stream the device pulls from is the buffer: the device waits
+// until the floor is queued and the stream is emptied past the ceiling, which
+// absorbs the drift; a resync is either, the device then primed again from
+// empty.
 //
 // start() and stop() are the main thread's; take_second(), the app thread's.
 
@@ -17,7 +18,7 @@ void start();
 // After the loop has stopped: the threads joined, then the device.
 void stop();
 
-// The second's figures: packets and frames played, the device's queue now,
+// The second's figures: packets and frames played, the stream's queue now,
 // at its lowest and highest, the oldest packet's age, the resyncs so far, and
 // the tone's calls the library refused because the host takes no
 // microphone. Read and cleared, but the queue now and the resyncs.

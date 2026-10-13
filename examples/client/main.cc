@@ -1,19 +1,20 @@
 // The client demo: a window that shows a host's desktop and drives it.
 //
-// C++20 on the application toolkit. The library decodes and encodes input;
-// this presents and reports what happened in its window. A file for each
-// part, each holding its own state: the app and its window (app), the knobs
-// (config), the session and its attempts (session), the signaling service
-// (signaling), the presenting thread (present), what the window shows and
-// where (view), keyboard and mouse (input), pads (pads), sound and the
-// microphone's tone (sound), the line each second (report), and the clocks
-// and lines (clocks, logs). The knobs are config.h's.
+// C++20 on the application toolkit, with SDL for the pads and the sound. The
+// library decodes and encodes input; this presents and reports what happened
+// in its window. A file for each part, each holding its own state: the app
+// and its window (app), the knobs (config), the session and its attempts
+// (session), the signaling service (signaling), the presenting thread
+// (present), what the window shows and where (view), keyboard and mouse
+// (input), pads (pads), sound and the microphone's tone (sound), the line
+// each second (report), and the clocks and lines (clocks, logs). The knobs
+// are config.h's.
 //
 //   LOWLAT_PEER=<the host's peer id> LOWLAT_SESSION=<a session token> ./client
 //
-// Keyboard, mouse and pads go to the host as the toolkit reports them; the
-// rectangle the picture is drawn into is told to the library, which maps
-// positions into the picture. Chords the demo keeps for itself, never sent,
+// Keyboard and mouse go to the host as the toolkit reports them, pads as SDL
+// does; the rectangle the picture is drawn into is told to the library, which
+// maps positions into the picture. Chords the demo keeps for itself, never sent,
 // Ctrl+Shift and a letter: I grabs the keyboard so the desktop's own keys go
 // to the host (and lets it go), W toggles fullscreen, D asks the host to
 // stream its next output, F switches between the picture stretched to the

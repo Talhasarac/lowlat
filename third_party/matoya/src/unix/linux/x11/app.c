@@ -642,7 +642,8 @@ MTY_App *MTY_AppCreate(MTY_AppFlag flags, MTY_AppFunc appFunc, MTY_EventFunc eve
 	ctx->class_name = MTY_Strdup(MTY_GetFileName(MTY_GetProcessPath(), false));
 
 	// This may return NULL
-	ctx->evdev = mty_evdev_create(app_evdev_connect, app_evdev_disconnect, ctx);
+	if (!(flags & MTY_APP_FLAG_NO_CONTROLLERS))
+		ctx->evdev = mty_evdev_create(app_evdev_connect, app_evdev_disconnect, ctx);
 
 	ctx->display = XOpenDisplay(NULL);
 	if (!ctx->display) {
