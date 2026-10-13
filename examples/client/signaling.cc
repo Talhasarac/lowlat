@@ -166,8 +166,7 @@ enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
 			const MTY_JSON *data = MTY_JSONObjGetItem(payload, "data");
 			const MTY_JSON *creds = data ? MTY_JSONObjGetItem(data, "creds") : NULL;
 			if (creds != NULL) {
-				memset(theirs, 0, sizeof *theirs);
-				theirs->size = (uint32_t) sizeof *theirs;
+				*theirs = lowlat_credentials{.size = sizeof(lowlat_credentials)};
 				MTY_JSONObjGetString(creds, "ice_ufrag", theirs->ufrag, sizeof theirs->ufrag);
 				MTY_JSONObjGetString(creds, "ice_pwd", theirs->pwd, sizeof theirs->pwd);
 				MTY_JSONObjGetString(creds, "fingerprint", theirs->fingerprint,
@@ -180,8 +179,7 @@ enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
 	} else if (action != NULL && strcmp(action, "candex_relay") == 0 && ours) {
 		const MTY_JSON *data = MTY_JSONObjGetItem(payload, "data");
 		if (data != NULL) {
-			memset(candidate, 0, sizeof *candidate);
-			candidate->size = (uint32_t) sizeof *candidate;
+			*candidate = lowlat_candidate{.size = sizeof(lowlat_candidate)};
 			MTY_JSONObjGetString(data, "ip", candidate->address, sizeof candidate->address);
 			int32_t port = 0;
 			MTY_JSONObjGetInt(data, "port", &port);

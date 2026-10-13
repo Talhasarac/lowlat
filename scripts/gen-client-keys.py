@@ -85,12 +85,13 @@ def main():
     out.write("// the kernel's usage table; do not edit.\n")
     out.write("//\n")
     out.write("// Indexed by MTY_Key. Zero is a key with no usage code, which is not\n")
-    out.write("// sent.\n\n")
-    out.write("#pragma once\n\n#include <stdint.h>\n\n#include \"matoya.h\"\n\n")
-    out.write("static const uint16_t KEY_USAGE[MTY_KEY_MAX] = {\n")
+    out.write("// sent. Filled by assignment: C++ has no index designators.\n\n")
+    out.write("#pragma once\n\n#include <stdint.h>\n\n#include <array>\n\n#include \"matoya.h\"\n\n")
+    out.write("static constexpr std::array<uint16_t, MTY_KEY_MAX> KEY_USAGE = [] {\n")
+    out.write("\tstd::array<uint16_t, MTY_KEY_MAX> usage{};\n")
     for name, (value, usage) in sorted(table.items(), key=lambda kv: kv[1][0]):
-        out.write(f"\t[{name}] = {usage},\n")
-    out.write("};\n")
+        out.write(f"\tusage[{name}] = {usage};\n")
+    out.write("\treturn usage;\n}();\n")
     print(f"{len(table)} keys", file=sys.stderr)
 
 

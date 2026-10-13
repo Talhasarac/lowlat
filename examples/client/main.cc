@@ -1,6 +1,6 @@
 // The client demo: a window that shows a host's desktop and drives it.
 //
-// Pure C on the application toolkit. The library decodes and encodes input;
+// C++20 on the application toolkit. The library decodes and encodes input;
 // this presents and reports what happened in its window. One file for the
 // session and the window, one for signaling. Sound goes to the toolkit's
 // device from a thread of its own; the cursor comes with its phase.
@@ -104,11 +104,14 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#include <atomic>
+#include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -141,21 +144,21 @@ struct demo {
 	MTY_App *app;
 	MTY_Window window;
 	bool begun;
-	atomic_bool quit;
+	std::atomic_bool quit;
 
 	// The picture on the screen, held until the next replaces it. The
 	// presenting thread's; what the rest reads of it is published beside.
 	lowlat_frame shown;
 	bool showing;
 	uint64_t last_sequence;
-	atomic_uint picture_width;
-	atomic_uint picture_height;
-	atomic_uint picture_rotation;
-	atomic_uint picture_format;
-	atomic_bool picture_full_range;
+	std::atomic_uint picture_width;
+	std::atomic_uint picture_height;
+	std::atomic_uint picture_rotation;
+	std::atomic_uint picture_format;
+	std::atomic_bool picture_full_range;
 	// The kind the last picture came as, which a decoder that hands out no
 	// handles makes planes whatever was asked.
-	atomic_uint picture_kind;
+	std::atomic_uint picture_kind;
 	// Whether pictures are asked for as device handles: at creation, and
 	// switched by the chord since.
 	bool handles;
@@ -179,23 +182,23 @@ struct demo {
 	// three, four or more.
 	double refresh_ms;
 	double shown_at_ms;
-	atomic_uint swap_sum_us;
-	atomic_uint swap_count;
-	atomic_uint swap_max_us;
-	atomic_uint held[4];
+	std::atomic_uint swap_sum_us;
+	std::atomic_uint swap_count;
+	std::atomic_uint swap_max_us;
+	std::atomic_uint held[4];
 	// A new picture's time from its arrival, as the library stamps it: to
 	// the acquire that took it, which is the library's share, and to its
 	// present returning. Summed, counted and at their longest for the
 	// second; with `LOWLAT_LATENCY_TRACE`, a line per picture.
-	atomic_uint lat_sum_us;
-	atomic_uint lat_count;
-	atomic_uint lat_max_us;
-	atomic_uint lib_sum_us;
-	atomic_uint lib_max_us;
+	std::atomic_uint lat_sum_us;
+	std::atomic_uint lat_count;
+	std::atomic_uint lat_max_us;
+	std::atomic_uint lib_sum_us;
+	std::atomic_uint lib_max_us;
 	bool trace_latency;
 	// Every motion sent, never cleared, for the per-picture line to say how
 	// much input went out while the picture was on its way.
-	atomic_uint motions_total;
+	std::atomic_uint motions_total;
 
 	// Sound: the device, on a thread of its own that acquires and queues.
 	// The device's own buffer paces playback and absorbs the drift; a
@@ -206,20 +209,20 @@ struct demo {
 	bool trace_audio;
 	bool audio_playing;
 	bool audio_just_started;
-	atomic_uint snd_packets;
-	atomic_uint snd_frames;
-	atomic_uint snd_q_ms;
-	atomic_uint snd_q_min;
-	atomic_uint snd_q_max;
-	atomic_uint snd_age_max;
-	atomic_uint snd_resyncs;
+	std::atomic_uint snd_packets;
+	std::atomic_uint snd_frames;
+	std::atomic_uint snd_q_ms;
+	std::atomic_uint snd_q_min;
+	std::atomic_uint snd_q_max;
+	std::atomic_uint snd_age_max;
+	std::atomic_uint snd_resyncs;
 
 	// The microphone, with `LOWLAT_MIC_TONE`: a tone at that pitch sent as one
 	// from a thread of its own, a few milliseconds at a time as a capture
 	// device hands them over; calls refused because the host takes none.
 	double mic_hz;
 	MTY_Thread *mic;
-	atomic_uint mic_refused;
+	std::atomic_uint mic_refused;
 
 	// The knobs: the rate asked of the host, the presentation cap, the leave.
 	uint32_t ask_fps;
@@ -239,7 +242,7 @@ struct demo {
 	// size when it fits. The rectangle last told to the library, and the
 	// window's size it was fitted to: kept from the toolkit's events rather
 	// than asked of the display on every pass, which is a round trip each.
-	atomic_bool stretch;
+	std::atomic_bool stretch;
 	int32_t viewport[4];
 	MTY_Size window_size;
 
@@ -257,7 +260,7 @@ struct demo {
 	// pointer from a host at twice the scale shows at the size it has in
 	// the picture and shrinks with a letterboxed window. The target last
 	// applied says when to redo it.
-	uint8_t *cursor_rgba;
+	std::vector<uint8_t> cursor_rgba;
 	uint32_t cursor_width;
 	uint32_t cursor_height;
 	uint32_t cursor_hot_x;
@@ -344,11 +347,11 @@ struct demo {
 	double second_began;
 	// When the demo started, for the sound lines' timestamps.
 	double started_ms;
-	atomic_uint presents;
-	atomic_uint polls;
-	atomic_uint pictures;
-	atomic_uint repeats;
-	atomic_uint skips;
+	std::atomic_uint presents;
+	std::atomic_uint polls;
+	std::atomic_uint pictures;
+	std::atomic_uint repeats;
+	std::atomic_uint skips;
 	uint64_t seconds;
 	uint64_t last_video_bytes;
 	bool established;
@@ -478,7 +481,10 @@ static const char *gfx_name(MTY_GFX gfx)
 		: gfx == MTY_GFX_D3D11 ? "d3d11" : gfx == MTY_GFX_D3D12 ? "d3d12" : "-";
 }
 
-static void log_line(uint32_t level, const char *message, void *opaque)
+// Every function the library or the toolkit calls back is noexcept: nothing
+// may unwind through their frames, so a throw ends the process where it is
+// thrown -- running out of memory for the pointer's picture among them.
+static void log_line(uint32_t level, const char *message, void *opaque) noexcept
 {
 	(void) opaque;
 	char stamp[16];
@@ -489,7 +495,7 @@ static void log_line(uint32_t level, const char *message, void *opaque)
 // The toolkit's own lines, which say when a draw could not be made: a
 // picture that failed to import would otherwise leave the last one on the
 // screen with every counter looking healthy.
-static void toolkit_line(const char *message, void *opaque)
+static void toolkit_line(const char *message, void *opaque) noexcept
 {
 	(void) opaque;
 	fprintf(stderr, "! toolkit: %s\n", message);
@@ -545,9 +551,9 @@ static const char *env_or(const char *name, const char *fallback);
 // or zero before there is one.
 static void drawn_size(const struct demo *d, uint32_t *across, uint32_t *down)
 {
-	uint32_t width = atomic_load(&d->picture_width);
-	uint32_t height = atomic_load(&d->picture_height);
-	uint32_t rotation = atomic_load(&d->picture_rotation);
+	uint32_t width = d->picture_width.load();
+	uint32_t height = d->picture_height.load();
+	uint32_t rotation = d->picture_rotation.load();
 	bool turned = rotation == LOWLAT_ROTATION_90 || rotation == LOWLAT_ROTATION_270;
 	*across = turned ? height : width;
 	*down = turned ? width : height;
@@ -612,7 +618,7 @@ static void bilinear_rgba(const uint8_t *src, uint32_t sw, uint32_t sh, uint8_t 
 // when neither the picture nor the target changed.
 static void apply_cursor(struct demo *d)
 {
-	if (d->cursor_rgba == NULL)
+	if (d->cursor_rgba.empty())
 		return;
 	uint32_t across, down;
 	drawn_size(d, &across, &down);
@@ -645,54 +651,43 @@ static void apply_cursor(struct demo *d)
 	uint32_t hot_x = (uint32_t) (((uint64_t) tw * d->cursor_hot_x + cw / 2) / cw);
 	uint32_t hot_y = (uint32_t) (((uint64_t) th * d->cursor_hot_y + ch / 2) / ch);
 	if (tw == cw && th == ch) {
-		MTY_AppSetRGBACursor(d->app, d->cursor_rgba, cw, ch, d->cursor_hot_x, d->cursor_hot_y);
+		MTY_AppSetRGBACursor(d->app, d->cursor_rgba.data(), cw, ch, d->cursor_hot_x,
+			d->cursor_hot_y);
 		return;
 	}
 	// The chain of halvings, then the bilinear step.
-	uint8_t *cur = d->cursor_rgba;
+	std::vector<uint8_t> halved;
+	const uint8_t *cur = d->cursor_rgba.data();
 	uint32_t sw = cw, sh = ch;
 	while ((sw > sh ? sw : sh) >= 2 * tw && sw >= 2 && sh >= 2) {
 		uint32_t hw = sw / 2, hh = sh / 2;
-		uint8_t *next = malloc((size_t) hw * hh * 4);
-		if (next == NULL)
-			break;
-		halve_rgba(cur, sw, sh, next, hw, hh);
-		if (cur != d->cursor_rgba)
-			free(cur);
-		cur = next;
+		std::vector<uint8_t> next((size_t) hw * hh * 4);
+		halve_rgba(cur, sw, sh, next.data(), hw, hh);
+		halved = std::move(next);
+		cur = halved.data();
 		sw = hw;
 		sh = hh;
 	}
-	uint8_t *scaled = malloc((size_t) tw * th * 4);
-	if (scaled != NULL) {
-		if (sw == tw && sh == th)
-			memcpy(scaled, cur, (size_t) tw * th * 4);
-		else
-			bilinear_rgba(cur, sw, sh, scaled, tw, th);
-		MTY_AppSetRGBACursor(d->app, scaled, tw, th, hot_x, hot_y);
-		free(scaled);
-	}
-	if (cur != d->cursor_rgba)
-		free(cur);
+	std::vector<uint8_t> scaled((size_t) tw * th * 4);
+	if (sw == tw && sh == th)
+		memcpy(scaled.data(), cur, scaled.size());
+	else
+		bilinear_rgba(cur, sw, sh, scaled.data(), tw, th);
+	MTY_AppSetRGBACursor(d->app, scaled.data(), tw, th, hot_x, hot_y);
 }
 
 // One cursor event: keep the picture if one came, then apply.
 static void on_cursor(struct demo *d, const lowlat_cursor_event *c)
 {
 	if (c->image_update && c->image != NULL && c->image_len == (uint32_t) c->width * c->height * 4) {
-		uint8_t *copy = malloc(c->image_len);
-		if (copy != NULL) {
-			memcpy(copy, c->image, c->image_len);
-			free(d->cursor_rgba);
-			d->cursor_rgba = copy;
-			d->cursor_width = c->width;
-			d->cursor_height = c->height;
-			d->cursor_hot_x = c->hot_x;
-			d->cursor_hot_y = c->hot_y;
-			d->cursor_checksum = c->checksum;
-			d->cursor_target_w = 0;
-			d->cursor_target_h = 0;
-		}
+		d->cursor_rgba.assign(c->image, c->image + c->image_len);
+		d->cursor_width = c->width;
+		d->cursor_height = c->height;
+		d->cursor_hot_x = c->hot_x;
+		d->cursor_hot_y = c->hot_y;
+		d->cursor_checksum = c->checksum;
+		d->cursor_target_w = 0;
+		d->cursor_target_h = 0;
 	}
 	apply_cursor(d);
 	// A pointer the host withholds for touch is not drawn here either; it
@@ -837,7 +832,7 @@ static void on_key(struct demo *d, const MTY_KeyEvent *k)
 				ask_outputs(d);
 				return;
 			case MTY_KEY_F:
-				atomic_store(&d->stretch, !atomic_load(&d->stretch));
+				d->stretch.store(!d->stretch.load());
 				printf("demo: %s\n", d->stretch ? "stretched to the window" : "at its own size");
 				return;
 			case MTY_KEY_R:
@@ -859,7 +854,7 @@ static void on_key(struct demo *d, const MTY_KeyEvent *k)
 				// here, and the departure goes out on the way down with its
 				// grace.
 				printf("demo: leaving and quitting\n");
-				atomic_store(&d->quit, true);
+				d->quit.store(true);
 				return;
 			default:
 				break;
@@ -1006,14 +1001,12 @@ static void on_controller(struct demo *d, const MTY_ControllerEvent *c)
 	if (d->pads[slot].hosts_own)
 		return;
 	bool crossed = d->pads[slot].letter_named;
-	lowlat_pad_state fresh;
-	memset(&fresh, 0, sizeof fresh);
-	fresh.size = (uint32_t) sizeof fresh;
+	lowlat_pad_state fresh{.size = sizeof(lowlat_pad_state)};
 	lowlat_pad_state *p = &fresh;
 	const struct { MTY_CButton from; uint16_t to; } BITS[] = {
 		{MTY_CBUTTON_A, LOWLAT_PAD_STATE_A}, {MTY_CBUTTON_B, LOWLAT_PAD_STATE_B},
-		{MTY_CBUTTON_X, crossed ? LOWLAT_PAD_STATE_Y : LOWLAT_PAD_STATE_X},
-		{MTY_CBUTTON_Y, crossed ? LOWLAT_PAD_STATE_X : LOWLAT_PAD_STATE_Y},
+		{MTY_CBUTTON_X, (uint16_t) (crossed ? LOWLAT_PAD_STATE_Y : LOWLAT_PAD_STATE_X)},
+		{MTY_CBUTTON_Y, (uint16_t) (crossed ? LOWLAT_PAD_STATE_X : LOWLAT_PAD_STATE_Y)},
 		{MTY_CBUTTON_BACK, LOWLAT_PAD_STATE_BACK}, {MTY_CBUTTON_START, LOWLAT_PAD_STATE_START},
 		{MTY_CBUTTON_LEFT_THUMB, LOWLAT_PAD_STATE_LSTICK},
 		{MTY_CBUTTON_RIGHT_THUMB, LOWLAT_PAD_STATE_RSTICK},
@@ -1072,13 +1065,13 @@ static void flush_pads(struct demo *d)
 	}
 }
 
-static void event_func(const MTY_Event *evt, void *opaque)
+static void event_func(const MTY_Event *evt, void *opaque) noexcept
 {
-	struct demo *d = opaque;
+	struct demo *d = (struct demo *) opaque;
 	switch (evt->type) {
 		case MTY_EVENT_CLOSE:
 		case MTY_EVENT_QUIT:
-			atomic_store(&d->quit, true);
+			d->quit.store(true);
 			break;
 		case MTY_EVENT_KEY:
 			on_key(d, &evt->key);
@@ -1095,7 +1088,7 @@ static void event_func(const MTY_Event *evt, void *opaque)
 		case MTY_EVENT_MOTION:
 			sent(d, lowlat_client_send_mouse_motion(d->client, evt->motion.x, evt->motion.y,
 				evt->motion.relative), &d->motions_sent);
-			atomic_fetch_add(&d->motions_total, 1);
+			d->motions_total.fetch_add(1);
 			break;
 		case MTY_EVENT_CONTROLLER:
 			on_controller(d, &evt->controller);
@@ -1137,16 +1130,16 @@ static void event_func(const MTY_Event *evt, void *opaque)
 static void place_picture(struct demo *d)
 {
 	int32_t rect[4] = {0, 0, 0, 0};
-	uint32_t width = atomic_load(&d->picture_width);
+	uint32_t width = d->picture_width.load();
 	if (width != 0) {
 		MTY_Size size = d->window_size;
-		uint32_t height = atomic_load(&d->picture_height);
-		uint32_t rotation = atomic_load(&d->picture_rotation);
+		uint32_t height = d->picture_height.load();
+		uint32_t rotation = d->picture_rotation.load();
 		bool turned = rotation == LOWLAT_ROTATION_90 || rotation == LOWLAT_ROTATION_270;
 		double w = turned ? height : width;
 		double h = turned ? width : height;
 		double ar = w / h;
-		bool stretch = atomic_load(&d->stretch);
+		bool stretch = d->stretch.load();
 		double vw = stretch || w > size.w || h > size.h ? size.w : w;
 		double vh = round(vw / ar);
 		if (vw > size.w) {
@@ -1265,9 +1258,7 @@ static void pump_library(struct demo *d)
 				signaling_candidate(&d->sig, "0.0.0.0", 0, false, false, true);
 				break;
 			case LOWLAT_EVENT_ESTABLISHED: {
-				lowlat_client_status st;
-				memset(&st, 0, sizeof st);
-				st.size = (uint32_t) sizeof st;
+				lowlat_client_status st{.size = sizeof(lowlat_client_status)};
 				lowlat_client_get_status(d->client, &st);
 				if (st.relayed)
 					printf("demo: established with %s:%u through the relay, relayed at %s:%u\n",
@@ -1284,7 +1275,7 @@ static void pump_library(struct demo *d)
 			case LOWLAT_EVENT_ENDED:
 				printf("demo: ended, outcome %d reason %d\n", (int) e.body.ended.outcome,
 					(int) e.body.ended.reason);
-				atomic_store(&d->quit, true);
+				d->quit.store(true);
 				break;
 			case LOWLAT_EVENT_BLOCKED:
 				printf("demo: input %s\n", e.body.blocked.blocked ? "blocked" : "unblocked");
@@ -1344,14 +1335,14 @@ static void pump_signaling(struct demo *d)
 			break;
 		if (e == SIGNALING_CLOSED) {
 			if (!d->begun)
-				atomic_store(&d->quit, true);
+				d->quit.store(true);
 			break;
 		}
 		if (e == SIGNALING_ANSWER && !d->begun) {
 			lowlat_status s = lowlat_client_begin_p2p(d->client, d->attempt, &theirs);
 			if (s != LOWLAT_OK) {
 				fprintf(stderr, "demo: begin refused: %s\n", lowlat_status_string(s));
-				atomic_store(&d->quit, true);
+				d->quit.store(true);
 				break;
 			}
 			d->begun = true;
@@ -1383,9 +1374,7 @@ static void ask_rate(struct demo *d)
 // a session can be read at a glance.
 static void report(struct demo *d)
 {
-	lowlat_client_status st;
-	memset(&st, 0, sizeof st);
-	st.size = (uint32_t) sizeof st;
+	lowlat_client_status st{.size = sizeof(lowlat_client_status)};
 	lowlat_client_get_status(d->client, &st);
 	d->seconds++;
 	d->established = st.state == LOWLAT_CLIENT_ESTABLISHED;
@@ -1396,35 +1385,33 @@ static void report(struct demo *d)
 	memory_words(memory, sizeof memory);
 	const char *codec = st.codec == LOWLAT_CODEC_HEVC ? "HEVC"
 		: st.codec == LOWLAT_CODEC_H264 ? "H264" : "-";
-	uint32_t presents = atomic_exchange(&d->presents, 0);
-	uint32_t polls = atomic_exchange(&d->polls, 0);
-	uint32_t pictures = atomic_exchange(&d->pictures, 0);
-	uint32_t repeats = atomic_exchange(&d->repeats, 0);
-	uint32_t skips = atomic_exchange(&d->skips, 0);
-	uint32_t swap_sum_us = atomic_exchange(&d->swap_sum_us, 0);
-	uint32_t swap_count = atomic_exchange(&d->swap_count, 0);
-	uint32_t swap_max_us = atomic_exchange(&d->swap_max_us, 0);
+	uint32_t presents = d->presents.exchange(0);
+	uint32_t polls = d->polls.exchange(0);
+	uint32_t pictures = d->pictures.exchange(0);
+	uint32_t repeats = d->repeats.exchange(0);
+	uint32_t skips = d->skips.exchange(0);
+	uint32_t swap_sum_us = d->swap_sum_us.exchange(0);
+	uint32_t swap_count = d->swap_count.exchange(0);
+	uint32_t swap_max_us = d->swap_max_us.exchange(0);
 	uint32_t held[4];
 	for (uint32_t i = 0; i < 4; i++)
-		held[i] = atomic_exchange(&d->held[i], 0);
-	uint32_t lat_sum_us = atomic_exchange(&d->lat_sum_us, 0);
-	uint32_t lat_count = atomic_exchange(&d->lat_count, 0);
-	uint32_t lat_max_us = atomic_exchange(&d->lat_max_us, 0);
-	uint32_t lib_sum_us = atomic_exchange(&d->lib_sum_us, 0);
-	uint32_t lib_max_us = atomic_exchange(&d->lib_max_us, 0);
-	uint32_t snd = atomic_exchange(&d->snd_packets, 0);
-	uint32_t snd_frames = atomic_exchange(&d->snd_frames, 0);
-	uint32_t snd_q_min = atomic_exchange(&d->snd_q_min, UINT32_MAX);
-	uint32_t snd_q_max = atomic_exchange(&d->snd_q_max, 0);
-	uint32_t snd_age_max = atomic_exchange(&d->snd_age_max, 0);
+		held[i] = d->held[i].exchange(0);
+	uint32_t lat_sum_us = d->lat_sum_us.exchange(0);
+	uint32_t lat_count = d->lat_count.exchange(0);
+	uint32_t lat_max_us = d->lat_max_us.exchange(0);
+	uint32_t lib_sum_us = d->lib_sum_us.exchange(0);
+	uint32_t lib_max_us = d->lib_max_us.exchange(0);
+	uint32_t snd = d->snd_packets.exchange(0);
+	uint32_t snd_frames = d->snd_frames.exchange(0);
+	uint32_t snd_q_min = d->snd_q_min.exchange(UINT32_MAX);
+	uint32_t snd_q_max = d->snd_q_max.exchange(0);
+	uint32_t snd_age_max = d->snd_age_max.exchange(0);
 	if (snd == 0)
 		snd_q_min = 0;
 	// This side's figures for the video channel, and beside them the host's
 	// for this guest as its last guest list carried them: the two ends of
 	// one path, each measured where it can be.
-	lowlat_client_metrics m;
-	memset(&m, 0, sizeof m);
-	m.size = (uint32_t) sizeof m;
+	lowlat_client_metrics m{.size = sizeof(lowlat_client_metrics)};
 	lowlat_client_get_metrics(d->client, &m);
 	printf("demo: t=%" PRIu64 " presents=%u polls=%u pictures=%u repeats=%u skips=%u "
 		"gfx=%s vsync=%d swap_ms=%.1f/%.1f held=%u/%u/%u/%u lat_ms=%.2f/%.2f lib_ms=%.2f/%.2f "
@@ -1452,8 +1439,8 @@ static void report(struct demo *d)
 		st.rtt_ms, mbit, st.decoded, memory, d->keys_sent, d->buttons_sent, d->wheels_sent,
 		d->motions_sent, d->pad_sent, d->pad_events, d->raw.reports, d->raw.outputs,
 		st.pad_reports_received, st.pad_reports_dropped, st.input_dropped,
-		snd, snd_frames, atomic_load(&d->snd_q_ms), snd_q_min, snd_q_max, snd_age_max,
-		st.audio_queued, st.audio_dropped, st.audio_refused, atomic_load(&d->snd_resyncs),
+		snd, snd_frames, d->snd_q_ms.load(), snd_q_min, snd_q_max, snd_age_max,
+		st.audio_queued, st.audio_dropped, st.audio_refused, d->snd_resyncs.load(),
 		st.audio_codec == LOWLAT_AUDIO_OPUS ? "opus"
 			: st.audio_codec == LOWLAT_AUDIO_PCM ? "pcm" : "-",
 		st.decode_reported_us, st.audio_reported_us, st.asked_flags, st.declared_flags,
@@ -1463,7 +1450,7 @@ static void report(struct demo *d)
 		st.cursor_refused, d->rumbles, st.number, d->owner, d->rosters, d->host_rtt_ms,
 		d->host_mbps, d->host_encode_ms, d->host_decode_ms, d->host_packets, d->host_fast_rts,
 		d->host_slow_rts, d->host_cg_events, st.microphone_sent, st.microphone_dropped,
-		(int) st.microphone, atomic_exchange(&d->mic_refused, 0));
+		(int) st.microphone, d->mic_refused.exchange(0));
 	// The warning every client shows for hardware that cannot keep up,
 	// gated on the reader's lag rather than on any figure of the decoder's:
 	// thirty or more messages behind for sixty consecutive seconds, cleared
@@ -1515,13 +1502,13 @@ static void report(struct demo *d)
 	fflush(stdout);
 
 	char title[320];
-	uint32_t width = atomic_load(&d->picture_width);
+	uint32_t width = d->picture_width.load();
 	// The decoder by its row's label where the session is on that row's
 	// backend, else by the backend alone.
 	const lowlat_decoder_info *row = d->row < d->row_count ? &d->rows[d->row] : NULL;
 	if (width != 0) {
-		uint32_t rotation = atomic_load(&d->picture_rotation);
-		uint32_t format = atomic_load(&d->picture_format);
+		uint32_t rotation = d->picture_rotation.load();
+		uint32_t format = d->picture_format.load();
 		const char *colour = format == LOWLAT_FORMAT_P010 ? "10bit"
 			: format == LOWLAT_FORMAT_YUV444 ? "444"
 			: format == LOWLAT_FORMAT_YUV444_16 ? "444 10bit" : "8bit";
@@ -1529,8 +1516,8 @@ static void report(struct demo *d)
 			"lowlat | %ux%u %s %s%s%s | asked %s | %s %s %s%s | %u fps | rtt %u/%.0f ms | enc %.1f ms | "
 			"dec %.1f ms | rb %.1f ms | q %u behind %u | skips %u | %.1f/%.1f Mbit/s | "
 			"loss %.2f%% | snd %u ms | rss %" PRIu64 " MB | guest %u%s%s%s%s%s",
-			width, atomic_load(&d->picture_height), codec, colour,
-			atomic_load(&d->picture_full_range) ? " full" : "",
+			width, d->picture_height.load(), codec, colour,
+			d->picture_full_range.load() ? " full" : "",
 			rotation == LOWLAT_ROTATION_90 ? " 90deg"
 				: rotation == LOWLAT_ROTATION_180 ? " 180deg"
 				: rotation == LOWLAT_ROTATION_270 ? " 270deg" : "",
@@ -1541,12 +1528,12 @@ static void report(struct demo *d)
 				: st.backend == LOWLAT_DECODER_SOFTWARE ? "software"
 				: st.backend == LOWLAT_DECODER_SYSTEM ? "system"
 				: "no decoder",
-			atomic_load(&d->picture_kind) == LOWLAT_FRAME_HANDLE ? "handles" : "planes",
+			d->picture_kind.load() == LOWLAT_FRAME_HANDLE ? "handles" : "planes",
 			gfx_name(d->gfx), d->vsync ? "" : " no vsync",
 			pictures, st.rtt_ms, d->host_rtt_ms, (double) st.encode_us / 1000.0,
 			(double) st.decode_us / 1000.0, (double) st.readback_us / 1000.0, st.queue_depth,
 			st.behind, skips, mbit, d->host_mbps, (double) m.video.loss_30s * 100.0,
-			atomic_load(&d->snd_q_ms), rss, st.number, d->owner ? " owner" : "",
+			d->snd_q_ms.load(), rss, st.number, d->owner ? " owner" : "",
 			d->perm_mouse ? " m" : "", d->perm_keyboard ? " k" : "", d->perm_gamepad ? " g" : "",
 			d->behind_warned ? " | CANNOT KEEP UP" : "");
 	} else {
@@ -1590,15 +1577,15 @@ static void dump_once(struct demo *d, const lowlat_frame *f)
 		f->format, (int) f->full_range, path);
 }
 
-static void *present_loop(void *opaque)
+static void *present_loop(void *opaque) noexcept
 {
-	struct demo *d = opaque;
+	struct demo *d = (struct demo *) opaque;
 #if defined(_WIN32)
 	MTY_SetGFXAdapter(d->gfx_adapter);
 #endif
 	if (!MTY_WindowSetGFX(d->app, d->window, d->gfx, d->vsync)) {
 		fprintf(stderr, "demo: no graphics context\n");
-		atomic_store(&d->quit, true);
+		d->quit.store(true);
 		return NULL;
 	}
 	uint32_t refresh = MTY_WindowGetRefreshRate(d->app, d->window);
@@ -1609,11 +1596,11 @@ static void *present_loop(void *opaque)
 	// every shared texture of its own GPU.
 	if (d->handles && !MTY_WindowIsValidHardwareFrame(d->app, d->window, NULL, NULL)) {
 		fprintf(stderr, "demo: this graphics context does not import device handles\n");
-		atomic_store(&d->quit, true);
+		d->quit.store(true);
 		return NULL;
 	}
 #endif
-	while (!atomic_load(&d->quit)) {
+	while (!d->quit.load()) {
 		double t = now_ms();
 		double taken_ms = 0.0;
 		uint64_t arrived_us = 0;
@@ -1631,10 +1618,8 @@ static void *present_loop(void *opaque)
 		// at the cap's cadence.
 		if (d->poll_period_ms <= 0.0 || t - d->last_poll_ms >= d->poll_period_ms * 0.75) {
 			d->last_poll_ms = t;
-			atomic_fetch_add(&d->polls, 1);
-			lowlat_frame fresh;
-			memset(&fresh, 0, sizeof fresh);
-			fresh.size = (uint32_t) sizeof fresh;
+			d->polls.fetch_add(1);
+			lowlat_frame fresh{.size = sizeof(lowlat_frame)};
 			uint32_t wait_ms = d->poll_period_ms > 0.0 ? 0 : 20;
 			lowlat_status s = lowlat_client_acquire_frame(d->client, 0, wait_ms, &fresh);
 			if (s == LOWLAT_OK) {
@@ -1643,7 +1628,7 @@ static void *present_loop(void *opaque)
 				if (d->showing)
 					lowlat_client_release_frame(d->client, &d->shown, NULL);
 				if (d->showing && fresh.sequence > d->last_sequence + 1)
-					atomic_fetch_add(&d->skips, (uint32_t) (fresh.sequence - d->last_sequence - 1));
+					d->skips.fetch_add((uint32_t) (fresh.sequence - d->last_sequence - 1));
 				d->last_sequence = fresh.sequence;
 				d->shown = fresh;
 				d->showing = true;
@@ -1662,20 +1647,20 @@ static void *present_loop(void *opaque)
 						made ? "ok" : "no context there");
 				}
 #endif
-				atomic_store(&d->picture_height, fresh.height);
-				atomic_store(&d->picture_rotation, fresh.rotation);
-				atomic_store(&d->picture_format, fresh.format);
-				atomic_store(&d->picture_kind, fresh.kind);
-				atomic_store(&d->picture_full_range, fresh.full_range);
-				atomic_store(&d->picture_width, fresh.width);
-				atomic_fetch_add(&d->pictures, 1);
+				d->picture_height.store(fresh.height);
+				d->picture_rotation.store(fresh.rotation);
+				d->picture_format.store(fresh.format);
+				d->picture_kind.store(fresh.kind);
+				d->picture_full_range.store(fresh.full_range);
+				d->picture_width.store(fresh.width);
+				d->pictures.fetch_add(1);
 				dump_once(d, &fresh);
 				if (d->ask_fps != 0 && !d->asked) {
 					d->asked = true;
 					ask_rate(d);
 				}
 			} else {
-				atomic_fetch_add(&d->repeats, 1);
+				d->repeats.fetch_add(1);
 				// Between one session and the next the library has nothing
 				// to wait on and answers at once, so the wait is made here
 				// rather than spun.
@@ -1740,7 +1725,7 @@ static void *present_loop(void *opaque)
 				: f->rotation == LOWLAT_ROTATION_270 ? MTY_ROTATION_270 : MTY_ROTATION_NONE;
 			desc.aspectRatio = (float) f->width / (float) f->height;
 			// Fitted to the window, or at its own size when it fits.
-			desc.scale = atomic_load(&d->stretch) ? 0.0f : 1.0f;
+			desc.scale = d->stretch.load() ? 0.0f : 1.0f;
 			// Ten-bit samples arrive in the high bits of sixteen, which is
 			// already the scale a sixteen-bit texture normalises; the
 			// toolkit's multiply is for samples in the low bits, and applied
@@ -1757,19 +1742,19 @@ static void *present_loop(void *opaque)
 			MTY_WindowClear(d->app, d->window, 0.0f, 0.0f, 0.0f, 1.0f);
 		}
 		MTY_WindowPresent(d->app, d->window);
-		atomic_fetch_add(&d->presents, 1);
+		d->presents.fetch_add(1);
 		// A new picture's wait from hand to screen, and how long the one it
 		// replaced stayed up, in refreshes.
 		if (taken_ms > 0.0) {
 			double shown = now_ms();
 			uint32_t swap_us = (uint32_t) ((shown - taken_ms) * 1000.0);
-			atomic_fetch_add(&d->swap_sum_us, swap_us);
-			atomic_fetch_add(&d->swap_count, 1);
-			if (swap_us > atomic_load(&d->swap_max_us))
-				atomic_store(&d->swap_max_us, swap_us);
+			d->swap_sum_us.fetch_add(swap_us);
+			d->swap_count.fetch_add(1);
+			if (swap_us > d->swap_max_us.load())
+				d->swap_max_us.store(swap_us);
 			if (d->shown_at_ms > 0.0) {
 				uint32_t n = (uint32_t) ((shown - d->shown_at_ms) / d->refresh_ms + 0.5);
-				atomic_fetch_add(&d->held[n >= 4 ? 3 : (n > 0 ? n - 1 : 0)], 1);
+				d->held[n >= 4 ? 3 : (n > 0 ? n - 1 : 0)].fetch_add(1);
 			}
 			d->shown_at_ms = shown;
 			// Zero from a library that does not stamp; both clocks are the
@@ -1778,17 +1763,17 @@ static void *present_loop(void *opaque)
 			if (arrived_us != 0 && arrived_ms <= taken_ms) {
 				uint32_t lib_us = (uint32_t) ((taken_ms - arrived_ms) * 1000.0);
 				uint32_t lat_us = (uint32_t) ((shown - arrived_ms) * 1000.0);
-				atomic_fetch_add(&d->lat_sum_us, lat_us);
-				atomic_fetch_add(&d->lat_count, 1);
-				if (lat_us > atomic_load(&d->lat_max_us))
-					atomic_store(&d->lat_max_us, lat_us);
-				atomic_fetch_add(&d->lib_sum_us, lib_us);
-				if (lib_us > atomic_load(&d->lib_max_us))
-					atomic_store(&d->lib_max_us, lib_us);
+				d->lat_sum_us.fetch_add(lat_us);
+				d->lat_count.fetch_add(1);
+				if (lat_us > d->lat_max_us.load())
+					d->lat_max_us.store(lat_us);
+				d->lib_sum_us.fetch_add(lib_us);
+				if (lib_us > d->lib_max_us.load())
+					d->lib_max_us.store(lib_us);
 				if (d->trace_latency)
 					printf("lat: t_ms=%.1f seq=%" PRIu64 " lib_us=%u present_us=%u total_us=%u "
 						"motions=%u\n", shown - d->started_ms, d->last_sequence, lib_us,
-						lat_us - lib_us, lat_us, atomic_load(&d->motions_total));
+						lat_us - lib_us, lat_us, d->motions_total.load());
 			}
 		}
 	}
@@ -1803,15 +1788,15 @@ static void *present_loop(void *opaque)
 // stream keeps time whatever the sleep does; the library cuts them into its
 // own frames. Before a session, and while the host takes no microphone, the
 // samples go nowhere.
-static void *tone_loop(void *opaque)
+static void *tone_loop(void *opaque) noexcept
 {
-	struct demo *d = opaque;
+	struct demo *d = (struct demo *) opaque;
 	static int16_t pcm[4800];
 	const double step = 6.283185307179586 * d->mic_hz / 48000.0;
 	double phase = 0.0;
 	double began = now_ms();
 	uint64_t sent = 0;
-	while (!atomic_load(&d->quit)) {
+	while (!d->quit.load()) {
 		MTY_Sleep(5);
 		uint64_t due = (uint64_t) ((now_ms() - began) * 48.0);
 		if (due <= sent)
@@ -1827,7 +1812,7 @@ static void *tone_loop(void *opaque)
 				phase -= 6.283185307179586;
 		}
 		if (lowlat_client_send_microphone(d->client, pcm, n) == LOWLAT_ERR_MICROPHONE_OFF)
-			atomic_fetch_add(&d->mic_refused, 1);
+			d->mic_refused.fetch_add(1);
 		sent += n;
 	}
 	return NULL;
@@ -1837,11 +1822,11 @@ static void *tone_loop(void *opaque)
 // onto the device. The wait is the library's, long, so the thread costs
 // nothing between packets; without a device it still acquires, so the
 // figures are there on a box with no sound.
-static void *sound_loop(void *opaque)
+static void *sound_loop(void *opaque) noexcept
 {
-	struct demo *d = opaque;
+	struct demo *d = (struct demo *) opaque;
 	static int16_t pcm[8000 * 2];
-	while (!atomic_load(&d->quit)) {
+	while (!d->quit.load()) {
 		uint32_t count = 8000;
 		lowlat_status s = lowlat_client_acquire_audio(d->client, 100, pcm, &count);
 		// Before a session is up, and between one and the next, the library
@@ -1851,9 +1836,7 @@ static void *sound_loop(void *opaque)
 			MTY_Sleep(20);
 		if (s != LOWLAT_OK)
 			continue;
-		lowlat_client_status st;
-		memset(&st, 0, sizeof st);
-		st.size = (uint32_t) sizeof st;
+		lowlat_client_status st{.size = sizeof(lowlat_client_status)};
 		lowlat_client_get_status(d->client, &st);
 		uint32_t queued = 0;
 		if (d->audio != NULL) {
@@ -1871,7 +1854,7 @@ static void *sound_loop(void *opaque)
 			else if (d->audio_playing && queued > 150)
 				reason = "over";
 			if (reason != NULL) {
-				uint32_t n = atomic_fetch_add(&d->snd_resyncs, 1) + 1;
+				uint32_t n = d->snd_resyncs.fetch_add(1) + 1;
 				printf("demo: sound resync t=%.1f n=%u queued_ms=%u age_ms=%u reason=%s\n",
 					(now_ms() - d->started_ms) / 1000.0, n, queued, st.audio_age_ms, reason);
 				fflush(stdout);
@@ -1884,15 +1867,15 @@ static void *sound_loop(void *opaque)
 			}
 			MTY_AudioQueue(d->audio, pcm, count);
 		}
-		atomic_fetch_add(&d->snd_packets, 1);
-		atomic_fetch_add(&d->snd_frames, count);
-		atomic_store(&d->snd_q_ms, queued);
-		if (queued < atomic_load(&d->snd_q_min))
-			atomic_store(&d->snd_q_min, queued);
-		if (queued > atomic_load(&d->snd_q_max))
-			atomic_store(&d->snd_q_max, queued);
-		if (st.audio_age_ms > atomic_load(&d->snd_age_max))
-			atomic_store(&d->snd_age_max, st.audio_age_ms);
+		d->snd_packets.fetch_add(1);
+		d->snd_frames.fetch_add(count);
+		d->snd_q_ms.store(queued);
+		if (queued < d->snd_q_min.load())
+			d->snd_q_min.store(queued);
+		if (queued > d->snd_q_max.load())
+			d->snd_q_max.store(queued);
+		if (st.audio_age_ms > d->snd_age_max.load())
+			d->snd_age_max.store(st.audio_age_ms);
 		if (d->trace_audio)
 			printf("demo: snd t_ms=%.1f frames=%u age_ms=%u queued_ms=%u\n",
 				now_ms() - d->started_ms, count, st.audio_age_ms, queued);
@@ -1923,18 +1906,14 @@ static uint32_t stun_servers(char (*servers)[LOWLAT_SERVER_MAX])
 // first server saw the port, and what the gateway says beside it.
 static void print_nat(lowlat_client *cl)
 {
-	lowlat_nat_probe probe;
-	memset(&probe, 0, sizeof probe);
-	probe.size = (uint32_t) sizeof probe;
+	lowlat_nat_probe probe{.size = sizeof(lowlat_nat_probe)};
 	probe.server_count = stun_servers(probe.servers);
 	lowlat_status s = lowlat_client_probe_nat(cl, &probe);
 	if (s != LOWLAT_OK) {
 		printf("demo: no NAT probe: %s\n", lowlat_status_string(s));
 		return;
 	}
-	lowlat_nat_info nat;
-	memset(&nat, 0, sizeof nat);
-	nat.size = (uint32_t) sizeof nat;
+	lowlat_nat_info nat{.size = sizeof(lowlat_nat_info)};
 	do {
 		MTY_Sleep(50);
 		lowlat_client_get_nat(cl, &nat);
@@ -1961,14 +1940,10 @@ static bool begin_attempt(struct demo *d)
 {
 	const char *peer = d->peers[d->peer_at];
 	attempt_id(d->attempt, sizeof d->attempt);
-	lowlat_credentials ours;
-	memset(&ours, 0, sizeof ours);
-	ours.size = (uint32_t) sizeof ours;
+	lowlat_credentials ours{.size = sizeof(lowlat_credentials)};
 	// The attempt's configuration: the defaults, but for sound asked
 	// uncompressed when the knob says so.
-	lowlat_client_config cfg;
-	memset(&cfg, 0, sizeof cfg);
-	cfg.size = (uint32_t) sizeof cfg;
+	lowlat_client_config cfg{.size = sizeof(lowlat_client_config)};
 	cfg.raw_audio = getenv("LOWLAT_RAW_AUDIO") != NULL;
 	// No media key offered, so the session takes the legacy 128-bit cipher.
 	cfg.legacy_cipher = getenv("LOWLAT_LEGACY_CIPHER") != NULL;
@@ -2020,7 +1995,7 @@ static bool next_peer(struct demo *d)
 	d->last_video_bytes = 0;
 	// Told again once the next session's first picture is in, whatever its
 	// size.
-	atomic_store(&d->picture_width, 0);
+	d->picture_width.store(0);
 	memset(d->viewport, 0, sizeof d->viewport);
 	if (d->relative) {
 		d->relative = false;
@@ -2048,9 +2023,9 @@ static bool next_peer(struct demo *d)
 
 // The main thread: the toolkit's events, the two pumps, the pads, the
 // rectangle and the figures, at the toolkit's own cadence.
-static bool app_func(void *opaque)
+static bool app_func(void *opaque) noexcept
 {
-	struct demo *d = opaque;
+	struct demo *d = (struct demo *) opaque;
 	pump_signaling(d);
 	pump_library(d);
 	double t = now_ms();
@@ -2059,14 +2034,14 @@ static bool app_func(void *opaque)
 			printf("demo: leaving %s after %" PRIu64 " s, for %s\n", d->peers[d->peer_at],
 				d->seconds, d->peers[d->peer_at + 1]);
 			if (!next_peer(d))
-				atomic_store(&d->quit, true);
+				d->quit.store(true);
 			d->leave_at_ms = now_ms() + d->stay_ms;
 		} else {
 			printf("demo: leaving after %" PRIu64 " s\n", d->seconds);
-			atomic_store(&d->quit, true);
+			d->quit.store(true);
 		}
 	}
-	if (atomic_load(&d->quit))
+	if (d->quit.load())
 		return false;
 	if (d->raw_on) {
 		raw_pads_scan(&d->raw, d->client, t, d->established);
@@ -2131,8 +2106,7 @@ int main(void)
 	MTY_SetLogFunc(toolkit_line, NULL);
 	lowlat_set_log_level(LOWLAT_LOG_INFO);
 
-	struct demo d;
-	memset(&d, 0, sizeof d);
+	struct demo d{};
 	// One peer, or several separated by commas: visited in order on the one
 	// handle, each for LOWLAT_SECONDS, which a list therefore needs.
 	for (const char *at = peer; *at != '\0' && d.peer_count < sizeof d.peers / sizeof d.peers[0];) {
@@ -2153,7 +2127,7 @@ int main(void)
 	d.decoder_every = decoder_every;
 	d.kind_every = kind_every;
 	d.poll_period_ms = present_hz > 0 ? 1000.0 / (double) present_hz : 0.0;
-	atomic_store(&d.stretch, true);
+	d.stretch.store(true);
 	d.trace_pads = getenv("LOWLAT_PAD_TRACE") != NULL;
 	d.trace_latency = getenv("LOWLAT_LATENCY_TRACE") != NULL;
 	d.trace_audio = getenv("LOWLAT_AUDIO_TRACE") != NULL;
@@ -2171,11 +2145,9 @@ int main(void)
 	}
 #endif
 	raw_pads_init(&d.raw, d.trace_pads);
-	atomic_store(&d.snd_q_min, UINT32_MAX);
+	d.snd_q_min.store(UINT32_MAX);
 
-	lowlat_client_create_info info;
-	memset(&info, 0, sizeof info);
-	info.size = (uint32_t) sizeof info;
+	lowlat_client_create_info info{.size = sizeof(lowlat_client_create_info)};
 	info.decoder = strcmp(decoder, "none") == 0 ? LOWLAT_DECODER_NONE
 		: strcmp(decoder, "open") == 0 ? LOWLAT_DECODER_OPEN
 		: strcmp(decoder, "vendor") == 0 ? LOWLAT_DECODER_VENDOR
@@ -2231,9 +2203,7 @@ int main(void)
 	// What this machine can open, one row each; a row picked by number
 	// names the decoder and the device for creation.
 	const char *pick = getenv("LOWLAT_DECODER_INDEX");
-	lowlat_decoder_info row;
-	memset(&row, 0, sizeof row);
-	row.size = (uint32_t) sizeof row;
+	lowlat_decoder_info row{.size = sizeof(lowlat_decoder_info)};
 	// The table is fixed and every slot answers; the rows kept are the
 	// available ones, the rest printed with their reason and passed over.
 	for (uint32_t i = 0; lowlat_enum_decoders(i, &row); i++) {
@@ -2266,9 +2236,7 @@ int main(void)
 	if (pick == NULL) {
 		// Which row creation settled on, so the chord moves from it: the
 		// backend as status reports it, on the device named if one was.
-		lowlat_client_status st;
-		memset(&st, 0, sizeof st);
-		st.size = (uint32_t) sizeof st;
+		lowlat_client_status st{.size = sizeof(lowlat_client_status)};
 		lowlat_client_get_status(d.client, &st);
 		for (unsigned i = 0; i < d.row_count; i++) {
 			if (d.rows[i].decoder == st.backend
@@ -2293,7 +2261,7 @@ int main(void)
 	if (!begin_attempt(&d))
 		return 1;
 
-	d.app = MTY_AppCreate(0, app_func, event_func, &d);
+	d.app = MTY_AppCreate((MTY_AppFlag) 0, app_func, event_func, &d);
 	if (d.app == NULL) {
 		fprintf(stderr, "demo: no app\n");
 		return 1;
@@ -2332,7 +2300,7 @@ int main(void)
 
 	MTY_AppRun(d.app);
 
-	atomic_store(&d.quit, true);
+	d.quit.store(true);
 	MTY_ThreadDestroy(&d.presenter);
 	MTY_ThreadDestroy(&d.listener);
 	if (d.mic != NULL)

@@ -44,11 +44,11 @@ struct feature {
 static void features_of(uint32_t type, bool wireless, struct feature out[2])
 {
 	if (type == LOWLAT_PAD_TYPE_DS4) {
-		out[0] = (struct feature) {wireless ? 0x05 : 0x02, wireless ? 41 : 37};
-		out[1] = (struct feature) {0xA3, 49};
+		out[0] = feature{(uint8_t) (wireless ? 0x05 : 0x02), wireless ? 41u : 37u};
+		out[1] = feature{0xA3, 49};
 	} else {
-		out[0] = (struct feature) {0x05, 41};
-		out[1] = (struct feature) {0x20, 64};
+		out[0] = feature{0x05, 41};
+		out[1] = feature{0x20, 64};
 	}
 }
 
@@ -183,7 +183,7 @@ void raw_pads_scan(struct raw_pads *r, lowlat_client *client, double now_ms, boo
 			said = true;
 			continue;
 		}
-		*slot = (struct raw_pad) {
+		*slot = raw_pad{
 			.fd = fd,
 			.node = node,
 			.id = ID_BASE + node,

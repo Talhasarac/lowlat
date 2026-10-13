@@ -1,4 +1,4 @@
-# The client demo on Windows: the C example on the application toolkit, built
+# The client demo on Windows: the C++ example on the application toolkit, built
 # with Visual Studio's own tools from its x64 developer environment. The GNU
 # build is GNUmakefile beside this one.
 #
@@ -9,8 +9,8 @@
 # needs its shader compiler (glslangValidator) on the path; the library is the
 # SDK crate's release build; the demo links the two. The library's DLL is
 # copied beside the demo, the first place the system's loader looks. The C
-# runtime is linked statically in every build, as the library links it, so
-# nothing asks the machine for a redistributable.
+# and C++ runtimes are linked statically in every build, as the library links
+# its own, so nothing asks the machine for a redistributable.
 #
 # LOWLAT_LIB names a directory holding a built lowlat.dll and its import
 # library, lowlat.dll.lib, instead: no library is built, and the DLL is copied
@@ -29,11 +29,12 @@ LIBDIR = $(LOWLAT_LIB)
 LIBDEP =
 !ENDIF
 
-# C17 with the standard's atomics, which this compiler still calls
-# experimental; its advice against the standard library's string and file
-# calls is declined, as the toolkit's own build declines it.
-CFLAGS = /nologo /std:c17 /experimental:c11atomics /O2 /MT /W4 /wd4100 \
-	/D_CRT_SECURE_NO_WARNINGS /I$(ROOT)\include /I$(MATOYA)\src
+# C++20, its warnings errors in the demo's own code. The toolkit's header is C
+# and stays outside them, since C++ calls what C allows there an extension; the
+# compiler's advice against the standard library's string and file calls is
+# declined, as the toolkit's own build declines it.
+CXXFLAGS = /nologo /std:c++20 /EHsc /O2 /MT /W4 /WX /wd4100 \
+	/D_CRT_SECURE_NO_WARNINGS /I$(ROOT)\include /external:I$(MATOYA)\src /external:W0
 
 # What the toolkit calls into on this platform.
 SYSTEM = user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib \
@@ -42,12 +43,12 @@ SYSTEM = user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib \
 	imm32.lib hid.lib dxgi.lib d3d11.lib d3d12.lib d3dcompiler.lib dxguid.lib \
 	dwmapi.lib dwrite.lib propsys.lib shcore.lib xinput.lib windowscodecs.lib
 
-SOURCES = main.c signaling.c pads.c
+SOURCES = main.cc signaling.cc pads.cc
 
 all: client.exe lowlat.dll
 
 client.exe: $(SOURCES) signaling.h pads.h keys.h $(MATOYA_LIB) $(LIBDEP)
-	cl $(CFLAGS) /Fe$@ $(SOURCES) /link $(MATOYA_LIB) $(LIBDIR)\lowlat.dll.lib $(SYSTEM)
+	cl $(CXXFLAGS) /Fe$@ $(SOURCES) /link $(MATOYA_LIB) $(LIBDIR)\lowlat.dll.lib $(SYSTEM)
 
 lowlat.dll: $(LIBDEP)
 	copy /y $(LIBDIR)\lowlat.dll .

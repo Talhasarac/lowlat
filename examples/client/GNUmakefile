@@ -1,4 +1,4 @@
-# The client demo: the C example on the application toolkit.
+# The client demo: the C++ example on the application toolkit.
 #
 #   make            builds the toolkit, the library and the demo
 #   make run        runs it; LOWLAT_PEER and LOWLAT_SESSION must be set
@@ -26,18 +26,25 @@ LIBDEP  :=
 RPATH   := '$$ORIGIN/../lib'
 endif
 
+# g++ counts the members a designated initializer leaves out, which C++ zeroes
+# by definition: the library's structs are set up by their size alone.
+CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
+           -I$(ROOT)/include -I$(MATOYA)/src
+# The one-off probes below are C.
 CFLAGS  := -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wno-unused-parameter \
            -I$(ROOT)/include -I$(MATOYA)/src
 LIBS    := $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a \
            -L$(LIBDIR) -llowlat -Wl,-rpath,$(RPATH) \
            -lc -ldl -lpthread -lm
 
-SOURCES := main.c signaling.c pads.c
+SOURCES := main.cc signaling.cc pads.cc
 
 all: client
 
+# The C++ runtime is linked in, so a packaged demo needs no particular one on
+# the machine it lands on.
 client: $(SOURCES) signaling.h pads.h keys.h $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a $(LIBDEP)
-	$(CC) $(CFLAGS) -o $@ $(SOURCES) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LIBS) -static-libstdc++
 
 $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a:
 	TERM=xterm $(MAKE) -C $(MATOYA)
