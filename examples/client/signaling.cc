@@ -10,8 +10,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "matoya.h"
+
+namespace signaling {
+
+// The attempt's socket, and who and what it is for.
+static MTY_WebSocket *_ws;
+static char _peer[64];
+static char _attempt[LOWLAT_ATTEMPT_MAX];
+
 // Every message's `versions` block: what a peer of this generation says.
-static MTY_JSON *versions(void)
+static MTY_JSON *versions()
 {
 	MTY_JSON *v = MTY_JSONObjCreate();
 	MTY_JSONObjSetInt(v, "p2p", 1);
@@ -23,11 +32,11 @@ static MTY_JSON *versions(void)
 	return v;
 }
 
-static bool send_message(struct signaling *sig, const char *action, MTY_JSON *payload)
+static bool send_message(const char *action, MTY_JSON *payload)
 {
 	// Closed once the path is up: what the library still raises after that
 	// has nowhere to go and needs nowhere.
-	if (sig->ws == NULL) {
+	if (_ws == NULL) {
 		MTY_JSONDestroy(&payload);
 		return false;
 	}
@@ -36,7 +45,7 @@ static bool send_message(struct signaling *sig, const char *action, MTY_JSON *pa
 	MTY_JSONObjSetString(message, "action", action);
 	MTY_JSONObjSetItem(message, "payload", payload);
 	char *text = MTY_JSONSerialize(message);
-	bool ok = text != NULL && MTY_WebSocketWrite(sig->ws, text);
+	bool ok = text != NULL && MTY_WebSocketWrite(_ws, text);
 	MTY_Free(text);
 	MTY_JSONDestroy(&message);
 	if (!ok)
@@ -44,12 +53,11 @@ static bool send_message(struct signaling *sig, const char *action, MTY_JSON *pa
 	return ok;
 }
 
-bool signaling_connect(struct signaling *sig, const char *server, const char *session,
-	const char *peer, const char *attempt)
+bool connect(const char *server, const char *session, const char *peer, const char *attempt)
 {
-	memset(sig, 0, sizeof *sig);
-	snprintf(sig->peer, sizeof sig->peer, "%s", peer);
-	snprintf(sig->attempt, sizeof sig->attempt, "%s", attempt);
+	_ws = NULL;
+	snprintf(_peer, sizeof _peer, "%s", peer);
+	snprintf(_attempt, sizeof _attempt, "%s", attempt);
 
 	// No slash before the query: the toolkit's own URL parser carries one
 	// into the Host header, and the edge answers 400 to that.
@@ -59,8 +67,8 @@ bool signaling_connect(struct signaling *sig, const char *server, const char *se
 		server, session);
 
 	uint16_t status = 0;
-	sig->ws = MTY_WebSocketConnect(url, NULL, NULL, 10000, &status);
-	if (sig->ws == NULL) {
+	_ws = MTY_WebSocketConnect(url, NULL, NULL, 10000, &status);
+	if (_ws == NULL) {
 		fprintf(stderr, "signaling: the service refused the socket, upgrade status %u\n",
 			(unsigned) status);
 		return false;
@@ -68,20 +76,20 @@ bool signaling_connect(struct signaling *sig, const char *server, const char *se
 	return true;
 }
 
-void signaling_close(struct signaling *sig, bool cancel)
+void close(bool cancel)
 {
-	if (sig->ws != NULL) {
+	if (_ws != NULL) {
 		if (cancel) {
 			MTY_JSON *payload = MTY_JSONObjCreate();
-			MTY_JSONObjSetString(payload, "to", sig->peer);
-			MTY_JSONObjSetString(payload, "attempt_id", sig->attempt);
-			send_message(sig, "offer_cancel", payload);
+			MTY_JSONObjSetString(payload, "to", _peer);
+			MTY_JSONObjSetString(payload, "attempt_id", _attempt);
+			send_message("offer_cancel", payload);
 		}
-		MTY_WebSocketDestroy(&sig->ws);
+		MTY_WebSocketDestroy(&_ws);
 	}
 }
 
-bool signaling_offer(struct signaling *sig, const lowlat_credentials *ours)
+bool offer(const lowlat_credentials *ours)
 {
 	MTY_JSON *creds = MTY_JSONObjCreate();
 	MTY_JSONObjSetString(creds, "ice_ufrag", ours->ufrag);
@@ -101,15 +109,14 @@ bool signaling_offer(struct signaling *sig, const lowlat_credentials *ours)
 	MTY_JSONObjSetItem(data, "versions", versions());
 
 	MTY_JSON *payload = MTY_JSONObjCreate();
-	MTY_JSONObjSetString(payload, "to", sig->peer);
-	MTY_JSONObjSetString(payload, "attempt_id", sig->attempt);
+	MTY_JSONObjSetString(payload, "to", _peer);
+	MTY_JSONObjSetString(payload, "attempt_id", _attempt);
 	MTY_JSONObjSetString(payload, "secret", "");
 	MTY_JSONObjSetItem(payload, "data", data);
-	return send_message(sig, "offer", payload);
+	return send_message("offer", payload);
 }
 
-bool signaling_candidate(struct signaling *sig, const char *address, uint16_t port, bool lan,
-	bool from_stun, bool sync)
+bool send_candidate(const char *address, uint16_t port, bool lan, bool from_stun, bool sync)
 {
 	MTY_JSON *data = MTY_JSONObjCreate();
 	MTY_JSONObjSetInt(data, "ver_data", 1);
@@ -121,26 +128,25 @@ bool signaling_candidate(struct signaling *sig, const char *address, uint16_t po
 	MTY_JSONObjSetBool(data, "sync", sync);
 
 	MTY_JSON *payload = MTY_JSONObjCreate();
-	MTY_JSONObjSetString(payload, "to", sig->peer);
-	MTY_JSONObjSetString(payload, "attempt_id", sig->attempt);
+	MTY_JSONObjSetString(payload, "to", _peer);
+	MTY_JSONObjSetString(payload, "attempt_id", _attempt);
 	MTY_JSONObjSetItem(payload, "data", data);
-	return send_message(sig, "candex", payload);
+	return send_message("candex", payload);
 }
 
-enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
-	lowlat_credentials *theirs, lowlat_candidate *candidate)
+Event poll(uint32_t timeout_ms, lowlat_credentials *theirs, lowlat_candidate *candidate)
 {
-	if (sig->ws == NULL)
-		return SIGNALING_CLOSED;
+	if (_ws == NULL)
+		return Event::closed;
 
 	char text[16 * 1024];
-	MTY_Async r = MTY_WebSocketRead(sig->ws, timeout_ms, text, sizeof text);
+	MTY_Async r = MTY_WebSocketRead(_ws, timeout_ms, text, sizeof text);
 	if (r == MTY_ASYNC_CONTINUE)
-		return SIGNALING_NOTHING;
+		return Event::nothing;
 	if (r != MTY_ASYNC_OK) {
 		fprintf(stderr, "signaling: the socket ended, close code %u\n",
-			(unsigned) MTY_WebSocketGetCloseCode(sig->ws));
-		return SIGNALING_CLOSED;
+			(unsigned) MTY_WebSocketGetCloseCode(_ws));
+		return Event::closed;
 	}
 
 	MTY_JSON *message = MTY_JSONParse(text);
@@ -148,20 +154,20 @@ enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
 		// The toolkit names where the parse stopped; the length says whether
 		// that was the end of a message cut short.
 		fprintf(stderr, "signaling: a message did not parse, bytes=%zu\n", strlen(text));
-		return SIGNALING_NOTHING;
+		return Event::nothing;
 	}
-	enum signaling_event event = SIGNALING_NOTHING;
+	Event event = Event::nothing;
 	const char *action = MTY_JSONObjGetStringPtr(message, "action");
 	const MTY_JSON *payload = MTY_JSONObjGetItem(message, "payload");
 	const char *attempt = payload ? MTY_JSONObjGetStringPtr(payload, "attempt_id") : NULL;
-	bool ours = attempt != NULL && strcmp(attempt, sig->attempt) == 0;
+	bool ours = attempt != NULL && strcmp(attempt, _attempt) == 0;
 
 	if (action != NULL && strcmp(action, "answer_relay") == 0 && ours) {
 		bool approved = false;
 		MTY_JSONObjGetBool(payload, "approved", &approved);
 		if (!approved) {
 			fprintf(stderr, "signaling: the host declined\n");
-			event = SIGNALING_CLOSED;
+			event = Event::closed;
 		} else {
 			const MTY_JSON *data = MTY_JSONObjGetItem(payload, "data");
 			const MTY_JSON *creds = data ? MTY_JSONObjGetItem(data, "creds") : NULL;
@@ -172,7 +178,7 @@ enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
 				MTY_JSONObjGetString(creds, "fingerprint", theirs->fingerprint,
 					sizeof theirs->fingerprint);
 				MTY_JSONObjGetString(creds, "aes256", theirs->aes256, sizeof theirs->aes256);
-				event = SIGNALING_ANSWER;
+				event = Event::answer;
 			}
 		}
 
@@ -187,16 +193,18 @@ enum signaling_event signaling_poll(struct signaling *sig, uint32_t timeout_ms,
 			MTY_JSONObjGetBool(data, "lan", &candidate->lan);
 			MTY_JSONObjGetBool(data, "from_stun", &candidate->reflexive);
 			MTY_JSONObjGetBool(data, "sync", &candidate->sync);
-			event = SIGNALING_CANDIDATE;
+			event = Event::candidate;
 		}
 
 	} else if (action != NULL && strcmp(action, "close") == 0) {
 		const char *reason = payload ? MTY_JSONObjGetStringPtr(payload, "reason") : NULL;
 		fprintf(stderr, "signaling: the service closed the attempt: %s\n",
 			reason ? reason : "no reason");
-		event = SIGNALING_CLOSED;
+		event = Event::closed;
 	}
 
 	MTY_JSONDestroy(&message);
 	return event;
+}
+
 }

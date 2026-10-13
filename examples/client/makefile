@@ -43,11 +43,14 @@ SYSTEM = user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib \
 	imm32.lib hid.lib dxgi.lib d3d11.lib d3d12.lib d3dcompiler.lib dxguid.lib \
 	dwmapi.lib dwrite.lib propsys.lib shcore.lib xinput.lib windowscodecs.lib
 
-SOURCES = main.cc signaling.cc pads.cc
+SOURCES = main.cc app.cc clocks.cc config.cc input.cc logs.cc pads.cc present.cc report.cc \
+	session.cc signaling.cc sound.cc view.cc
+HEADERS = app.h clocks.h config.h input.h keys.h logs.h pads.h present.h report.h session.h \
+	signaling.h sound.h view.h
 
 all: client.exe lowlat.dll
 
-client.exe: $(SOURCES) signaling.h pads.h keys.h $(MATOYA_LIB) $(LIBDEP)
+client.exe: $(SOURCES) $(HEADERS) $(MATOYA_LIB) $(LIBDEP)
 	cl $(CXXFLAGS) /Fe$@ $(SOURCES) /link $(MATOYA_LIB) $(LIBDIR)\lowlat.dll.lib $(SYSTEM)
 
 lowlat.dll: $(LIBDEP)
@@ -63,6 +66,6 @@ run: all
 	client.exe
 
 clean:
-	-del /q client.exe main.obj signaling.obj pads.obj lowlat.dll 2>nul
+	-del /q client.exe $(SOURCES:.cc=.obj) lowlat.dll 2>nul
 
 FORCE:

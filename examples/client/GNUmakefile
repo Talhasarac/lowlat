@@ -37,13 +37,16 @@ LIBS    := $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a \
            -L$(LIBDIR) -llowlat -Wl,-rpath,$(RPATH) \
            -lc -ldl -lpthread -lm
 
-SOURCES := main.cc signaling.cc pads.cc
+SOURCES := main.cc app.cc clocks.cc config.cc input.cc logs.cc pads.cc present.cc report.cc \
+           session.cc signaling.cc sound.cc view.cc
+HEADERS := app.h clocks.h config.h input.h keys.h logs.h pads.h present.h report.h session.h \
+           signaling.h sound.h view.h
 
 all: client
 
 # The C++ runtime is linked in, so a packaged demo needs no particular one on
 # the machine it lands on.
-client: $(SOURCES) signaling.h pads.h keys.h $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a $(LIBDEP)
+client: $(SOURCES) $(HEADERS) $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a $(LIBDEP)
 	$(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LIBS) -static-libstdc++
 
 $(MATOYA)/bin/linux/$(ARCH)/libmatoya.a:
