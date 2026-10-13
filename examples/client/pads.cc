@@ -34,9 +34,8 @@ struct raw_pad {
 };
 
 static raw_pad _raw[RAW_PADS];
-// When the nodes were last looked for, and the second's counts: input
-// reports sent, and the host's writes put on the nodes.
-static double _scanned_ms;
+// The second's counts: input reports sent, and the host's writes put on the
+// nodes.
 static uint32_t _raw_reports;
 static uint32_t _raw_outputs;
 
@@ -62,6 +61,9 @@ static void raw_init()
 // those sit.
 #define ID_BASE 200
 #define SCAN_EVERY_MS 1000.0
+
+// When the nodes were last looked for.
+static double _scanned_ms;
 
 // The raw node's feature-report reads and writes.
 #define HIDIOCGFEATURE(len) _IOC(_IOC_WRITE | _IOC_READ, 'H', 0x07, len)

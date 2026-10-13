@@ -1,0 +1,42 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "win-x64-debug",
+            "displayName": "Windows x64 Debug",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "architecture": { "value": "x64", "strategy": "external" },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_COMPILER": "cl"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "win-x64-release",
+            "displayName": "Windows x64 Release",
+            "inherits": "win-x64-debug",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "win-x64-clang-debug",
+            "displayName": "Windows x64 Debug (clang-cl)",
+            "inherits": "win-x64-debug",
+            "cacheVariables": { "CMAKE_CXX_COMPILER": "clang-cl" }
+        },
+        {
+            "name": "win-x64-clang-release",
+            "displayName": "Windows x64 Release (clang-cl)",
+            "inherits": "win-x64-clang-debug",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        }
+    ],
+    "buildPresets": [
+        { "name": "win-x64-debug", "configurePreset": "win-x64-debug" },
+        { "name": "win-x64-release", "configurePreset": "win-x64-release" },
+        { "name": "win-x64-clang-debug", "configurePreset": "win-x64-clang-debug" },
+        { "name": "win-x64-clang-release", "configurePreset": "win-x64-clang-release" }
+    ]
+}

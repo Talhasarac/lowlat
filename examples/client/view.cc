@@ -35,7 +35,6 @@ static uint32_t _cursor_width;
 static uint32_t _cursor_height;
 static uint32_t _cursor_hot_x;
 static uint32_t _cursor_hot_y;
-static uint32_t _cursor_checksum;
 static uint32_t _cursor_target_w;
 static uint32_t _cursor_target_h;
 static bool _cursor_suppressed;
@@ -175,7 +174,6 @@ void cursor(const lowlat_cursor_event *c)
 		_cursor_height = c->height;
 		_cursor_hot_x = c->hot_x;
 		_cursor_hot_y = c->hot_y;
-		_cursor_checksum = c->checksum;
 		_cursor_target_w = 0;
 		_cursor_target_h = 0;
 	}
