@@ -1,21 +1,26 @@
 # The client demo
 
 A window that shows a host's desktop: the library decodes, this presents.
-C++20 on the application toolkit (`third_party/matoya`), a file per part, each
-holding its own state: the session, the signaling service, which the library
-does not speak ([docs/06-api.md](../../docs/06-api.md) section 4), the
-presenting thread, the window's picture and pointer, keyboard and mouse, pads,
-sound, and the line each second. The knobs are listed in `config.h`.
+C++20 on the application toolkit (`third_party/matoya`), with SDL for the pads
+and the sound, a file per part, each holding its own state: the session, the
+signaling service, which the library does not speak
+([docs/06-api.md](../../docs/06-api.md) section 4), the presenting thread, the
+window's picture and pointer, keyboard and mouse, pads, sound, and the line
+each second. The knobs are listed in `config.h`.
 
     make
     LOWLAT_PEER=<the host's peer id> LOWLAT_SESSION=<a session token> make run
 
 `make` builds the toolkit from its tree, the library in release, and the demo;
 the toolkit's build needs the shader compiler and the ALSA, PNG and JPEG
-headers, and the demo's a C++20 compiler. `make LOWLAT_LIB=<dir>` links a
-library already built there instead, with a run path of `../lib` relative to
-the binary, which is how the build workflow packages the demo beside the
-client-only library. The demo's first line names the library it loaded, its
+headers, and the demo's a C++20 compiler and SDL 3, which `pkg-config` finds:
+the system's (3.2 or later), or where the system has none the static one
+`scripts/build-sdl3.sh` builds from SDL's release, which is how the build
+workflows link it, so the packaged demo needs no SDL on the machine it lands
+on (`PKG_CONFIG_PATH=<prefix>/lib/pkgconfig make`). `make LOWLAT_LIB=<dir>`
+links a library already built there instead, with a run path of `../lib`
+relative to the binary, which is how the build workflow packages the demo
+beside the client-only library. The demo's first line names the library it loaded, its
 version and its halves. `make check` runs the toolkit's websocket reader,
 which the signaling reads through, against a loopback server that sends
 messages in fragments; it needs no library and no network.
@@ -36,16 +41,18 @@ or with Visual Studio's own compiler from its x64 developer environment
 static build, which cargo is asked for on every build and remakes only when a
 crate changed (`-DLOWLAT_LIB=<file>` names one built elsewhere), so
 `client.exe` is the one file; a release build optimises the demo's own code
-across its files at the link. The toolkit is built once, when it has not been,
-through its own makefile, which needs the developer environment, with `fxc`
+across its files at the link. SDL comes from vcpkg, static, at the version
+`vcpkg.json` names: the presets take vcpkg's toolchain from `VCPKG_ROOT`, and
+a build directory's first configure installs SDL into it. The toolkit is
+built once, when it has not been, through its own makefile, which needs the
+developer environment, with `fxc`
 (the Windows SDK's) and `glslangValidator` (Khronos' shader compiler) on the
 path. The C and C++ runtimes are linked statically throughout. The library
 there carries the client half; for its software decoder `LOWLAT_FFMPEG_DIR`
 names the directory of an LGPL FFmpeg build's DLLs, or the pair sits beside
 `client.exe`. Pictures are drawn as planes through Direct3D 11, or 12 or
 Vulkan with `LOWLAT_GFX=d3d12` or `vk`. The first run asks the firewall to let
-the demo receive, since the session arrives over UDP. `LOWLAT_PAD_RAW` is
-Linux's.
+the demo receive, since the session arrives over UDP.
 
 The token is what `lowlat-login` produces; the peer id is the host's, as its
 service prints it. `LOWLAT_DEVICE` names a render node for the decoder (the
@@ -87,8 +94,8 @@ credential, or lets the allocation go ends the session with its own outcome.
 `LOWLAT_LEGACY_CIPHER` offers no media key, so the host answers for the
 legacy 128-bit cipher, keyed from its certificate digest, as an older client
 would. `LOWLAT_MIC_TONE=440` sends a tone at that pitch as the microphone,
-since the toolkit captures no sound: a few milliseconds at a time from a thread
-of its own, as a device would hand them over, compressed unless
+since the demo opens no recording device: a few milliseconds at a time from a
+thread of its own, as a device would hand them over, compressed unless
 `LOWLAT_RAW_AUDIO` declared uncompressed sound. The line each second carries
 what went (`mic`, `mic_dropped`), the host's answer (`mic_open`) and the calls
 it refused (`mic_refused`), and the host's change of answer is printed when it
@@ -99,19 +106,19 @@ toolkit's renderer imports and draws with nothing copied through this
 process; only a decoder whose row says "handles" opens that way.
 
 `LOWLAT_PAD_RAW` sends a DualShock 4 or a DualSense as its own report
-([docs/10-client.md](../../docs/10-client.md) section 8): the demo reads the
-pad's raw node itself, feature reports first, and puts what the host's device
-is written back on it; the toolkit's events for those pads are dropped
-meanwhile. Off, they go as the sixteen-button pad every host takes. An
-established host reads the report only in a mode its owner set, and this
-library's hosts read it as it is, so which peer is on the other end is the
-application's to know: this one is told. `LOWLAT_PAD_RAW=only` drops every
-controller the toolkit reports as well. On the host's own machine the
-virtual pads the host makes are controllers to the toolkit and would go back
-as states, making more of them; the demo tells them by the location the
-host writes on them and never sends them (a real pad of the same identity
-on that machine is kept out with them, since the toolkit names a controller
-by identity alone). `LOWLAT_PAD_TRACE` prints every report either way.
+([docs/10-client.md](../../docs/10-client.md) section 8), on every platform:
+the demo reads the pad through SDL's HID layer, its feature reports first in
+each session, and puts what the host's device is written back on it. Such a
+pad is never opened as a gamepad, since SDL writes its own lights on a pad it
+opens, so nothing but the host writes it. Off, they go as the sixteen-button
+pad every host takes. An established host reads the report only in a mode its
+owner set, and this library's hosts read it as it is, so which peer is on the
+other end is the application's to know: this one is told.
+`LOWLAT_PAD_RAW=only` leaves every other pad unsent as well. On the host's own
+machine the virtual pads the host makes are pads to SDL and would go back as
+states, making more of them; the demo tells them by the location the host
+writes on them and never sends them. `LOWLAT_PAD_TRACE` prints every report
+and state either way.
 
 Three more are for measuring rather than watching. `LOWLAT_FPS` asks the
 host for that frame rate through the application protocol once the first
@@ -133,8 +140,8 @@ rate, and the process's resident set. The same figures go in the window's
 title bar. Nothing is judged; the figures are what the deferred decisions of
 [docs/10-client.md](../../docs/10-client.md) are decided on.
 
-Keyboard, mouse and pads go to the host as the toolkit reports them; the
-rectangle the picture is drawn into is told to the library, which maps
+Keyboard and mouse go to the host as the toolkit reports them, pads as SDL
+does; the rectangle the picture is drawn into is told to the library, which maps
 positions into the picture, so a resized window or a picture shown at its
 own size aims the same. When the host captures the pointer the demo confines
 and hides its own, and warps it back where the host says on the way out.
@@ -152,15 +159,14 @@ grabbed, because the desktop here takes it and the host would be left
 holding the modifier; it reaches the host on chords, and whole once grabbed.
 
 The key table `keys.h` is generated by `scripts/gen-client-keys.py` from the
-toolkit's own Linux key map and the kernel's usage table. **An Xbox pad's X
-and Y are read back by letter**: the kernel's Xbox driver names the two upper
-face buttons by letter where the PlayStation driver names them by position,
-and the two namings are each other crossed; the toolkit reads every pad by
-position, so the demo looks up the pad's driver in sysfs and crosses the two
-bits back for a pad the Xbox driver holds. The toolkit's controller events
-arrive only while the window is in front (its rule on every platform), which
-is why a pad it reads goes quiet when the window is not, while a pad read
-raw keeps reporting -- the same split an established client has between its
-mapped pads and its raw ones.
+toolkit's own Linux key map and the kernel's usage table. The pads are SDL's,
+whose mappings name every pad's buttons by position, and the toolkit is told
+to leave them alone. A pad's state goes to the host only while the window is in
+front, as the keys and the mouse do, and what it holds goes when the window
+comes back, while a pad read raw keeps reporting -- the same split an
+established client has between its mapped pads and its raw ones. Sound plays
+through SDL on the default output, which waits until 75 ms are queued and is
+emptied past 150; the line's `snd_q_ms` is what the stream holds ahead of the
+device.
 
 Sound and the cursor come with their phases.

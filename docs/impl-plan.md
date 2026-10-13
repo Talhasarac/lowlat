@@ -1919,7 +1919,8 @@ day**, 14.0 to 14.3, the client half (C7) gated first against an established hos
    once and nothing crossed. The run found two client-side faults on the way, both fixed in
    the demo: the Xbox pad's X and Y crossed (the toolkit reads the kernel's letter-named
    codes as positions), and a loopback loop in which the demo relayed the host's own virtual
-   Xbox pads back as new pads up to the cap.*
+   Xbox pads back as new pads up to the cap.* *(2026-10-13: the demo reads its pads through
+   SDL now, whose mappings name the buttons by position on every pad.)*
 
 **Ahead of the gate, on this machine (2026-09-20):** the loopback -- the demo's raw pads to a
 by-hand host -- presented both pads, registered the virtual DualSense with the real pad's

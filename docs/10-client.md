@@ -1233,9 +1233,12 @@ else is the library's:
   report for both products, so the motion sensors of either reach it, on the device it
   presents or through the application's sink alike ([05 §7.2](05-host.md)).
 
-The toolkit the demo is built on has no HID path on Linux, so the demo reads the pad's raw
-node itself beside the toolkit's controller events and drops those events for the pads it
-reads raw; nothing in the toolkit is patched.
+The demo reads its pads through SDL (*2026-10-13*; until then through its toolkit, which has
+no HID path on Linux, and a raw node it opened itself): SDL's gamepads give the states, and a
+pad sent as reports is read through SDL's HID layer, on every platform, and never opened as a
+gamepad, since SDL writes its own lights on a pad it opens. The toolkit is told to leave
+controllers alone: on Windows it would otherwise write a lightbar of its own on a PlayStation
+pad's first report.
 
 **Relative mode is the host's to announce and the client's to enter.** The cursor message
 carries it in either of two bits; on the transition the library raises an event and the

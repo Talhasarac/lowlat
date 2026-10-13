@@ -885,7 +885,8 @@ once, here and under Phase 14; the rules are [10 §8](10-client.md), the wire
   is explicit (`LOWLAT_PAD_RAW`) rather than defaulted from the peer; the policy is still
   the application's. And one addition the same-machine rig needed: `only`, which also drops
   the toolkit's controllers, since the pads the host makes from these reports are
-  controllers to a toolkit on the host's own machine.*
+  controllers to a toolkit on the host's own machine.* *(2026-10-13: the demo reads its pads
+  through SDL now, on every platform -- [impl-plan-windows.md](impl-plan-windows.md) W1.9.)*
 - [x] Fixtures from the pads on the desk (addresses zeroed); hermetic tests: the report stream
   in and the messages out, in order and deduplicated; the output report in and the event
   out, both framings; a host that reads no reports still receiving states. *The core half

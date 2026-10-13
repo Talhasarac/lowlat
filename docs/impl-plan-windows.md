@@ -138,7 +138,14 @@ once, here; the design is [10 §4.2 and §5.2](10-client.md), the boundary
 - **The demo's toolkit gains two things**: a choice of the GPU its device is made on, for a
   menu, and a pad's feature reports read and written by the toolkit's own controller id. A
   Sony pad's input reports come from the toolkit's events and its output reports go out
-  through the toolkit, so the demo never opens a pad beside it.
+  through the toolkit, so the demo never opens a pad beside it. (*Amended 2026-10-13, at
+  W1.9*: the demo's pads and sound are SDL 3's instead, on both platforms -- its gamepads for
+  the states, its HID layer for a pad sent as reports, which is never opened as a gamepad --
+  and the toolkit's second gain is a flag that leaves controllers alone, since on Windows it
+  reads every pad whatever the application asks and writes a lightbar of its own on a
+  PlayStation pad's first report. SDL comes from vcpkg on Windows, static; on Linux from the
+  system, or where the system has none from a static build of the same release, which is what
+  the build workflows link.)
 
 ### Steps
 
@@ -381,7 +388,17 @@ once, here; the design is [10 §4.2 and §5.2](10-client.md), the boundary
   library's route alone does not -- so its renderer is fixed here and checked by ten minutes
   flat. The crossing measured again in separate sessions came to 1 to 2 ms over planes drawn
   on the display's GPU, which took longer than at W1.3; the placement is measured within one
-  session here.)
+  session here.) (*2026-10-13, the pads and the sound*: on SDL 3, as W1's amended decision
+  says, the Sony pads sent as reports on Windows too, their feature reports read again for
+  every session. Shown against an established host with both pads on USB, as states and as
+  reports; through Windows' HID stack every report comes at its own length -- the input at
+  64 bytes, the feature reports at 37 and 49 for a DualShock 4 and 41 and 64 for a DualSense --
+  and a 100 ms stall in the loop loses none. Checked by both pads against the established host
+  in each of its pad modes: in its DualSense mode the DualSense whole, both ways -- the sixteen
+  buttons, the touchpad, the motion sensors, rumble and the lights, 295 output reports put on
+  the pad and none refused; in its DualShock mode the DualShock 4 but for the motion sensors,
+  which that mode never reads, its 350 rumble messages each written as a motor-only report;
+  and both as the sixteen-button pad with rumble.)
 - [ ] **W1.10 packaging**: the zip from the build workflow; CI decodes the clips through a
   downloaded LGPL pair, since its runner has no GPU, and builds the demo. Checked by the
   artifact, built and unpacked.

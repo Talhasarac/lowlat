@@ -3,6 +3,42 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-13 - Demo: pads and sound on SDL, the Sony pads as reports on Windows
+
+### Changed
+- **The demo's pads and sound are SDL 3's** ([examples/client](../examples/client)), on both
+  platforms ([W1](impl-plan-windows.md), amended). SDL's gamepads give the sixteen-button
+  states, sent while the window is in front with the stick dead zone the toolkit applied; a
+  DualShock 4 or a DualSense sent as its own report (`LOWLAT_PAD_RAW`) is read through SDL's
+  HID layer and never opened as a gamepad, so nothing but the host writes it -- which brings
+  the report path to Windows -- and its feature reports now go again in every session, since
+  the library keeps none from one to the next. Sound plays from one SDL stream with the same
+  75/150 ms window; the microphone stays the tone.
+- **The toolkit leaves controllers alone** when the application asks
+  (`MTY_APP_FLAG_NO_CONTROLLERS`, [PROVENANCE](../third_party/matoya/PROVENANCE.md)): on
+  Windows it otherwise reads every pad and writes a lightbar of its own on a PlayStation pad's
+  first report.
+- **Where SDL comes from**: vcpkg on Windows, static, at the version `vcpkg.json` names; on
+  Linux the system's through `pkg-config`, or where the system has none the static build
+  `scripts/build-sdl3.sh` makes of the same release, which CI and the build workflow use, so
+  the packaged demo still needs nothing beside the library.
+
+### Checked
+- The four Windows presets build at `/W4 /WX`; `client.exe` is 5.11 MB against 2.65, SDL the
+  difference. The Linux build in a clean clone, against the system's SDL and the static one:
+  the static demo needs exactly the libraries it needed before, and the packaging check that
+  it needs no shared SDL fails on the other.
+- On Windows against an established host, both pads on USB, a person at the pads. In the
+  host's DualSense mode the DualSense whole, both ways -- sixteen buttons, touchpad, motion,
+  rumble, the lights -- with all 295 of the host's output reports put on the pad; in its
+  DualShock mode the DualShock 4 but for motion, which that mode never reads, its 350 rumble
+  messages each written as a motor-only report; in its default mode both pads as the
+  sixteen-button pad, with rumble. Each pad read raw sent 251 reports a second, none refused,
+  and was never opened as a gamepad. Through Windows' HID stack every report comes at its own
+  length, and a 100 ms stall in the loop loses none. Sound with the single resync after the
+  host's silence that every build before logged too. In WSLg, sound through SDL's PulseAudio
+  path and the tone, with the static SDL as well.
+
 ## 2026-10-13 - Demo: CMake on Windows, the library linked in
 
 ### Changed
