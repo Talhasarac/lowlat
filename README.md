@@ -170,8 +170,9 @@ The library builds in two forms: whole, and with the client half alone
 says which one was loaded, and the header is the same for both. The client demo is
 `make -C examples/client`, which builds the application toolkit from its vendored tree
 first; that needs a C and a C++20 compiler, the shader compiler (`glslang-tools`) and the
-ALSA, PNG and JPEG headers. On Windows the library builds with the client half alone
-whatever the features say, and the demo builds with CMake from `examples/client`'s presets,
+ALSA, PNG and JPEG headers. On Windows the library builds in both forms too, though its host
+half cannot stream there yet ([docs/impl-plan-windows.md](docs/impl-plan-windows.md) W2),
+and the demo builds with CMake from `examples/client`'s presets,
 clang-cl's with no developer environment or Visual Studio's compiler from its x64 one, the
 library linked in from its static build; the toolkit's one build needs that environment,
 with Khronos' `glslangValidator` on the path. The build workflow produces both libraries as

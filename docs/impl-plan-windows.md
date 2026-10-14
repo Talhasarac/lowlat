@@ -512,10 +512,21 @@ once, here.
 
 ### Steps
 
-- [ ] **W2.0 build**: the host's crates and the library's host half build for Windows, each
+- [x] **W2.0 build**: the host's crates and the library's host half build for Windows, each
   platform module in its place and the Linux ones unchanged; the hermetic host session passes
   there. Checked by both CI jobs and the Linux bar. The library on Windows stops being the
-  client half alone ([06 §3b](06-api.md)).
+  client half alone ([06 §3b](06-api.md)). *Built 2026-10-14.* There is no hermetic host
+  session (*corrected at the build*): the hermetic session is the client's, on Windows since
+  W1.0, and what passes here is the host's own tests, on the synthetic source and a fake
+  encoder. Each Windows module refuses until its step rather than pretending: the display
+  lists no outputs and finds nothing lit (W2.2), a stream finds no encoder (W2.1), and a guest
+  is admitted with its input off (W2.3). The daemon's session side -- the helper and the tray,
+  which only Linux has -- is a platform module as well, so the service builds everywhere and
+  refuses the two roles on Windows with a line. The Windows job's lints and tests pass here,
+  1214 tests where there were 977, the library's gates among them with both halves inside it;
+  on Linux the bar gives the results it gave and the list of tests is the one it was. Two port
+  tests raced on Windows, which hands out ephemeral ports nearly in order, and now take theirs
+  below both systems' ephemeral ranges.
 - [ ] **W2.1 NVENC on D3D11**: the encoder's device and inputs bound through D3D11, fed by the
   synthetic source. Checked by the library's own decoder taking the encoder's output in both
   codecs, and an established client streaming the synthetic picture over the LAN.

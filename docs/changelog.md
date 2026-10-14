@@ -3,6 +3,33 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2.0: the host builds for Windows
+
+### Changed
+- **The host's crates and the library's host half build for Windows**
+  ([impl-plan-windows.md](impl-plan-windows.md) W2.0), each platform module in its place and
+  refusing until its step rather than pretending: the display lists no outputs and finds
+  nothing lit, a stream finds no encoder, and a guest is admitted with its input off. The
+  library there carries the halves the build asks for, as on Linux ([06 §3b](06-api.md));
+  hosting starts, and a guest that joins is ended for want of an encoder, which the
+  application sees as `fatal`.
+- **The daemon's side of the desktop session is a platform module**
+  ([07 §10](07-platforms.md)): the session helper and the tray, which only Linux has, sit
+  apart from the service, so the service builds everywhere; on Windows the two roles refuse
+  with a line.
+- The pointer's shared type and the turning of a rectangle upright move to the capture crate's
+  root, and what a guest's devices hand back to the stream to the injection crate's, all of it
+  built everywhere.
+- Two port tests take their ports below both systems' ephemeral ranges. Windows hands out
+  ephemeral ports nearly in order, and a port one test had just let go of was taken by another
+  running beside it.
+
+### Measured
+- On Windows the lints pass and the tests go from 977 to 1214, none failing: the host's own
+  among them, on the synthetic source and a fake encoder, and the library's gates with both
+  halves inside it. On Linux the list of tests is the one it was, and each gives the result it
+  gave.
+
 ## 2026-10-14 - W2 planned: the Windows host
 
 ### Decided

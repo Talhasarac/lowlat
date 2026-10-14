@@ -321,10 +321,10 @@ to one shape. The examples are left out of it: the ones there probe Linux hardwa
 linked statically as it ships. *Since W1.2* the library's own gates run there as well: the
 header compared with its definitions and compiled alone by the platform's compiler, as C and
 as C++, with either half hidden; the shipped DLL's exports, every one prefixed; and each half
-it carries -- the client half alone -- panicking on purpose through the DLL and coming back
-with a status. *Planned for W1*, it decodes the reference clips through an LGPL codec library
-it downloads, since the runner has no GPU, and builds the demo with the platform's own
-compiler. *Since W1.3* the system decoder's own tests -- every reference clip bit
+it carries -- the client half alone, and both *since W2.0* -- panicking on purpose through the
+DLL and coming back with a status. *Planned for W1*, it decodes the reference clips through an
+LGPL codec library it downloads, since the runner has no GPU, and builds the demo with the
+platform's own compiler. *Since W1.3* the system decoder's own tests -- every reference clip bit
 for bit on every GPU offered, full chroma refused as fatal where the device has no profile
 for it, the per-unit path allocating nothing, the read-back's wait sleeping rather than
 spinning, and a paced probe of that wait -- are hardware tests, run on a machine with GPUs

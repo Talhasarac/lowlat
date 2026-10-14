@@ -879,7 +879,9 @@ None of this reaches the protocol core, the IO shell's logic, or the public API.
 chosen when the crate is built, under the same names on every platform, never a trait
 dispatched at run time: the shell's system calls, the display and the encoder built on its
 device, the census of what those could code, the input devices a guest's input lands on, the
-decoders a client opens and their table. The code above each module -- the loops, the seam,
+decoders a client opens and their table, and (*since W2.0*) the daemon's side of the desktop
+session -- the helper and the tray on Linux, and neither on Windows, where the host itself
+runs in the session. The code above each module -- the loops, the seam,
 the policy -- is written once, and a platform is ported by writing its modules
 ([impl-plan-windows.md](impl-plan-windows.md)).
 

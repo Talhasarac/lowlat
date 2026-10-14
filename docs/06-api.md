@@ -80,7 +80,8 @@ containment can be tested against the object that ships rather than against a co
 code linked into a test, which answers for the test's build settings instead. One symbol is a
 small price for the only check that can fail if [§9](#9-panics-and-unwinding) regresses.
 `lowlat_client_debug_panic` is its twin on a client handle (minor 18), so a library carrying
-the client half alone -- the one a Windows build is -- is tested the same way.
+the client half alone -- the client-only build, and a Windows build until W2.0 -- is tested the
+same way.
 
 The log callback is the single exception to rule 5. It is cold, it fires on whichever thread
 logged, and it must not call back into the API.
@@ -727,7 +728,12 @@ between its devices.
 **On Windows since W1.2** (*2026-09-27*): the library is `lowlat.dll` with its import library
 `lowlat.dll.lib`, the C runtime linked in statically, and it carries the client half alone --
 `lowlat_features` reports no host half there whatever the build asked for, and an application
-that defines `LOWLAT_NO_HOST` has a call into it fail to compile rather than to link. Its
+that defines `LOWLAT_NO_HOST` has a call into it fail to compile rather than to link.
+(*Amended 2026-10-14*, W2.0: it carries the halves the build asks for, as on Linux, and
+`lowlat_features` reports both by default. Until the host's own steps fill the host half
+([impl-plan-windows.md](impl-plan-windows.md) W2), `lowlat_can_host` answers
+`LOWLAT_ERR_NO_DISPLAY`, `lowlat_get_outputs` lists nothing, and hosting starts but a guest
+that joins is ended for want of an encoder, which the application sees as `fatal`.) Its
 decoder is the software one, `LOWLAT_DECODER_AUTO`
 settling on it: the pair is found by the platform's names (`avutil-N.dll`,
 `avcodec-N.dll`) in the environment's directory, the one the application names, beside the
@@ -1346,8 +1352,8 @@ zero there, asks for the video range.
 
 **Minor 18** (2026-09-27) is the client's deliberate panic ([§9](#9-panics-and-unwinding)):
 `lowlat_client_debug_panic`, the client half's twin of `lowlat_debug_panic`, so a library
-carrying the client half alone -- which a Windows build is -- proves containment on the
-object that ships. Not for applications. Nothing moves.
+carrying the client half alone -- which a Windows build was until W2.0 -- proves containment
+on the object that ships. Not for applications. Nothing moves.
 
 **Minor 19** (2026-09-28) is the handle on Windows and the kind switched live
 ([§3b](#3b-client)): `LOWLAT_HANDLE_D3D11_SHARED` appended to `lowlat_handle_kind`,
