@@ -1,7 +1,9 @@
 # Implementation plan: Windows
 
 **Status:** planned 2026-09-26. Phase W0, the platform seams, is closed; the client's phase
-(W1) was planned at its interview the same day, and the host's (W2) is planned at its own.
+(W1) was planned at its interview the same day, and the host's (W2) at its own on 2026-10-14,
+the day the host's own virtual display (W3) was added with its frame hand-off decided; the
+rest of W3 is planned at its own interview.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -426,15 +428,168 @@ established hosts:
 - both CI jobs, and one Gate C run on Linux before the phase closes, since the slots and the
   queue are shared with it.
 
-## Phase W2 - The host (to be planned)
+## Phase W2 - The host
 
-Desktop duplication, a D3D11 conversion, the vendor encoder on the capture's device, input
-through the system's batch input call and a virtual pad device, loopback sound, and a
-service. Open before it is planned: the process topology ([07 §10](07-platforms.md)), and
-whether an application may supply the frames, for a virtual display that already holds them.
+**Planned 2026-10-14, interview of the same day.** The host on a Windows machine with a
+monitor: desktop duplication, a D3D11 conversion, NVENC on the capture's device, input through
+the system's batch input call and a virtual pad, loopback sound, and a service. A host with no
+monitor gets a display of its own in W3, measured against this one. The decisions are recorded
+once, here.
+
+### Decisions taken at the interview
+
+- **One process, in the console session.** The whole host -- capture, the conversion and the
+  encoder on one device, input, sound and the network -- is one process of the system account
+  in the active console session; the service only starts it there and starts it again when the
+  console's session changes. Desktop duplication and the batch input call both need the
+  session's input desktop, and a process of the system account follows it onto the lock screen
+  and an elevation prompt, which switch desktops rather than sessions; the frames, the encoder
+  and congestion control never cross a process, as on Linux; and W3's channel to its driver
+  needs the system account anyway. A logoff or a user switch restarts the host and its guests
+  reconnect once it is back; the first logon after boot stays in the boot's session. An
+  application that embeds the host half runs it the same way; the library starts no process.
+  This replaces the split [07 §10](07-platforms.md) implied.
+- **No application supplies frames** (*settled before the interview*). Desktop duplication is
+  this phase's source, for a physical monitor and for a display another driver provides; W3's
+  display is read by the same display module, so nothing crosses the library's boundary.
+- **NVENC alone, on the capture's D3D11 device.** The encoder keeps its register-once submit and
+  poll and binds its device through D3D11 rather than CUDA. AMD's and Intel's encoders are
+  deferred: on the development machine only the NVIDIA card drives a display, so either would
+  pay a copy of every frame between GPUs and measure the copy rather than the encoder. They are
+  measured on W3's display, which renders on any GPU, or on outputs given a display. No Vulkan
+  encoder and no system encoder on Windows: the vendor runtimes take D3D11 textures directly,
+  and the Vulkan encoder's tails were the longest on Linux.
+- **Desktop duplication, converted straight from the acquired image.** The conversion reads the
+  duplicated image into the encoder's registered input and the frame is released as soon as the
+  conversion is queued: no copy, so two passes after composition, the system's duplication copy
+  and the conversion. A still desktop's refresh frames re-encode the last converted input. The
+  duplication asks for eight-bit BGRA alone, and on a desktop in a wider format the system
+  converts. A duplication lost to a desktop switch is made again on the current input desktop,
+  the secure one included. The pointer's shape, hotspot and visibility are taken as reported,
+  and the shared pointer type carries them where Linux goes on learning the hotspot. Rotation
+  is declared in the video header, as on Linux. The device is made on the output's adapter and
+  the encoder on it.
+- **An output is named `DISPLAY1`**, the system's own name for it, the `\\.\` prefix optional.
+  It is unique on the machine, so it needs no adapter half -- an adapter's identity changes
+  across reboots -- and its number can move as monitors come and go, as a Linux device's can.
+  Asked for nothing, the host takes the output at the desktop's corner, which on Windows is the
+  primary display; the adapter, and the encoder with it, follows the output; a switch is the
+  rebuild a resolution change is.
+- **The conversion's shaders** are HLSL compiled offline and committed as generated code, as
+  the client's plane split is: no build machine needs the compiler and nothing compiles one at
+  run time. The formats follow the Linux host's where NVENC's D3D11 input takes them; full
+  chroma's layout there is checked first.
+- **Input.** A peer's usage code maps to the scancode Windows produces for that key on a USB
+  keyboard -- the translation is the platform's, as the kernel's own table is on Linux, and the
+  expander that turns messages into events is shared and unchanged -- and goes out through the
+  batch input call by scancode. Relative motion stays relative; an absolute position is
+  normalised over the virtual desktop from the captured output's rectangle, the captured
+  picture's pixels being the coordinate space as on Linux; wheels move in their standard steps.
+  A pad is an Xbox 360 device on the ViGEm bus, one per peer pad, the bus addressed through its
+  own control codes with declarations generated from its public header; rumble returns as the
+  guest's rumble message; with no bus there are no pads, said once in the log. A pad sent as
+  reports waits for a HID device of the host's own, which is deferred.
+- **Sound.** The loopback of the default render endpoint, event-driven, 48 kHz stereo asked and
+  the system's engine converting, 20 ms a packet. **A loopback delivers nothing while nothing
+  plays** -- measured on the development machine: no packet in three seconds, where a silent
+  render stream open on the same endpoint kept it delivering every 10 ms -- so a silent render
+  stream stays open on the captured endpoint while the loopback runs, and the source stays the
+  clock ([05 §9.1](05-host.md)). The default is followed as it changes and a device that went
+  away is taken again a couple of seconds later ([05 §9.3](05-host.md)); a guest's microphone
+  stays the application's, as on Linux.
+- **The service.** Two roles of the daemon: the service, under the service manager as the
+  system account in session 0, which only starts and watches the host; and the host above. No
+  session role, since the host is in the session, and no tray in W2. The service starts the
+  host from its own token moved to the console session, in a job that ends the host with the
+  service; starts it again two seconds after a failed exit; and on a change of the console's
+  session asks the old host to end, then terminates it after a timeout. Its configuration is an
+  environment file in the program-data directory that only the system account and
+  administrators can read, since it holds the signaling secret, and the host's log is a file
+  beside it. `lowlatd install` and `lowlatd uninstall`, from an elevated shell, register and
+  remove the service; there is no installer package, and the ViGEm bus is a prerequisite.
+- **The floor is Windows 10 1703**: the duplication call the host uses and the event-driven
+  loopback both need it, and the client set it already.
+
+### Steps
+
+- [ ] **W2.0 build**: the host's crates and the library's host half build for Windows, each
+  platform module in its place and the Linux ones unchanged; the hermetic host session passes
+  there. Checked by both CI jobs and the Linux bar. The library on Windows stops being the
+  client half alone ([06 §3b](06-api.md)).
+- [ ] **W2.1 NVENC on D3D11**: the encoder's device and inputs bound through D3D11, fed by the
+  synthetic source. Checked by the library's own decoder taking the encoder's output in both
+  codecs, and an established client streaming the synthetic picture over the LAN.
+- [ ] **W2.2 desktop duplication and the conversion**: the capture, the conversion and its
+  shaders, the pointer, rotation, and naming and switching outputs. Run as the system account in
+  the console session by a process launcher until W2.5. Checked by the desktop streaming to an
+  established client through the lock screen and an elevation prompt.
+- [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
+  rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
+  with rumble, from an established client.
+- [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
+  spell with no gap at the guest.
+- [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
+  Checked by a logoff mid-session and the guest reconnecting.
+
+**Gate:** the host on the development machine, with established clients on macOS and Android on
+the same LAN:
+
+- ten minutes each of H.264 and HEVC at 2560x1440 through NVENC, and ten-bit and full chroma
+  where the encoder takes them;
+- once each mid-session: the lock screen, an elevation prompt, a logoff and the reconnect after
+  it, and a switch of display where a second one is attached;
+- input: every key class against a USB keyboard's, both pointers, a pad with rumble;
+- sound through a quiet spell with no gap;
+- the wide-area leg the other way round: the host here, the library's demo and an established
+  client on a remote Windows machine over the internet;
+- recorded rather than passed: composition to encoder input at p50, p95 and p99, the baseline
+  W3's direct frame is measured against;
+- both CI jobs, and the Linux bar, since the shared pointer type and the usage translation
+  change.
+
+## Phase W3 - The host's virtual display (to be planned)
+
+**Added 2026-10-14.** A display driver of the host's own, for a host with no monitor: an
+indirect display whose composed desktop the host converts straight from the system's buffer.
+Behind a virtual display, desktop duplication costs two passes after composition -- the
+system's copy into its duplication image, then the conversion -- where this costs one, the
+conversion itself. W2's desktop duplication is what it is measured against.
+
+### Decided when it was added
+
+- **The host reads the system's own buffer.** The driver shares each of the swapchain's
+  buffers once, read-only, as a handle the host takes from the driver's process. After each
+  acquire it signals a fence on the device the swapchain was given, which orders the signal
+  behind the system's write, and the host's conversion waits on that fence. The driver
+  finishes the frame as soon as the signal is queued, then holds the buffer -- acquiring no
+  other -- until the host's release fence passes. It reads the host's fence on the processor
+  only and never waits for it on the device, so a host that dies cannot stall the display.
+- **The hold is bounded well inside a frame period**, since a held buffer holds back the
+  compositor. Past the bound the driver releases the buffer anyway and counts it.
+- **The driver converts nothing.** Formats, depth, full chroma and scaling stay the host's,
+  so changing them never re-signs the driver. As everywhere, the display is standard dynamic
+  range only, so every buffer is eight-bit BGRA.
+- **The frames never cross the library's boundary**: the host's display module reads the
+  driver, as it reads a scanout buffer on Linux, and [06 §13](06-api.md) stands.
+
+Open before it is planned: where the driver's sources live and their toolchain; signing; the
+Windows floor it sets (naming the swapchain's render adapter needs Windows 10 1903); the
+channel between the host and the driver; mode changes, which re-plug the monitor, and whether
+a guest's requested size and refresh become one; and the measurements that set the bound --
+composition to encoder input at p50, p95 and p99, desktop duplication against the direct
+frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-14: W2 planned at its interview: one process of the system account in the console
+  session, the service starting and watching it; NVENC alone, AMD's and Intel's encoders
+  deferred; desktop duplication converted straight from the acquired image; outputs named
+  `DISPLAYn`; input by scancode through the platform's own translation, and the ViGEm pad; the
+  loopback kept running by a silent stream; the floor at Windows 10 1703.
+- 2026-10-14: W3 added, the host's own virtual display, with its frame hand-off decided: the
+  host converts straight from the system's buffer, which the driver holds to a bound. W2's
+  frames question answered by it; W2's virtual pad is the ViGEm bus's, and a HID device of
+  the host's own is deferred.
 - 2026-10-01: W1.8 built: the system's decoder, its own kind and slot, last in the automatic
   order; HEVC at ten bits as well, amending W1's decision.
 - 2026-10-01: W1.7 reviewed before W1.8: on an Intel GPU the automatic order tries the

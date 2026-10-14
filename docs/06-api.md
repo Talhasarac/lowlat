@@ -1104,7 +1104,9 @@ display's identity and a sound device's, and the longest of them is a path: a US
 from the sound server passes a hundred characters once its serial and profile are in it, and a
 display identity on one platform is an operating-system device path bounded at 260. A name that
 does not fit is truncated silently and then resolves to nothing, so the bound is set by the worst
-case rather than by what a machine happens to report today.
+case rather than by what a machine happens to report today. (*Amended 2026-10-14*: Windows
+names a display `DISPLAYn` ([impl-plan-windows.md](impl-plan-windows.md) W2), so the long
+identity is a sound device's; the bound stands.)
 
 `lowlat_get_audio_outputs` lists what sound could be captured from. **The identity it returns is
 the monitor of an output, not the output**, because that is the device a host reads: it carries

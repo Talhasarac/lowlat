@@ -3,6 +3,49 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2 planned: the Windows host
+
+### Decided
+- The whole host is one process of the system account in the active console session, which
+  lowlatd's service starts there and starts again when the console's session changes; it
+  follows the input desktop onto the lock screen and elevation prompts itself
+  ([impl-plan-windows.md](impl-plan-windows.md) W2). This replaces the split
+  [07 §10](07-platforms.md) implied; an application embedding the host half runs it the same
+  way.
+- NVENC alone, on the capture's D3D11 device; AMD's and Intel's encoders deferred to a display
+  that renders on their GPU; no Vulkan or system encoder on Windows.
+- Desktop duplication converted straight from the acquired image into the encoder's input, the
+  frame released once the conversion is queued: two passes after composition. Eight-bit BGRA
+  asked; the pointer as reported; rotation declared; the device on the output's adapter.
+  Outputs are named `DISPLAYn`, the desktop's corner taken when none is asked for.
+- Input by scancode through the platform's own usage translation, the shared expander
+  unchanged; pads as ViGEm Xbox 360 devices, no bus meaning no pads.
+- Sound through the loopback of the default endpoint, kept running by a silent render stream,
+  since a loopback delivers nothing while nothing plays (measured); [05 §9.1](05-host.md)
+  amended.
+- The service only starts and watches the host; configuration in a file only the system
+  account and administrators read; install and uninstall from an elevated shell. The floor is
+  Windows 10 1703. The gate: established clients on macOS and Android on the LAN, and the
+  wide-area leg run with the host here and the clients remote.
+
+## 2026-10-14 - W3 added: the host's own virtual display
+
+### Decided
+- A host with no monitor gets a display driver of its own, and the host converts the composed
+  desktop straight from the system's buffer: one pass after composition where desktop
+  duplication behind a virtual display costs two ([impl-plan-windows.md](impl-plan-windows.md)
+  W3). The driver shares each buffer once, signals a fence after each acquire, and holds the
+  buffer until the host's release fence passes, bounded well inside a frame period; it never
+  waits for the host on the device. It converts nothing, so a change of format never re-signs
+  it.
+- No application supplies frames: W2's open question is answered by W3, and nothing crosses
+  the library's boundary ([06 §13](06-api.md) stands). Desktop duplication stays W2's, for a
+  physical monitor, and W3 is measured against it.
+- W2's virtual pad is the ViGEm bus's, with the Xbox layout; a HID device of the host's own is
+  deferred.
+- [07 §7.1](07-platforms.md) and §10 amended to match: the host ships one driver, the display,
+  and the system's buffer and its fences cross in the modern handle form.
+
 ## 2026-10-13 - Demo: pads and sound on SDL, the Sony pads as reports on Windows
 
 ### Changed

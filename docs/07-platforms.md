@@ -804,7 +804,10 @@ handle.
 **So this host ships no driver on either platform.** On Linux it can create the device itself,
 from what it already links. On Windows it can drive a device somebody else installed, and if
 nobody installed one there is no microphone -- which is a deployment answer rather than a
-missing feature.
+missing feature. (*Amended 2026-10-14*: that is the microphone's answer, not the host's. On
+Windows the host ships one driver, a display of its own for a host with no monitor
+([impl-plan-windows.md](impl-plan-windows.md) W3); a capture device for the microphone is
+still somebody else's.)
 
 ## §8 GPU and encoder
 
@@ -853,14 +856,20 @@ connectivity engine must handle six.
 After Gate B. The differences are contained:
 
 - Capture through the platform duplication interface, which handles the session, lock screen,
-  and elevation cases that motivate §2 on Linux.
+  and elevation cases that motivate §2 on Linux. (*Amended 2026-10-14*: on a host with no
+  monitor, from a display driver of the host's own instead, read straight from the system's
+  buffer -- [impl-plan-windows.md](impl-plan-windows.md) W3.)
 - Injection through the platform batch input call, which requires interactive session context.
   A service must therefore run capture and injection in the interactive session, mirroring the
-  split topology in §5.
+  split topology in §5. (*Amended 2026-10-14*, at W2's planning: not split. The whole host is
+  one process of the system account in the console session, which the service starts and
+  starts again across session changes -- [impl-plan-windows.md](impl-plan-windows.md) W2.)
 - Timer resolution must be raised explicitly ([02 §2](02-io-shell.md)).
 - Completion-port receive rather than batched polling ([02 §6](02-io-shell.md)).
 - Shared texture handles use the legacy form, not the modern one, for cross-process
-  compatibility.
+  compatibility. (*Amended 2026-10-14*: not between the host and its own display driver. The
+  system's buffer and the fences that order it cross as the modern form, the only one a fence
+  has.)
 - A guest's microphone becomes a capture device only through a signed kernel-mode driver, which
   this host does not ship and does not need to write ([§7.1](#71-the-guest-microphone-as-a-device)).
 

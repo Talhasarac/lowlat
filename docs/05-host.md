@@ -1005,7 +1005,10 @@ property that matters: a packet declares how many samples it carries and a recei
 in order.
 
 **Silence is not what it looked like, and the measurement decides the policy.** A source with
-nothing playing delivers zeros rather than stopping, so a host has to choose what to do with
+nothing playing delivers zeros rather than stopping (*amended 2026-10-14*: a Linux monitor
+source does; a Windows loopback delivers nothing at all while nothing plays, so the host keeps
+a silent stream open on the captured endpoint and the source delivers zeros there too --
+[impl-plan-windows.md](impl-plan-windows.md) W2), so a host has to choose what to do with
 them -- but the compressed path collapses digital silence on its own: measured on this pipeline,
 400 silent frames cost **1.2 kbit/s**, against the 128 the same stream carries when something is
 playing. So skipping silence saves almost nothing on the compressed path and **the whole 1.54
