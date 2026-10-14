@@ -51,7 +51,9 @@ process's own UI thread is a priority inversion that has produced hard hangs on 
 machines while the reference implementation ran fine on the same hardware. The correct lever
 is the *process* class, which lifts every thread together and preserves ordering, and that
 decision belongs to the integrating application. `lowlatd` owns its process and may make it
-for itself.
+for itself. (*Since W2.1* it does on Windows: high, once at startup, as the established host
+does for its own, and it holds the system timer at a millisecond as the library's handles do
+-- [impl-plan-windows.md](impl-plan-windows.md).)
 
 **Scale every thread-count knob by available parallelism.** A hardcoded worker count
 oversubscribes a two-core machine invisibly on a development box.

@@ -3,6 +3,35 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2.1: the vendor encoder on D3D11
+
+### Changed
+- **The vendor encoder runs on Windows**, bound to a D3D11 device
+  ([impl-plan-windows.md](impl-plan-windows.md) W2.1): the encoder is one on both platforms and
+  what it is bound to is a platform module. On Windows it runs asynchronously and sets an event
+  of its own as each picture finishes, so a collect asks the event and the lock behind it waits
+  for nothing. The stream builds it on a device of its own and runs the synthetic source; a
+  display is refused as nothing to capture until W2.2, and full chroma by the census.
+- **The quality setting reaches the vendor encoder whole** ([05 §4.1](05-host.md)), on both
+  platforms: the fastest preset in one pass for lowest latency and balanced, the most thorough
+  with a second pass for highest. Every setting used to run the middle preset with a second
+  pass -- which only the highest asks for -- and only the quantiser floor followed the setting.
+- **The frame loop sleeps on the encoder's completion where it reports one**, so a picture is
+  collected as it finishes rather than on the poll after; elsewhere it polls as before.
+- **`lowlatd` raises its process class to high on Windows**, once at startup, and holds the
+  system timer at a millisecond as the library's handles do ([02 §1](02-io-shell.md)).
+
+### Measured
+- The library's D3D11 decoder takes the encoder's pictures of the synthetic source back at 73 dB
+  or better, in H.264, HEVC and ten-bit HEVC, and exactly with the second pass; broken on
+  purpose, a neighbour's picture scored 21 dB and a lost chroma plane 6.
+- A ready collect takes 18 to 24 us; one not ready is answered in under 5 us.
+- Two established clients, macOS and Android, streamed the synthetic picture over the LAN in
+  both codecs and switched between them with both seated, with no loss.
+- The encode at 1080p60, live: 7.8 ms at the median before the three changes above, 1.3 to 3.0
+  after, p99 6 to 10. **A test of a few seconds sees neither tail**: within ten seconds of a load
+  this light the card lowers its clocks, and only a minute's run shows the stream's figure.
+
 ## 2026-10-14 - W2.0: the host builds for Windows
 
 ### Changed

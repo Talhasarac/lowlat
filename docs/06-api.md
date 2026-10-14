@@ -733,7 +733,8 @@ that defines `LOWLAT_NO_HOST` has a call into it fail to compile rather than to 
 `lowlat_features` reports both by default. Until the host's own steps fill the host half
 ([impl-plan-windows.md](impl-plan-windows.md) W2), `lowlat_can_host` answers
 `LOWLAT_ERR_NO_DISPLAY`, `lowlat_get_outputs` lists nothing, and hosting starts but a guest
-that joins is ended for want of an encoder, which the application sees as `fatal`.) Its
+that joins is ended for want of an encoder, which the application sees as `fatal`. *Since
+W2.1* the encoder is there and the display is what is wanting, with the same outcome.) Its
 decoder is the software one, `LOWLAT_DECODER_AUTO`
 settling on it: the pair is found by the platform's names (`avutil-N.dll`,
 `avcodec-N.dll`) in the environment's directory, the one the application names, beside the

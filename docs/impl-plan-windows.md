@@ -527,9 +527,30 @@ once, here.
   on Linux the bar gives the results it gave and the list of tests is the one it was. Two port
   tests raced on Windows, which hands out ephemeral ports nearly in order, and now take theirs
   below both systems' ephemeral ranges.
-- [ ] **W2.1 NVENC on D3D11**: the encoder's device and inputs bound through D3D11, fed by the
+- [x] **W2.1 NVENC on D3D11**: the encoder's device and inputs bound through D3D11, fed by the
   synthetic source. Checked by the library's own decoder taking the encoder's output in both
-  codecs, and an established client streaming the synthetic picture over the LAN.
+  codecs, and an established client streaming the synthetic picture over the LAN. *Built
+  2026-10-14.* The encoder is one on both platforms and what it is bound to is a platform
+  module. On Windows the session is opened on a D3D11 device, its inputs are NV12 and P010
+  textures registered once, and it runs asynchronously, setting an event of its own as each
+  picture finishes, so the lock behind a set event waits for nothing (18 to 24 us); a frame from
+  ordinary memory goes in through a staging texture copied whole. Until the display exists the
+  stream opens a device of its own on the first of the vendor's adapters that renders, runs the
+  synthetic source alone, refuses a display as nothing to capture and refuses full chroma, whose
+  layout is the conversion's. The library's D3D11 decoder takes the pictures back at 73 dB or
+  better against the source in H.264, HEVC and ten-bit HEVC; two established clients, macOS
+  and Android, streamed it over the LAN in both codecs, switching between them with both
+  seated. **Found live and fixed**: the encode took 7.8 ms at the median where the established
+  host takes 3 on this machine. Three causes, each measured: the preset every setting started
+  from turned on a second
+  pass, its effort was the middle of the device's range, and the loop polled for a finished
+  picture on sleeps of about two milliseconds. The quality setting now picks the effort as
+  [05 §4.1](05-host.md) says -- the fastest preset in one pass, or for the highest setting the
+  most thorough with two -- on both platforms; the loop sleeps on the encoder's event where it
+  has one; and `lowlatd` raises its process class and the timer resolution on Windows. Live, the
+  encode is now 1.3 to 3.0 ms at the median and 6 to 10 at the p99; what the tail has left is
+  the card lowering its clocks under a load this light, to be compared with the established host
+  at its own load in W2.2.
 - [ ] **W2.2 desktop duplication and the conversion**: the capture, the conversion and its
   shaders, the pointer, rotation, and naming and switching outputs. Run as the system account in
   the console session by a process launcher until W2.5. Checked by the desktop streaming to an
