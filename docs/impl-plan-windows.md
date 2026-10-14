@@ -469,6 +469,29 @@ once, here.
   and the shared pointer type carries them where Linux goes on learning the hotspot. Rotation
   is declared in the video header, as on Linux. The device is made on the output's adapter and
   the encoder on it.
+  *Amended 2026-10-14, at W2.2's review:* the duplication answers only when the image or the
+  pointer changed, so a frame that carries only the pointer, and a wait that runs past the
+  frame's deadline, are each a present of an unchanged picture -- a still desktop keeps the
+  frame rate's refine frames and the pointer's cadence -- and whether the image changed is the
+  duplication's own report, not a summary written by the conversion. The conversion's targets
+  are the encoder's inputs, bound for unordered access and registered once (the encoder takes
+  them, and one submitted again while it is in flight, measured). Full chroma is the packed
+  layout: eight bits as AYUV, ten bits as Y410 once a decoder's round trip agrees, refused by
+  the census until then (no planar layout is taken on this device). The display is kept awake
+  while a capture exists. The pointer's bits each have their own source
+  ([05 §8.1](05-host.md)): `hidden` the duplication's own visibility of the pointer, false
+  while the system draws it into the picture; `relative` the system's show state, or a pointer
+  whose picture is one value throughout; `suppressed` the show state's touch flag. The
+  position is where the pointer points, from the show state; the shape and hotspot are the
+  duplication's, and the pixels that invert the screen beneath them, which a picture cannot
+  carry, are drawn dark grey (a masked colour pointer) or black with a light halo (a monochrome
+  one); and a message goes out once the whole state has held for more than 18 ms.
+- **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
+  that is not, the duplication call the host uses is refused outright, and every coordinate
+  the system hands back is scaled at a display scale other than 100 percent (measured, at 125
+  and 150). `lowlatd` declares the mode in its manifest, and the library sets its own capture
+  and input threads to it, so an application embedding the host half is not refused for its
+  packaging ([05 §7](05-host.md)).
 - **An output is named `DISPLAY1`**, the system's own name for it, the `\\.\` prefix optional.
   It is unique on the machine, so it needs no adapter half -- an adapter's identity changes
   across reboots -- and its number can move as monitors come and go, as a Linux device's can.
@@ -555,6 +578,14 @@ once, here.
   shaders, the pointer, rotation, and naming and switching outputs. Run as the system account in
   the console session by a process launcher until W2.5. Checked by the desktop streaming to an
   established client through the lock screen and an elevation prompt.
+  *Reviewed 2026-10-14, before its build* (the decisions above): also the per-monitor DPI mode
+  (`lowlatd`'s manifest, the library's threads), the display kept awake, a still desktop's
+  presents, and full chroma's packed layouts; and checked as well by a switch between the two
+  displays the development machine now has on the NVIDIA card, the second at 125 percent, with
+  the pointer's three bits seen on each. The encode at this machine's load was measured
+  against the encoder's own conversion first ([05 §3](05-host.md)): the same cost here, and
+  HEVC at 2560x1440 and 120 a second reaches the frame interval at its p99 (~8.5 ms) while the
+  card sits in a low power state.
 - [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.
@@ -613,6 +644,12 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-14: W2.2 reviewed before its build: the pointer's three bits each from its own
+  source and one message per settled state ([05 §8](05-host.md) corrected with it); the host
+  per-monitor DPI aware, its duplication call refused otherwise; a still desktop's presents;
+  the display kept awake; full chroma's packed layouts; the encoder's own conversion measured
+  no dearer than ours on the development card ([05 §3](05-host.md) corrected); the second
+  display moved onto the NVIDIA card for the gate's switch.
 - 2026-10-14: W2 planned at its interview: one process of the system account in the console
   session, the service starting and watching it; NVENC alone, AMD's and Intel's encoders
   deferred; desktop duplication converted straight from the acquired image; outputs named

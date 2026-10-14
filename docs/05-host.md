@@ -79,6 +79,12 @@ Encoders want a planar format. Captures deliver packed. The conversion is ours.
 
 - **Never let the encoder convert internally.** Doing so cost roughly 3 ms per frame on
   contemporary hardware, which at 120 fps is more than a third of the entire frame budget.
+  *Corrected 2026-10-14:* on the vendor's 2025 hardware (an RTX 5060, D3D11) it measured no
+  dearer than this conversion: at 2560x1440 and 120 a second, one pass at the fastest preset,
+  3.1 against 3.2 ms p50 for H.264 and 6.2-6.5 against 5.8-6.0 for HEVC, the encode included,
+  in long alternating blocks at the same power state. The rule stands for the rest of this
+  section -- the matrix, the range and the colour description are ours to state, the layouts
+  are ours to choose, and one conversion serves every encoder -- not for that cost.
 - **Planes are written by a compute shader**, addressing each plane as a separate view.
   Copying between subresources to move plane data drops chroma on more than one vendor's
   driver, produces green or smeared output, and looks like an encoder bug for as long as it
@@ -689,6 +695,11 @@ display-server-level injection cannot match.
   process MUST declare the aware mode, and it is a **packaging requirement rather than a code
   one**: nothing in the source shows why an undeclared host is wrong, and it is wrong only on
   machines that are scaled. Where the platform has no such split, there is nothing to convert.
+  *Amended 2026-10-14:* on Windows it is a code requirement too. The desktop duplication call
+  this host uses refuses a thread that is not per-monitor aware, at any scale, so an
+  undeclared host captures nothing rather than drifting; and the mode can be set per thread,
+  so the library sets its own capture and input threads to it, and `lowlatd` declares it in
+  its manifest as well ([impl-plan-windows.md](impl-plan-windows.md) W2).
 
   This stops being free when a captured *sub-rectangle* has to be placed within a larger
   desktop, because then the offset and the range must also be in the same space -- which is the
@@ -861,22 +872,33 @@ local even when video stutters.
   One last-sent hash per guest, so a late joiner receives the image on its first update by
   construction.
 - Positions are stream space and need the inverse of the far side's fit transform, including a
-  width and height swap on rotated outputs.
+  width and height swap on rotated outputs. *Added 2026-10-14:* a position is where the
+  pointer points -- its hotspot -- not the corner of its picture; it is where the far side
+  warps its own pointer when it leaves relative motion.
 
 ### §8.1 Three states, never conflated
 
 This is the part with the most history behind it, and the three states below are genuinely
 distinct. Folding any two together produces a specific, known bug.
 
-| State | Means | Used for |
+| State | Means | On the wire |
 |---|---|---|
-| **hidden** | the application asked for the pointer not to be drawn | **relative intent** |
-| **plane present** | the pointer was carried on a hardware cursor plane this frame | whether the far side must draw it |
-| **suppressed** | the pointer was suppressed by touch input | neither; reported separately |
+| **intent** | an application asked for the pointer not to be drawn, or set one whose picture is a single value throughout | `relative` |
+| **overlay** | the pointer is not on a hardware overlay this frame: drawn into the picture, or not drawn at all | `hidden` |
+| **suppressed** | the pointer was suppressed by touch input | `suppressed`, and neither of the others |
 
-**Relative intent comes from hidden, and from nothing else.** When an application takes over
-the pointer for mouselook it hides it. That is its own visible statement of intent, and it is
-the only signal that captures the whole class.
+*Corrected 2026-10-14, read from an established Windows host:* this table had `hidden` carry
+the intent and gave the overlay no bit ("whether the far side must draw it"). On the wire it is
+the other way round, and **a far side treats either bit as relative motion** (its test is
+`relative || hidden`, [§8.4](#84-deriving-hidden-from-plane-presence)): `hidden` tells it to
+draw no pointer of its own, which it does by taking the pointer over. So an established host
+puts a guest into relative motion while the system draws the pointer into the picture -- as it
+does while a window is dragged -- as well as for an application that took the pointer.
+
+**Relative intent comes from the show state, and from a pointer with nothing to show.** When an
+application takes over the pointer for mouselook it hides it, or sets a pointer whose picture
+is one value -- blank, or a solid block. Either is its own visible statement of intent, and
+together they are the whole class.
 
 **Never infer relative mode from pointer clipping geometry.** Clipping the pointer to a tiny
 rectangle is how a *client* enforces relative capture after being told to, so reading it on the
@@ -885,30 +907,36 @@ which is most of them, and it silently fails on applications that clip to a rect
 larger than the threshold. This trap has been implemented and removed once already; it must
 not come back.
 
-**Plane presence is not hidden.** A compositor that scales, rotates, or exceeds the plane's
+**Plane presence is not intent.** A compositor that scales, rotates, or exceeds the plane's
 size limit will composite the pointer into the primary plane instead, so the plane is absent
 while the pointer is plainly visible. On a scanout capture that is the common case rather than
 an edge case. Plane presence answers only one question: did the captured frame already contain
-the pointer, in which case the far side must not draw it again.
+the pointer, in which case the far side must not draw it again. *Corrected 2026-10-14:* that
+question is the overlay state, which is what `hidden` carries; so the plane is the right source
+for `hidden` and the wrong one for `relative`.
 
 **Suppressed is its own signal.** A pointer suppressed by touch input is not a mouselook grab
 and must never be folded into relative.
 
-### §8.2 Source of the hidden signal per backend
+### §8.2 Source of each signal per backend
 
 Windows exposes the requested show-state directly as a global flag. Linux has no single
-equivalent, so it is per backend, and this is an open item for Gate B:
+equivalent, so it is per backend, and this is an open item for Gate B. *Corrected 2026-10-14:*
+the table listed the sources of intent as "the hidden signal"; intent is `relative` and the
+overlay is `hidden` ([§8.1](#81-three-states-never-conflated)):
 
-| Backend | Source |
-|---|---|
-| X11 | cursor visibility notifications from the fixes extension |
-| compositor-mediated | the cursor mode reported alongside the stream |
-| scanout | no direct source; plane presence, debounced ([§8.4](#84-deriving-hidden-from-plane-presence)) |
+| Backend | intent (`relative`) | overlay (`hidden`) |
+|---|---|---|
+| Windows desktop duplication | the show state, or a pointer whose picture is one value throughout | the duplication's own visibility of the pointer, kept from the last frame that carried a pointer update |
+| X11 | cursor visibility notifications from the fixes extension | not built |
+| compositor-mediated | the cursor mode reported alongside the stream | not built |
+| scanout | no direct source; the session's ([07 §2.1](07-platforms.md)) | plane presence, debounced ([§8.4](#84-deriving-hidden-from-plane-presence)) |
 
 The scanout row is the problem case, because it is the one backend where the two states
 collapse and the false-positive rate is highest. It is flagged in
 [07-platforms.md](07-platforms.md) as a backend selection input, not something to paper over
-here.
+here. *Corrected 2026-10-14:* what scanout lacks is intent; its plane is the overlay state,
+which a far side is meant to read as relative motion.
 
 ### §8.4 Deriving hidden from plane presence
 
@@ -934,15 +962,24 @@ takes the guest's pointer away and turns its motion into deltas.
 
 ### §8.3 The state machine
 
-- `relative` is a **debounced, latched echo of hidden**. Rising hidden with relative clear sets
-  it; clear hidden with relative set clears it.
-- **Debounce is roughly 18 ms**, an absolute figure and not a frame count, so a pointer that
-  blinks hidden for one frame does not flap the far side between modes.
+*Corrected 2026-10-14, read from an established Windows host:* the first two items said
+`relative` is an echo of `hidden` and that the debounce is on `hidden`. Each bit has its own
+source ([§8.1](#81-three-states-never-conflated)), and the debounce is on the whole state:
+
+- `relative` is **latched from intent**: set while the show state says hidden or the pointer's
+  picture is one value, cleared when neither holds. `hidden` follows the overlay, kept from the
+  last frame that said anything about the pointer.
+- **A message goes out once the whole state has held for more than 18 ms** with a change
+  pending -- an absolute figure and not a frame count -- so a pointer that blinks hidden for one
+  frame does not flap the far side between modes, and a change undone inside the window sends
+  nothing. A new picture inside the window travels with the message that ends it. **A move
+  alone is not a change**: in absolute mode the far side draws its own pointer where its own
+  input puts it, and reads the position only when it leaves relative motion.
 - **Both `hidden` and `relative` are sent as separate flags**, since the far side needs the
   raw state as well as the decision.
-- **On the falling edge, send the reappear position**, so the far side warps its pointer to
-  where the host's actually is rather than leaving it wherever capture released it. Leaving a
-  drag and leaving mouselook then behave identically.
+- **On the falling edge, the message carries the pointer's current position**, so the far side
+  warps its pointer to where the host's actually is rather than leaving it wherever capture
+  released it. Leaving a drag and leaving mouselook then behave identically.
 - **Poll the cursor state from the same context as capture.** It is a property of the
   interactive session, and a daemon thread outside that session either sees nothing or sees
   the wrong seat.

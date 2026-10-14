@@ -3,6 +3,46 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2.2 reviewed: the pointer's bits, DPI awareness, a still desktop
+
+### Decided
+- On Windows each of the pointer's bits comes from its own source
+  ([impl-plan-windows.md](impl-plan-windows.md) W2): `hidden` from the duplication's own
+  visibility of the pointer, `relative` from the system's show state or a pointer whose picture
+  is one value throughout, `suppressed` from the show state's touch flag; the position is where
+  the pointer points; one message once the whole state has held for more than 18 ms.
+- The host is per-monitor DPI aware: `lowlatd` declares it in its manifest and the library
+  sets its own capture and input threads to it.
+- The duplication's frame that carries only the pointer, and a wait past the frame's deadline,
+  are presents of an unchanged picture; whether the image changed is the duplication's report.
+  The display is kept awake while a capture exists. The conversion writes the encoder's own
+  inputs through unordered-access views, and full chroma is the packed layout.
+- The development machine's second display moved onto the NVIDIA card, so the gate's switch
+  between displays stays on the encoder's GPU.
+
+### Corrected
+- [05 §8.1-8.3](05-host.md): `hidden` on the wire is the overlay state -- the pointer drawn
+  into the picture, or not drawn -- and `relative` is the intent; a far side goes relative on
+  either. The table had them folded the other way, and the state machine echoed one into the
+  other.
+- [05 §3](05-host.md): the encoder's own conversion is not dearer on the vendor's 2025 hardware;
+  the rule stands for the colour description, the layouts and one conversion for every encoder.
+- [05 §7](05-host.md): on Windows the aware mode is a code requirement too, since the
+  duplication call refuses an unaware thread.
+
+### Measured
+- An unaware thread's duplication call is refused (`DXGI_ERROR_UNSUPPORTED`); the per-monitor
+  mode on the thread alone is enough, and the coordinates the system hands back are scaled
+  without it.
+- The first acquire on a still desktop hands over the current picture at once, identical to
+  the screen; a moving pointer over a still desktop arrives as frames of its own every ~2 ms.
+- The encoder registers NV12 and P010 textures bound only for unordered access, takes one
+  input submitted again while its first picture is in flight, and encodes AYUV and Y410 at
+  full chroma; textures three pictures tall are refused as planar input.
+- At 2560x1440 and 120 a second the encoder's own conversion against a compute conversion into
+  NV12: 3.1 against 3.2 ms p50 for H.264, 6.2-6.5 against 5.8-6.0 for HEVC, whose p99 reaches
+  the frame interval (~8.5 ms) at the card's low power state.
+
 ## 2026-10-14 - W2.1: the vendor encoder on D3D11
 
 ### Changed
