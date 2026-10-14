@@ -276,6 +276,18 @@ const _: () = {
 pub type HWND = *mut HWND__;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct HMONITOR__ {
+    pub unused: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of HMONITOR__"][::std::mem::size_of::<HMONITOR__>() - 4usize];
+    ["Alignment of HMONITOR__"][::std::mem::align_of::<HMONITOR__>() - 4usize];
+    ["Offset of field: HMONITOR__::unused"][::std::mem::offset_of!(HMONITOR__, unused) - 0usize];
+};
+pub type HMONITOR = *mut HMONITOR__;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct tagRECT {
     pub left: LONG,
     pub top: LONG,
@@ -292,6 +304,20 @@ const _: () = {
     ["Offset of field: tagRECT::bottom"][::std::mem::offset_of!(tagRECT, bottom) - 12usize];
 };
 pub type RECT = tagRECT;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct tagPOINT {
+    pub x: LONG,
+    pub y: LONG,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of tagPOINT"][::std::mem::size_of::<tagPOINT>() - 8usize];
+    ["Alignment of tagPOINT"][::std::mem::align_of::<tagPOINT>() - 4usize];
+    ["Offset of field: tagPOINT::x"][::std::mem::offset_of!(tagPOINT, x) - 0usize];
+    ["Offset of field: tagPOINT::y"][::std::mem::offset_of!(tagPOINT, y) - 4usize];
+};
+pub type POINT = tagPOINT;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct tagSIZE {
@@ -390,6 +416,33 @@ const _: () = {
     ["Offset of field: DXGI_SAMPLE_DESC::Quality"]
         [::std::mem::offset_of!(DXGI_SAMPLE_DESC, Quality) - 4usize];
 };
+pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: DXGI_COLOR_SPACE_TYPE = 0;
+pub const DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709: DXGI_COLOR_SPACE_TYPE = 1;
+pub const DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709: DXGI_COLOR_SPACE_TYPE = 2;
+pub const DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P2020: DXGI_COLOR_SPACE_TYPE = 3;
+pub const DXGI_COLOR_SPACE_RESERVED: DXGI_COLOR_SPACE_TYPE = 4;
+pub const DXGI_COLOR_SPACE_YCBCR_FULL_G22_NONE_P709_X601: DXGI_COLOR_SPACE_TYPE = 5;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601: DXGI_COLOR_SPACE_TYPE = 6;
+pub const DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601: DXGI_COLOR_SPACE_TYPE = 7;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709: DXGI_COLOR_SPACE_TYPE = 8;
+pub const DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709: DXGI_COLOR_SPACE_TYPE = 9;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020: DXGI_COLOR_SPACE_TYPE = 10;
+pub const DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P2020: DXGI_COLOR_SPACE_TYPE = 11;
+pub const DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: DXGI_COLOR_SPACE_TYPE = 12;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020: DXGI_COLOR_SPACE_TYPE = 13;
+pub const DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020: DXGI_COLOR_SPACE_TYPE = 14;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020: DXGI_COLOR_SPACE_TYPE = 15;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020: DXGI_COLOR_SPACE_TYPE = 16;
+pub const DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020: DXGI_COLOR_SPACE_TYPE = 17;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_GHLG_TOPLEFT_P2020: DXGI_COLOR_SPACE_TYPE = 18;
+pub const DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020: DXGI_COLOR_SPACE_TYPE = 19;
+pub const DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P709: DXGI_COLOR_SPACE_TYPE = 20;
+pub const DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P2020: DXGI_COLOR_SPACE_TYPE = 21;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_LEFT_P709: DXGI_COLOR_SPACE_TYPE = 22;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_LEFT_P2020: DXGI_COLOR_SPACE_TYPE = 23;
+pub const DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_TOPLEFT_P2020: DXGI_COLOR_SPACE_TYPE = 24;
+pub const DXGI_COLOR_SPACE_CUSTOM: DXGI_COLOR_SPACE_TYPE = -1;
+pub type DXGI_COLOR_SPACE_TYPE = ::std::os::raw::c_int;
 pub const DXGI_FORMAT_UNKNOWN: DXGI_FORMAT = 0;
 pub const DXGI_FORMAT_R32G32B32A32_TYPELESS: DXGI_FORMAT = 1;
 pub const DXGI_FORMAT_R32G32B32A32_FLOAT: DXGI_FORMAT = 2;
@@ -514,6 +567,65 @@ pub const DXGI_FORMAT_SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE: DXGI_FORMAT = 190
 pub const DXGI_FORMAT_A4B4G4R4_UNORM: DXGI_FORMAT = 191;
 pub const DXGI_FORMAT_FORCE_UINT: DXGI_FORMAT = -1;
 pub type DXGI_FORMAT = ::std::os::raw::c_int;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_RGB {
+    pub Red: f32,
+    pub Green: f32,
+    pub Blue: f32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_RGB"][::std::mem::size_of::<DXGI_RGB>() - 12usize];
+    ["Alignment of DXGI_RGB"][::std::mem::align_of::<DXGI_RGB>() - 4usize];
+    ["Offset of field: DXGI_RGB::Red"][::std::mem::offset_of!(DXGI_RGB, Red) - 0usize];
+    ["Offset of field: DXGI_RGB::Green"][::std::mem::offset_of!(DXGI_RGB, Green) - 4usize];
+    ["Offset of field: DXGI_RGB::Blue"][::std::mem::offset_of!(DXGI_RGB, Blue) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_GAMMA_CONTROL {
+    pub Scale: DXGI_RGB,
+    pub Offset: DXGI_RGB,
+    pub GammaCurve: [DXGI_RGB; 1025usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_GAMMA_CONTROL"][::std::mem::size_of::<DXGI_GAMMA_CONTROL>() - 12324usize];
+    ["Alignment of DXGI_GAMMA_CONTROL"][::std::mem::align_of::<DXGI_GAMMA_CONTROL>() - 4usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL::Scale"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL, Scale) - 0usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL::Offset"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL, Offset) - 12usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL::GammaCurve"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL, GammaCurve) - 24usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_GAMMA_CONTROL_CAPABILITIES {
+    pub ScaleAndOffsetSupported: BOOL,
+    pub MaxConvertedValue: f32,
+    pub MinConvertedValue: f32,
+    pub NumGammaControlPoints: UINT,
+    pub ControlPointPositions: [f32; 1025usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_GAMMA_CONTROL_CAPABILITIES"]
+        [::std::mem::size_of::<DXGI_GAMMA_CONTROL_CAPABILITIES>() - 4116usize];
+    ["Alignment of DXGI_GAMMA_CONTROL_CAPABILITIES"]
+        [::std::mem::align_of::<DXGI_GAMMA_CONTROL_CAPABILITIES>() - 4usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL_CAPABILITIES::ScaleAndOffsetSupported"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL_CAPABILITIES, ScaleAndOffsetSupported) - 0usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL_CAPABILITIES::MaxConvertedValue"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL_CAPABILITIES, MaxConvertedValue) - 4usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL_CAPABILITIES::MinConvertedValue"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL_CAPABILITIES, MinConvertedValue) - 8usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL_CAPABILITIES::NumGammaControlPoints"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL_CAPABILITIES, NumGammaControlPoints) - 12usize];
+    ["Offset of field: DXGI_GAMMA_CONTROL_CAPABILITIES::ControlPointPositions"]
+        [::std::mem::offset_of!(DXGI_GAMMA_CONTROL_CAPABILITIES, ControlPointPositions) - 16usize];
+};
 pub const DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED: DXGI_MODE_SCANLINE_ORDER = 0;
 pub const DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE: DXGI_MODE_SCANLINE_ORDER = 1;
 pub const DXGI_MODE_SCANLINE_ORDER_UPPER_FIELD_FIRST: DXGI_MODE_SCANLINE_ORDER = 2;
@@ -523,6 +635,12 @@ pub const DXGI_MODE_SCALING_UNSPECIFIED: DXGI_MODE_SCALING = 0;
 pub const DXGI_MODE_SCALING_CENTERED: DXGI_MODE_SCALING = 1;
 pub const DXGI_MODE_SCALING_STRETCHED: DXGI_MODE_SCALING = 2;
 pub type DXGI_MODE_SCALING = ::std::os::raw::c_int;
+pub const DXGI_MODE_ROTATION_UNSPECIFIED: DXGI_MODE_ROTATION = 0;
+pub const DXGI_MODE_ROTATION_IDENTITY: DXGI_MODE_ROTATION = 1;
+pub const DXGI_MODE_ROTATION_ROTATE90: DXGI_MODE_ROTATION = 2;
+pub const DXGI_MODE_ROTATION_ROTATE180: DXGI_MODE_ROTATION = 3;
+pub const DXGI_MODE_ROTATION_ROTATE270: DXGI_MODE_ROTATION = 4;
+pub type DXGI_MODE_ROTATION = ::std::os::raw::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct DXGI_MODE_DESC {
@@ -551,6 +669,46 @@ const _: () = {
         [::std::mem::offset_of!(DXGI_MODE_DESC, Scaling) - 24usize];
 };
 pub type DXGI_USAGE = UINT;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct DXGI_FRAME_STATISTICS {
+    pub PresentCount: UINT,
+    pub PresentRefreshCount: UINT,
+    pub SyncRefreshCount: UINT,
+    pub SyncQPCTime: LARGE_INTEGER,
+    pub SyncGPUTime: LARGE_INTEGER,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_FRAME_STATISTICS"][::std::mem::size_of::<DXGI_FRAME_STATISTICS>() - 32usize];
+    ["Alignment of DXGI_FRAME_STATISTICS"]
+        [::std::mem::align_of::<DXGI_FRAME_STATISTICS>() - 8usize];
+    ["Offset of field: DXGI_FRAME_STATISTICS::PresentCount"]
+        [::std::mem::offset_of!(DXGI_FRAME_STATISTICS, PresentCount) - 0usize];
+    ["Offset of field: DXGI_FRAME_STATISTICS::PresentRefreshCount"]
+        [::std::mem::offset_of!(DXGI_FRAME_STATISTICS, PresentRefreshCount) - 4usize];
+    ["Offset of field: DXGI_FRAME_STATISTICS::SyncRefreshCount"]
+        [::std::mem::offset_of!(DXGI_FRAME_STATISTICS, SyncRefreshCount) - 8usize];
+    ["Offset of field: DXGI_FRAME_STATISTICS::SyncQPCTime"]
+        [::std::mem::offset_of!(DXGI_FRAME_STATISTICS, SyncQPCTime) - 16usize];
+    ["Offset of field: DXGI_FRAME_STATISTICS::SyncGPUTime"]
+        [::std::mem::offset_of!(DXGI_FRAME_STATISTICS, SyncGPUTime) - 24usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_MAPPED_RECT {
+    pub Pitch: INT,
+    pub pBits: *mut BYTE,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_MAPPED_RECT"][::std::mem::size_of::<DXGI_MAPPED_RECT>() - 16usize];
+    ["Alignment of DXGI_MAPPED_RECT"][::std::mem::align_of::<DXGI_MAPPED_RECT>() - 8usize];
+    ["Offset of field: DXGI_MAPPED_RECT::Pitch"]
+        [::std::mem::offset_of!(DXGI_MAPPED_RECT, Pitch) - 0usize];
+    ["Offset of field: DXGI_MAPPED_RECT::pBits"]
+        [::std::mem::offset_of!(DXGI_MAPPED_RECT, pBits) - 8usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct DXGI_ADAPTER_DESC {
@@ -586,6 +744,30 @@ const _: () = {
         [::std::mem::offset_of!(DXGI_ADAPTER_DESC, SharedSystemMemory) - 288usize];
     ["Offset of field: DXGI_ADAPTER_DESC::AdapterLuid"]
         [::std::mem::offset_of!(DXGI_ADAPTER_DESC, AdapterLuid) - 296usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_OUTPUT_DESC {
+    pub DeviceName: [WCHAR; 32usize],
+    pub DesktopCoordinates: RECT,
+    pub AttachedToDesktop: BOOL,
+    pub Rotation: DXGI_MODE_ROTATION,
+    pub Monitor: HMONITOR,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTPUT_DESC"][::std::mem::size_of::<DXGI_OUTPUT_DESC>() - 96usize];
+    ["Alignment of DXGI_OUTPUT_DESC"][::std::mem::align_of::<DXGI_OUTPUT_DESC>() - 8usize];
+    ["Offset of field: DXGI_OUTPUT_DESC::DeviceName"]
+        [::std::mem::offset_of!(DXGI_OUTPUT_DESC, DeviceName) - 0usize];
+    ["Offset of field: DXGI_OUTPUT_DESC::DesktopCoordinates"]
+        [::std::mem::offset_of!(DXGI_OUTPUT_DESC, DesktopCoordinates) - 64usize];
+    ["Offset of field: DXGI_OUTPUT_DESC::AttachedToDesktop"]
+        [::std::mem::offset_of!(DXGI_OUTPUT_DESC, AttachedToDesktop) - 80usize];
+    ["Offset of field: DXGI_OUTPUT_DESC::Rotation"]
+        [::std::mem::offset_of!(DXGI_OUTPUT_DESC, Rotation) - 84usize];
+    ["Offset of field: DXGI_OUTPUT_DESC::Monitor"]
+        [::std::mem::offset_of!(DXGI_OUTPUT_DESC, Monitor) - 88usize];
 };
 pub const DXGI_SWAP_EFFECT_DISCARD: DXGI_SWAP_EFFECT = 0;
 pub const DXGI_SWAP_EFFECT_SEQUENTIAL: DXGI_SWAP_EFFECT = 1;
@@ -751,15 +933,152 @@ const _: () = {
     ["Alignment of IDXGIAdapter"][::std::mem::align_of::<IDXGIAdapter>() - 8usize];
 };
 #[repr(C)]
-#[repr(align(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct IDXGIOutputVtbl {
+    pub QueryInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            riid: *const IID,
+            ppvObject: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub AddRef: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput) -> ULONG>,
+    pub Release: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput) -> ULONG>,
+    pub SetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            Name: *const GUID,
+            DataSize: UINT,
+            pData: *const ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub SetPrivateDataInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            Name: *const GUID,
+            pUnknown: *const IUnknown,
+        ) -> HRESULT,
+    >,
+    pub GetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            Name: *const GUID,
+            pDataSize: *mut UINT,
+            pData: *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetParent: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            riid: *const IID,
+            ppParent: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetDesc: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pDesc: *mut DXGI_OUTPUT_DESC) -> HRESULT,
+    >,
+    pub GetDisplayModeList: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            EnumFormat: DXGI_FORMAT,
+            Flags: UINT,
+            pNumModes: *mut UINT,
+            pDesc: *mut DXGI_MODE_DESC,
+        ) -> HRESULT,
+    >,
+    pub FindClosestMatchingMode: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            pModeToMatch: *const DXGI_MODE_DESC,
+            pClosestMatch: *mut DXGI_MODE_DESC,
+            pConcernedDevice: *mut IUnknown,
+        ) -> HRESULT,
+    >,
+    pub WaitForVBlank:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput) -> HRESULT>,
+    pub TakeOwnership: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            pDevice: *mut IUnknown,
+            Exclusive: BOOL,
+        ) -> HRESULT,
+    >,
+    pub ReleaseOwnership: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput)>,
+    pub GetGammaControlCapabilities: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput,
+            pGammaCaps: *mut DXGI_GAMMA_CONTROL_CAPABILITIES,
+        ) -> HRESULT,
+    >,
+    pub SetGammaControl: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pArray: *const DXGI_GAMMA_CONTROL) -> HRESULT,
+    >,
+    pub GetGammaControl: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pArray: *mut DXGI_GAMMA_CONTROL) -> HRESULT,
+    >,
+    pub SetDisplaySurface: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pScanoutSurface: *mut IDXGISurface) -> HRESULT,
+    >,
+    pub GetDisplaySurfaceData: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pDestination: *mut IDXGISurface) -> HRESULT,
+    >,
+    pub GetFrameStatistics: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput, pStats: *mut DXGI_FRAME_STATISTICS) -> HRESULT,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of IDXGIOutputVtbl"][::std::mem::size_of::<IDXGIOutputVtbl>() - 152usize];
+    ["Alignment of IDXGIOutputVtbl"][::std::mem::align_of::<IDXGIOutputVtbl>() - 8usize];
+    ["Offset of field: IDXGIOutputVtbl::QueryInterface"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, QueryInterface) - 0usize];
+    ["Offset of field: IDXGIOutputVtbl::AddRef"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, AddRef) - 8usize];
+    ["Offset of field: IDXGIOutputVtbl::Release"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, Release) - 16usize];
+    ["Offset of field: IDXGIOutputVtbl::SetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, SetPrivateData) - 24usize];
+    ["Offset of field: IDXGIOutputVtbl::SetPrivateDataInterface"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, SetPrivateDataInterface) - 32usize];
+    ["Offset of field: IDXGIOutputVtbl::GetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetPrivateData) - 40usize];
+    ["Offset of field: IDXGIOutputVtbl::GetParent"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetParent) - 48usize];
+    ["Offset of field: IDXGIOutputVtbl::GetDesc"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetDesc) - 56usize];
+    ["Offset of field: IDXGIOutputVtbl::GetDisplayModeList"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetDisplayModeList) - 64usize];
+    ["Offset of field: IDXGIOutputVtbl::FindClosestMatchingMode"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, FindClosestMatchingMode) - 72usize];
+    ["Offset of field: IDXGIOutputVtbl::WaitForVBlank"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, WaitForVBlank) - 80usize];
+    ["Offset of field: IDXGIOutputVtbl::TakeOwnership"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, TakeOwnership) - 88usize];
+    ["Offset of field: IDXGIOutputVtbl::ReleaseOwnership"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, ReleaseOwnership) - 96usize];
+    ["Offset of field: IDXGIOutputVtbl::GetGammaControlCapabilities"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetGammaControlCapabilities) - 104usize];
+    ["Offset of field: IDXGIOutputVtbl::SetGammaControl"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, SetGammaControl) - 112usize];
+    ["Offset of field: IDXGIOutputVtbl::GetGammaControl"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetGammaControl) - 120usize];
+    ["Offset of field: IDXGIOutputVtbl::SetDisplaySurface"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, SetDisplaySurface) - 128usize];
+    ["Offset of field: IDXGIOutputVtbl::GetDisplaySurfaceData"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetDisplaySurfaceData) - 136usize];
+    ["Offset of field: IDXGIOutputVtbl::GetFrameStatistics"]
+        [::std::mem::offset_of!(IDXGIOutputVtbl, GetFrameStatistics) - 144usize];
+};
+#[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct IDXGIOutput {
-    pub _bindgen_opaque_blob: u64,
+    pub lpVtbl: *mut IDXGIOutputVtbl,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of IDXGIOutput"][::std::mem::size_of::<IDXGIOutput>() - 8usize];
     ["Alignment of IDXGIOutput"][::std::mem::align_of::<IDXGIOutput>() - 8usize];
+    ["Offset of field: IDXGIOutput::lpVtbl"][::std::mem::offset_of!(IDXGIOutput, lpVtbl) - 0usize];
 };
 #[repr(C)]
 #[repr(align(8))]
@@ -1037,12 +1356,298 @@ const _: () = {
     ["Offset of field: IDXGIAdapter1::lpVtbl"]
         [::std::mem::offset_of!(IDXGIAdapter1, lpVtbl) - 0usize];
 };
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_OUTDUPL_MOVE_RECT {
+    pub SourcePoint: POINT,
+    pub DestinationRect: RECT,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTDUPL_MOVE_RECT"][::std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() - 24usize];
+    ["Alignment of DXGI_OUTDUPL_MOVE_RECT"]
+        [::std::mem::align_of::<DXGI_OUTDUPL_MOVE_RECT>() - 4usize];
+    ["Offset of field: DXGI_OUTDUPL_MOVE_RECT::SourcePoint"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_MOVE_RECT, SourcePoint) - 0usize];
+    ["Offset of field: DXGI_OUTDUPL_MOVE_RECT::DestinationRect"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_MOVE_RECT, DestinationRect) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_OUTDUPL_DESC {
+    pub ModeDesc: DXGI_MODE_DESC,
+    pub Rotation: DXGI_MODE_ROTATION,
+    pub DesktopImageInSystemMemory: BOOL,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTDUPL_DESC"][::std::mem::size_of::<DXGI_OUTDUPL_DESC>() - 36usize];
+    ["Alignment of DXGI_OUTDUPL_DESC"][::std::mem::align_of::<DXGI_OUTDUPL_DESC>() - 4usize];
+    ["Offset of field: DXGI_OUTDUPL_DESC::ModeDesc"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_DESC, ModeDesc) - 0usize];
+    ["Offset of field: DXGI_OUTDUPL_DESC::Rotation"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_DESC, Rotation) - 28usize];
+    ["Offset of field: DXGI_OUTDUPL_DESC::DesktopImageInSystemMemory"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_DESC, DesktopImageInSystemMemory) - 32usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_OUTDUPL_POINTER_POSITION {
+    pub Position: POINT,
+    pub Visible: BOOL,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTDUPL_POINTER_POSITION"]
+        [::std::mem::size_of::<DXGI_OUTDUPL_POINTER_POSITION>() - 12usize];
+    ["Alignment of DXGI_OUTDUPL_POINTER_POSITION"]
+        [::std::mem::align_of::<DXGI_OUTDUPL_POINTER_POSITION>() - 4usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_POSITION::Position"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_POSITION, Position) - 0usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_POSITION::Visible"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_POSITION, Visible) - 8usize];
+};
+pub const DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME: DXGI_OUTDUPL_POINTER_SHAPE_TYPE = 1;
+pub const DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR: DXGI_OUTDUPL_POINTER_SHAPE_TYPE = 2;
+pub const DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR: DXGI_OUTDUPL_POINTER_SHAPE_TYPE = 4;
+pub type DXGI_OUTDUPL_POINTER_SHAPE_TYPE = ::std::os::raw::c_int;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+    pub Type: UINT,
+    pub Width: UINT,
+    pub Height: UINT,
+    pub Pitch: UINT,
+    pub HotSpot: POINT,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTDUPL_POINTER_SHAPE_INFO"]
+        [::std::mem::size_of::<DXGI_OUTDUPL_POINTER_SHAPE_INFO>() - 24usize];
+    ["Alignment of DXGI_OUTDUPL_POINTER_SHAPE_INFO"]
+        [::std::mem::align_of::<DXGI_OUTDUPL_POINTER_SHAPE_INFO>() - 4usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_SHAPE_INFO::Type"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_SHAPE_INFO, Type) - 0usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_SHAPE_INFO::Width"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_SHAPE_INFO, Width) - 4usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_SHAPE_INFO::Height"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_SHAPE_INFO, Height) - 8usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_SHAPE_INFO::Pitch"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_SHAPE_INFO, Pitch) - 12usize];
+    ["Offset of field: DXGI_OUTDUPL_POINTER_SHAPE_INFO::HotSpot"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_POINTER_SHAPE_INFO, HotSpot) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct DXGI_OUTDUPL_FRAME_INFO {
+    pub LastPresentTime: LARGE_INTEGER,
+    pub LastMouseUpdateTime: LARGE_INTEGER,
+    pub AccumulatedFrames: UINT,
+    pub RectsCoalesced: BOOL,
+    pub ProtectedContentMaskedOut: BOOL,
+    pub PointerPosition: DXGI_OUTDUPL_POINTER_POSITION,
+    pub TotalMetadataBufferSize: UINT,
+    pub PointerShapeBufferSize: UINT,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_OUTDUPL_FRAME_INFO"][::std::mem::size_of::<DXGI_OUTDUPL_FRAME_INFO>() - 48usize];
+    ["Alignment of DXGI_OUTDUPL_FRAME_INFO"]
+        [::std::mem::align_of::<DXGI_OUTDUPL_FRAME_INFO>() - 8usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::LastPresentTime"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, LastPresentTime) - 0usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::LastMouseUpdateTime"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, LastMouseUpdateTime) - 8usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::AccumulatedFrames"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, AccumulatedFrames) - 16usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::RectsCoalesced"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, RectsCoalesced) - 20usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::ProtectedContentMaskedOut"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, ProtectedContentMaskedOut) - 24usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::PointerPosition"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, PointerPosition) - 28usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::TotalMetadataBufferSize"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, TotalMetadataBufferSize) - 40usize];
+    ["Offset of field: DXGI_OUTDUPL_FRAME_INFO::PointerShapeBufferSize"]
+        [::std::mem::offset_of!(DXGI_OUTDUPL_FRAME_INFO, PointerShapeBufferSize) - 44usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IDXGIOutputDuplicationVtbl {
+    pub QueryInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            riid: *const IID,
+            ppvObject: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub AddRef:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutputDuplication) -> ULONG>,
+    pub Release:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutputDuplication) -> ULONG>,
+    pub SetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            Name: *const GUID,
+            DataSize: UINT,
+            pData: *const ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub SetPrivateDataInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            Name: *const GUID,
+            pUnknown: *const IUnknown,
+        ) -> HRESULT,
+    >,
+    pub GetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            Name: *const GUID,
+            pDataSize: *mut UINT,
+            pData: *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetParent: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            riid: *const IID,
+            ppParent: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetDesc: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutputDuplication, pDesc: *mut DXGI_OUTDUPL_DESC),
+    >,
+    pub AcquireNextFrame: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            TimeoutInMilliseconds: UINT,
+            pFrameInfo: *mut DXGI_OUTDUPL_FRAME_INFO,
+            ppDesktopResource: *mut *mut IDXGIResource,
+        ) -> HRESULT,
+    >,
+    pub GetFrameDirtyRects: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            DirtyRectsBufferSize: UINT,
+            pDirtyRectsBuffer: *mut RECT,
+            pDirtyRectsBufferSizeRequired: *mut UINT,
+        ) -> HRESULT,
+    >,
+    pub GetFrameMoveRects: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            MoveRectsBufferSize: UINT,
+            pMoveRectBuffer: *mut DXGI_OUTDUPL_MOVE_RECT,
+            pMoveRectsBufferSizeRequired: *mut UINT,
+        ) -> HRESULT,
+    >,
+    pub GetFramePointerShape: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            PointerShapeBufferSize: UINT,
+            pPointerShapeBuffer: *mut ::std::os::raw::c_void,
+            pPointerShapeBufferSizeRequired: *mut UINT,
+            pPointerShapeInfo: *mut DXGI_OUTDUPL_POINTER_SHAPE_INFO,
+        ) -> HRESULT,
+    >,
+    pub MapDesktopSurface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutputDuplication,
+            pLockedRect: *mut DXGI_MAPPED_RECT,
+        ) -> HRESULT,
+    >,
+    pub UnMapDesktopSurface:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutputDuplication) -> HRESULT>,
+    pub ReleaseFrame:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutputDuplication) -> HRESULT>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of IDXGIOutputDuplicationVtbl"]
+        [::std::mem::size_of::<IDXGIOutputDuplicationVtbl>() - 120usize];
+    ["Alignment of IDXGIOutputDuplicationVtbl"]
+        [::std::mem::align_of::<IDXGIOutputDuplicationVtbl>() - 8usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::QueryInterface"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, QueryInterface) - 0usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::AddRef"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, AddRef) - 8usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::Release"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, Release) - 16usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::SetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, SetPrivateData) - 24usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::SetPrivateDataInterface"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, SetPrivateDataInterface) - 32usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetPrivateData) - 40usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetParent"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetParent) - 48usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetDesc"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetDesc) - 56usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::AcquireNextFrame"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, AcquireNextFrame) - 64usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetFrameDirtyRects"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetFrameDirtyRects) - 72usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetFrameMoveRects"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetFrameMoveRects) - 80usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::GetFramePointerShape"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, GetFramePointerShape) - 88usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::MapDesktopSurface"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, MapDesktopSurface) - 96usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::UnMapDesktopSurface"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, UnMapDesktopSurface) - 104usize];
+    ["Offset of field: IDXGIOutputDuplicationVtbl::ReleaseFrame"]
+        [::std::mem::offset_of!(IDXGIOutputDuplicationVtbl, ReleaseFrame) - 112usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IDXGIOutputDuplication {
+    pub lpVtbl: *mut IDXGIOutputDuplicationVtbl,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of IDXGIOutputDuplication"][::std::mem::size_of::<IDXGIOutputDuplication>() - 8usize];
+    ["Alignment of IDXGIOutputDuplication"]
+        [::std::mem::align_of::<IDXGIOutputDuplication>() - 8usize];
+    ["Offset of field: IDXGIOutputDuplication::lpVtbl"]
+        [::std::mem::offset_of!(IDXGIOutputDuplication, lpVtbl) - 0usize];
+};
 pub const DXGI_ALPHA_MODE_UNSPECIFIED: DXGI_ALPHA_MODE = 0;
 pub const DXGI_ALPHA_MODE_PREMULTIPLIED: DXGI_ALPHA_MODE = 1;
 pub const DXGI_ALPHA_MODE_STRAIGHT: DXGI_ALPHA_MODE = 2;
 pub const DXGI_ALPHA_MODE_IGNORE: DXGI_ALPHA_MODE = 3;
 pub const DXGI_ALPHA_MODE_FORCE_DWORD: DXGI_ALPHA_MODE = -1;
 pub type DXGI_ALPHA_MODE = ::std::os::raw::c_int;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DXGI_MODE_DESC1 {
+    pub Width: UINT,
+    pub Height: UINT,
+    pub RefreshRate: DXGI_RATIONAL,
+    pub Format: DXGI_FORMAT,
+    pub ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER,
+    pub Scaling: DXGI_MODE_SCALING,
+    pub Stereo: BOOL,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DXGI_MODE_DESC1"][::std::mem::size_of::<DXGI_MODE_DESC1>() - 32usize];
+    ["Alignment of DXGI_MODE_DESC1"][::std::mem::align_of::<DXGI_MODE_DESC1>() - 4usize];
+    ["Offset of field: DXGI_MODE_DESC1::Width"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, Width) - 0usize];
+    ["Offset of field: DXGI_MODE_DESC1::Height"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, Height) - 4usize];
+    ["Offset of field: DXGI_MODE_DESC1::RefreshRate"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, RefreshRate) - 8usize];
+    ["Offset of field: DXGI_MODE_DESC1::Format"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, Format) - 16usize];
+    ["Offset of field: DXGI_MODE_DESC1::ScanlineOrdering"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, ScanlineOrdering) - 20usize];
+    ["Offset of field: DXGI_MODE_DESC1::Scaling"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, Scaling) - 24usize];
+    ["Offset of field: DXGI_MODE_DESC1::Stereo"]
+        [::std::mem::offset_of!(DXGI_MODE_DESC1, Stereo) - 28usize];
+};
 pub const DXGI_SCALING_STRETCH: DXGI_SCALING = 0;
 pub const DXGI_SCALING_NONE: DXGI_SCALING = 1;
 pub const DXGI_SCALING_ASPECT_RATIO_STRETCH: DXGI_SCALING = 2;
@@ -1123,6 +1728,235 @@ pub struct IDXGISwapChain1 {
 const _: () = {
     ["Size of IDXGISwapChain1"][::std::mem::size_of::<IDXGISwapChain1>() - 8usize];
     ["Alignment of IDXGISwapChain1"][::std::mem::align_of::<IDXGISwapChain1>() - 8usize];
+};
+pub const DXGI_OUTDUPL_COMPOSITED_UI_CAPTURE_ONLY: DXGI_OUTDUPL_FLAG = 1;
+pub type DXGI_OUTDUPL_FLAG = ::std::os::raw::c_int;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IDXGIOutput5Vtbl {
+    pub QueryInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            riid: *const IID,
+            ppvObject: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub AddRef: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput5) -> ULONG>,
+    pub Release: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput5) -> ULONG>,
+    pub SetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            Name: *const GUID,
+            DataSize: UINT,
+            pData: *const ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub SetPrivateDataInterface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            Name: *const GUID,
+            pUnknown: *const IUnknown,
+        ) -> HRESULT,
+    >,
+    pub GetPrivateData: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            Name: *const GUID,
+            pDataSize: *mut UINT,
+            pData: *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetParent: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            riid: *const IID,
+            ppParent: *mut *mut ::std::os::raw::c_void,
+        ) -> HRESULT,
+    >,
+    pub GetDesc: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput5, pDesc: *mut DXGI_OUTPUT_DESC) -> HRESULT,
+    >,
+    pub GetDisplayModeList: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            EnumFormat: DXGI_FORMAT,
+            Flags: UINT,
+            pNumModes: *mut UINT,
+            pDesc: *mut DXGI_MODE_DESC,
+        ) -> HRESULT,
+    >,
+    pub FindClosestMatchingMode: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pModeToMatch: *const DXGI_MODE_DESC,
+            pClosestMatch: *mut DXGI_MODE_DESC,
+            pConcernedDevice: *mut IUnknown,
+        ) -> HRESULT,
+    >,
+    pub WaitForVBlank:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput5) -> HRESULT>,
+    pub TakeOwnership: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pDevice: *mut IUnknown,
+            Exclusive: BOOL,
+        ) -> HRESULT,
+    >,
+    pub ReleaseOwnership: ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput5)>,
+    pub GetGammaControlCapabilities: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pGammaCaps: *mut DXGI_GAMMA_CONTROL_CAPABILITIES,
+        ) -> HRESULT,
+    >,
+    pub SetGammaControl: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput5, pArray: *const DXGI_GAMMA_CONTROL) -> HRESULT,
+    >,
+    pub GetGammaControl: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput5, pArray: *mut DXGI_GAMMA_CONTROL) -> HRESULT,
+    >,
+    pub SetDisplaySurface: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pScanoutSurface: *mut IDXGISurface,
+        ) -> HRESULT,
+    >,
+    pub GetDisplaySurfaceData: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput5, pDestination: *mut IDXGISurface) -> HRESULT,
+    >,
+    pub GetFrameStatistics: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pStats: *mut DXGI_FRAME_STATISTICS,
+        ) -> HRESULT,
+    >,
+    pub GetDisplayModeList1: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            EnumFormat: DXGI_FORMAT,
+            Flags: UINT,
+            pNumModes: *mut UINT,
+            pDesc: *mut DXGI_MODE_DESC1,
+        ) -> HRESULT,
+    >,
+    pub FindClosestMatchingMode1: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pModeToMatch: *const DXGI_MODE_DESC1,
+            pClosestMatch: *mut DXGI_MODE_DESC1,
+            pConcernedDevice: *mut IUnknown,
+        ) -> HRESULT,
+    >,
+    pub GetDisplaySurfaceData1: ::std::option::Option<
+        unsafe extern "C" fn(This: *mut IDXGIOutput5, pDestination: *mut IDXGIResource) -> HRESULT,
+    >,
+    pub DuplicateOutput: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pDevice: *mut IUnknown,
+            ppOutputDuplication: *mut *mut IDXGIOutputDuplication,
+        ) -> HRESULT,
+    >,
+    pub SupportsOverlays:
+        ::std::option::Option<unsafe extern "C" fn(This: *mut IDXGIOutput5) -> BOOL>,
+    pub CheckOverlaySupport: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            EnumFormat: DXGI_FORMAT,
+            pConcernedDevice: *mut IUnknown,
+            pFlags: *mut UINT,
+        ) -> HRESULT,
+    >,
+    pub CheckOverlayColorSpaceSupport: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            Format: DXGI_FORMAT,
+            ColorSpace: DXGI_COLOR_SPACE_TYPE,
+            pConcernedDevice: *mut IUnknown,
+            pFlags: *mut UINT,
+        ) -> HRESULT,
+    >,
+    pub DuplicateOutput1: ::std::option::Option<
+        unsafe extern "C" fn(
+            This: *mut IDXGIOutput5,
+            pDevice: *mut IUnknown,
+            Flags: UINT,
+            SupportedFormatsCount: UINT,
+            pSupportedFormats: *const DXGI_FORMAT,
+            ppOutputDuplication: *mut *mut IDXGIOutputDuplication,
+        ) -> HRESULT,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of IDXGIOutput5Vtbl"][::std::mem::size_of::<IDXGIOutput5Vtbl>() - 216usize];
+    ["Alignment of IDXGIOutput5Vtbl"][::std::mem::align_of::<IDXGIOutput5Vtbl>() - 8usize];
+    ["Offset of field: IDXGIOutput5Vtbl::QueryInterface"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, QueryInterface) - 0usize];
+    ["Offset of field: IDXGIOutput5Vtbl::AddRef"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, AddRef) - 8usize];
+    ["Offset of field: IDXGIOutput5Vtbl::Release"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, Release) - 16usize];
+    ["Offset of field: IDXGIOutput5Vtbl::SetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, SetPrivateData) - 24usize];
+    ["Offset of field: IDXGIOutput5Vtbl::SetPrivateDataInterface"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, SetPrivateDataInterface) - 32usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetPrivateData"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetPrivateData) - 40usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetParent"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetParent) - 48usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetDesc"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetDesc) - 56usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetDisplayModeList"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetDisplayModeList) - 64usize];
+    ["Offset of field: IDXGIOutput5Vtbl::FindClosestMatchingMode"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, FindClosestMatchingMode) - 72usize];
+    ["Offset of field: IDXGIOutput5Vtbl::WaitForVBlank"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, WaitForVBlank) - 80usize];
+    ["Offset of field: IDXGIOutput5Vtbl::TakeOwnership"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, TakeOwnership) - 88usize];
+    ["Offset of field: IDXGIOutput5Vtbl::ReleaseOwnership"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, ReleaseOwnership) - 96usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetGammaControlCapabilities"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetGammaControlCapabilities) - 104usize];
+    ["Offset of field: IDXGIOutput5Vtbl::SetGammaControl"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, SetGammaControl) - 112usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetGammaControl"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetGammaControl) - 120usize];
+    ["Offset of field: IDXGIOutput5Vtbl::SetDisplaySurface"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, SetDisplaySurface) - 128usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetDisplaySurfaceData"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetDisplaySurfaceData) - 136usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetFrameStatistics"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetFrameStatistics) - 144usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetDisplayModeList1"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetDisplayModeList1) - 152usize];
+    ["Offset of field: IDXGIOutput5Vtbl::FindClosestMatchingMode1"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, FindClosestMatchingMode1) - 160usize];
+    ["Offset of field: IDXGIOutput5Vtbl::GetDisplaySurfaceData1"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, GetDisplaySurfaceData1) - 168usize];
+    ["Offset of field: IDXGIOutput5Vtbl::DuplicateOutput"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, DuplicateOutput) - 176usize];
+    ["Offset of field: IDXGIOutput5Vtbl::SupportsOverlays"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, SupportsOverlays) - 184usize];
+    ["Offset of field: IDXGIOutput5Vtbl::CheckOverlaySupport"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, CheckOverlaySupport) - 192usize];
+    ["Offset of field: IDXGIOutput5Vtbl::CheckOverlayColorSpaceSupport"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, CheckOverlayColorSpaceSupport) - 200usize];
+    ["Offset of field: IDXGIOutput5Vtbl::DuplicateOutput1"]
+        [::std::mem::offset_of!(IDXGIOutput5Vtbl, DuplicateOutput1) - 208usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IDXGIOutput5 {
+    pub lpVtbl: *mut IDXGIOutput5Vtbl,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of IDXGIOutput5"][::std::mem::size_of::<IDXGIOutput5>() - 8usize];
+    ["Alignment of IDXGIOutput5"][::std::mem::align_of::<IDXGIOutput5>() - 8usize];
+    ["Offset of field: IDXGIOutput5::lpVtbl"]
+        [::std::mem::offset_of!(IDXGIOutput5, lpVtbl) - 0usize];
 };
 pub const DXGI_FEATURE_PRESENT_ALLOW_TEARING: DXGI_FEATURE = 0;
 pub type DXGI_FEATURE = ::std::os::raw::c_int;

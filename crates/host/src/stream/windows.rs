@@ -1,25 +1,28 @@
-//! What a stream is built on, on Windows: the vendor's encoder on a D3D11
-//! device, fed by the synthetic source until the display is built
-//! (docs/impl-plan-windows.md, W2.2). The loop above is written once; a
-//! platform writes this module.
+//! What a stream is built on, on Windows: the vendor's encoder on the D3D11
+//! device of the output being captured, fed by the display's conversion, or
+//! by the synthetic source where no display is asked for. The loop above is
+//! written once; a platform writes this module.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
+use lowlat_capture::d3d11::Layout;
 use lowlat_core::control::status;
 
 use super::{
-    Backend, Codec, Config, Exit, FromDevice, Join, Roster, Shared, encode_loop, settle_pace,
-    start_bps,
+    Backend, Codec, Config, DISPLAY_WAIT, Exit, FromDevice, Join, Roster, Shared, await_display,
+    encode_loop, settle_pace, start_bps,
 };
+use crate::display::Display;
 
 /// The vendor whose encoder this platform builds.
 const NVIDIA: u32 = 0x10de;
 
 /// Build the stream's device and encoder for `config` and run it until it
-/// exits: the vendor's encoder on a device of its own, the generator its
-/// source. A display, or the open backend by name, is refused rather than
+/// exits: with a display, everything on the device of the output's own
+/// adapter; without one, the vendor's encoder on a device of its own and the
+/// generator its source. The open backend by name is refused rather than
 /// answered with something else.
 pub(super) fn build(
     shared: &Arc<Shared>,
@@ -36,32 +39,216 @@ pub(super) fn build(
         config.codec,
         Backend::Vendor
     );
-    // **Said once each.** The loop asks again at its own pace while a refusal
-    // is young, and neither answer changes.
-    static NO_DISPLAY: AtomicBool = AtomicBool::new(false);
+    // **Said once.** The loop asks again at its own pace while a refusal is
+    // young, and the answer does not change.
     static NO_OPEN: AtomicBool = AtomicBool::new(false);
-    if config.display {
-        if !NO_DISPLAY.swap(true, Ordering::Relaxed) {
-            lowlat_common::log_error!("stream: no display is built for this platform yet");
-        }
-        return Exit::Failed(status::CAPTURE_UNAVAILABLE);
-    }
     if config.backend == Some(Backend::Open) {
         if !NO_OPEN.swap(true, Ordering::Relaxed) {
             lowlat_common::log_error!("stream: the open backend is not built for this platform");
         }
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
     }
-    run_vendor(shared, arrivals, config.clone(), roster)
+    if config.display {
+        run_display(shared, arrivals, config.clone(), roster)
+    } else {
+        run_vendor(shared, arrivals, config.clone(), roster)
+    }
 }
 
-/// No encoder here takes full chroma yet: the generator's frames carry two
-/// planes, and the layout this device takes full chroma in is the display's
-/// conversion's to settle. So the offer is refused, with that gate.
-pub(super) fn chroma_census(_config: &Config) -> Result<(), &'static str> {
-    Err("the vendor encoder on this platform, which takes no full chroma before its conversion")
+/// Whether the encoder codes full chroma at the running depth, or which gate
+/// refused it.
+///
+/// **Only from the display's conversion**, which writes the packed words the
+/// encoder takes on this device -- AYUV at eight bits, Y410 at ten, each
+/// carried through a decoder and back -- where the generator's frames carry
+/// two planes. Asked once per run of the device: the answers are its
+/// properties.
+pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
+    if !config.display {
+        return Err("the synthetic source, whose frames carry two planes");
+    }
+    let Ok(d3d11) = lowlat_encode::d3d11::D3d11::load() else {
+        return Err("the graphics libraries, which could not be loaded");
+    };
+    let Some(adapter) = d3d11.adapters().ok().and_then(|adapters| {
+        adapters
+            .into_iter()
+            .find(|adapter| adapter.decodes_here() && adapter.vendor == NVIDIA)
+    }) else {
+        // **Absent is not a refusal**: a machine without the vendor's GPU
+        // never builds this encoder, so there is no part to fail the census.
+        return Ok(());
+    };
+    let Ok(device) = d3d11.open(adapter.luid) else {
+        return Err("the vendor's device, which would not open");
+    };
+    let Ok(api) = lowlat_encode::nvenc::Api::load() else {
+        return Ok(());
+    };
+    let Ok(session) = api.open_session(Arc::new(device)) else {
+        return Err("the vendor encoder, which would not open a session");
+    };
+    let Ok(caps) = session.caps(lowlat_encode::nvenc::Codec::H265) else {
+        return Err("the vendor encoder, which would not report its capabilities");
+    };
+    if !caps.yuv444 || (config.ten_bit && !caps.ten_bit) {
+        return Err("the vendor encoder, which codes no full chroma at this depth");
+    }
+    Ok(())
 }
 
+/// The encoder's configuration for `config`.
+fn encoder_config(config: &Config) -> lowlat_encode::nvenc::Config {
+    lowlat_encode::nvenc::Config {
+        codec: match config.codec {
+            Codec::H264 => lowlat_encode::nvenc::Codec::H264,
+            Codec::H265 => lowlat_encode::nvenc::Codec::H265,
+        },
+        width: config.width,
+        height: config.height,
+        fps: config.fps,
+        bitrate_bps: start_bps(config),
+        min_qp: config.quality.min_qp(),
+        thorough: config.quality.thorough(),
+        // Full chroma is granted per session, never configured; the census
+        // that gates it has already answered.
+        chroma: if config.chroma_444 {
+            lowlat_encode::nvenc::Chroma::Yuv444
+        } else {
+            lowlat_encode::nvenc::Chroma::Yuv420
+        },
+        depth: if config.ten_bit {
+            lowlat_encode::nvenc::Depth::Ten
+        } else {
+            lowlat_encode::nvenc::Depth::Eight
+        },
+    }
+}
+
+/// The desktop: the output first, then its adapter, the device on it, the
+/// encoder at the output's size, and only then the duplication and the
+/// encoder's inputs on that device (docs/impl-plan-windows.md W2).
+fn run_display(
+    shared: &Arc<Shared>,
+    arrivals: &mpsc::Receiver<Join>,
+    config: Config,
+    roster: &mut Roster,
+) -> Exit {
+    // **A display that is asleep or switched off is waited for**, as on
+    // Linux: somebody connecting to a machine nobody is at is most of what
+    // remote access is for.
+    let Some((width, height, refresh_hz)) = await_display(config.output.as_deref()) else {
+        lowlat_common::log_error!(
+            "stream: no output has been part of the desktop for {:.0}s, ending {} guest(s)",
+            DISPLAY_WAIT.as_secs_f64(),
+            roster.active.len()
+        );
+        return Exit::Failed(status::CAPTURE_UNAVAILABLE);
+    };
+    let Some(output) = Display::locate(config.output.as_deref()) else {
+        return Exit::Rediscover("the output went before it could be opened");
+    };
+    // **The encoder follows the output**, and only the vendor's is built
+    // here: an output another adapter scans out -- another vendor's, or a
+    // virtual display's, which renders on another GPU -- is refused rather
+    // than copied across, which would measure the copy.
+    if output.adapter.vendor != NVIDIA || !output.adapter.decodes_here() {
+        lowlat_common::log_error!(
+            "stream: {} is on {}, which has no encoder this host builds",
+            output.name,
+            output.adapter.description
+        );
+        return Exit::Failed(status::ENCODER_UNAVAILABLE);
+    }
+    let Ok(d3d11) = lowlat_encode::d3d11::D3d11::load() else {
+        lowlat_common::log_error!("stream: graphics libraries unavailable, nothing will encode");
+        return Exit::Failed(status::ENCODER_UNAVAILABLE);
+    };
+    let device = match d3d11.open(output.adapter.luid) {
+        Ok(device) => Arc::new(device),
+        Err(error) => {
+            lowlat_common::log_error!("stream: no device on {}, {error}", output.adapter.luid);
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
+    if (width, height) != (config.width, config.height) {
+        lowlat_common::log_info!(
+            "stream: {} is {width}x{height}, not the configured {}x{}; following it",
+            output.name,
+            config.width,
+            config.height
+        );
+    }
+    // **Said once the size is settled and before any guest is seated**: it
+    // is the coordinate space a peer's absolute input is expressed in.
+    shared.publish_picture(width, height);
+    let config = Config {
+        width,
+        height,
+        fps: settle_pace(shared, config.fps, refresh_hz),
+        ..config
+    };
+    let Ok(api) = lowlat_encode::nvenc::Api::load() else {
+        lowlat_common::log_error!("stream: encoder runtime unavailable");
+        return Exit::Failed(status::ENCODER_UNAVAILABLE);
+    };
+    // **Declared before the encoder, so it outlives it.** Its targets are
+    // registered with the encoder's session, which takes the registrations
+    // back as it goes; the textures must still be there when it does.
+    let mut desktop: Display;
+    let session = match api.open_session(Arc::clone(&device)) {
+        Ok(session) => session,
+        Err(error) => {
+            lowlat_common::log_error!("stream: encode session could not be opened, {error}");
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
+    let mut encoder = match session.initialize(encoder_config(&config)) {
+        Ok(encoder) => encoder,
+        Err(error) => {
+            lowlat_common::log_error!("stream: encoder could not be configured, {error}");
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
+    lowlat_common::log_info!(
+        "stream: quality={:?}, quantiser floor {}",
+        config.quality,
+        config.quality.min_qp()
+    );
+    desktop = match Display::open(
+        &device,
+        &output.name,
+        Layout::of(config.ten_bit, config.chroma_444),
+        (width, height),
+        &encoder,
+    ) {
+        Ok(desktop) => desktop,
+        Err(crate::display::Error::NoOutput) => {
+            return Exit::Rediscover("the output moved before it could be opened");
+        }
+        Err(error) => {
+            lowlat_common::log_error!("stream: the display could not be opened, {error}");
+            return Exit::Failed(status::CAPTURE_UNAVAILABLE);
+        }
+    };
+    lowlat_common::log_info!(
+        "stream: encoding {} on {} ({})",
+        output.name,
+        output.adapter.description,
+        output.adapter.luid
+    );
+    encode_loop(
+        shared,
+        arrivals,
+        config,
+        roster,
+        &mut encoder,
+        Some(&mut desktop),
+    )
+}
+
+/// No display: the vendor's encoder on a device of its own, the generator
+/// its source.
 fn run_vendor(
     shared: &Arc<Shared>,
     arrivals: &mpsc::Receiver<Join>,
@@ -73,8 +260,7 @@ fn run_vendor(
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
     };
     // **The first of the vendor's adapters that renders**, in the system's
-    // high-performance order. From the display's step on the display decides:
-    // a capture and its encoder share one device.
+    // high-performance order: with nothing captured, nothing else decides.
     let Some(adapter) = d3d11.adapters().ok().and_then(|adapters| {
         adapters
             .into_iter()
@@ -108,39 +294,12 @@ fn run_vendor(
     );
     // **The generator's picture is the configured one**, so the size is said
     // before any guest is seated, as it is once a display has answered.
-    let (width, height) = (config.width, config.height);
-    shared.publish_picture(width, height);
+    shared.publish_picture(config.width, config.height);
     let config = Config {
-        width,
-        height,
         fps: settle_pace(shared, config.fps, 0),
         ..config
     };
-    let encoder = session.initialize(lowlat_encode::nvenc::Config {
-        codec: match config.codec {
-            Codec::H264 => lowlat_encode::nvenc::Codec::H264,
-            Codec::H265 => lowlat_encode::nvenc::Codec::H265,
-        },
-        width,
-        height,
-        fps: config.fps,
-        bitrate_bps: start_bps(&config),
-        min_qp: config.quality.min_qp(),
-        thorough: config.quality.thorough(),
-        // Full chroma is granted per session, never configured; the census
-        // that gates it refuses it here.
-        chroma: if config.chroma_444 {
-            lowlat_encode::nvenc::Chroma::Yuv444
-        } else {
-            lowlat_encode::nvenc::Chroma::Yuv420
-        },
-        depth: if config.ten_bit {
-            lowlat_encode::nvenc::Depth::Ten
-        } else {
-            lowlat_encode::nvenc::Depth::Eight
-        },
-    });
-    let mut encoder = match encoder {
+    let mut encoder = match session.initialize(encoder_config(&config)) {
         Ok(encoder) => encoder,
         Err(error) => {
             lowlat_common::log_error!("stream: encoder could not be configured, {error}");
@@ -159,10 +318,8 @@ impl FromDevice for lowlat_encode::nvenc::Encoder<'_> {
     fn submit_from_device(
         &mut self,
         registration: &crate::display::Registration,
-        _force_keyframe: bool,
+        force_keyframe: bool,
     ) -> bool {
-        // No display hands a picture over on this platform yet, so no
-        // registration exists to be refused.
-        match *registration {}
+        self.submit_registered(registration, force_keyframe).is_ok()
     }
 }

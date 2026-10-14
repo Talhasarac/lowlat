@@ -1430,7 +1430,7 @@ impl Display {
     /// a present was among what it said: the events accumulate while the loop
     /// is busy, so they are drained rather than read one at a time, and a
     /// failed wait reports no present.
-    pub fn wait_present(&self, timeout_ms: i32) -> Option<bool> {
+    pub fn wait_present(&mut self, timeout_ms: i32) -> Option<bool> {
         let mut pollfd = libc::pollfd {
             fd: std::os::fd::AsRawFd::as_raw_fd(&self.card.as_fd()),
             events: libc::POLLIN,

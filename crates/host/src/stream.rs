@@ -148,7 +148,7 @@ const POKE_LEAD_MS: f64 = 1.0;
 /// **For the stream start probe, not the loop.** The loop polls the card
 /// itself so the poll can share its pass with the collect; this is one wait
 /// for one answer.
-fn vblank_event(desktop: &crate::display::Display, budget_ms: f64) -> bool {
+fn vblank_event(desktop: &mut crate::display::Display, budget_ms: f64) -> bool {
     let began = lowlat_common::clock::Time::now();
     while lowlat_common::clock::diff_ms(began, lowlat_common::clock::Time::now()) < budget_ms {
         let remaining =
@@ -593,9 +593,15 @@ pub struct PointerState {
     /// **This is the bit a client reads as relative mode** (`relative ||
     /// hidden`), so it takes a guest's pointer away and turns its motion into
     /// deltas. That is wanted when an application took the pointer over, and
-    /// this backend cannot see that directly: what it sees is the hardware
-    /// plane emptying, which happens for that reason and for two others.
+    /// a display that only sees the hardware plane cannot see that directly:
+    /// what it sees is the plane emptying, which happens for that reason and
+    /// for two others.
     pub hidden: bool,
+    /// Something wants the pointer's motion rather than its position, where
+    /// the system says so: false from a display with no source for it.
+    pub relative: bool,
+    /// The system holds the pointer back while a touch or a pen drives.
+    pub suppressed: bool,
 }
 
 /// How long the pointer plane must stay empty before it means anything.
@@ -2602,12 +2608,35 @@ fn publish_pointer(
         // it into relative motion, which is what a game hiding the cursor to
         // aim actually wants. Below that it is one of the transients and
         // nothing is said, so the guest keeps drawing the last pointer where
-        // it was.
+        // it was. A display that reports the pointer itself answers nothing
+        // here when no message is owed, and never reaches the rule below, so
+        // the rule has seen nothing drawn and stays silent for it.
         if let Some(state) = presence.observe(None, now_ms) {
             shared.publish_pointer(state, None);
         }
         return;
     };
+    // **What the system reports is published as it reports it**: its
+    // position, hotspot and bits are already the desktop's own and already
+    // settled by the display, so none of what follows for a drawn pointer
+    // -- the turn, the learned hotspot, the presence rule -- applies.
+    if let Some(reported) = seen.reported {
+        let state = PointerState {
+            x: reported.x,
+            y: reported.y,
+            hot_x: reported.hot_x,
+            hot_y: reported.hot_y,
+            width: seen.width,
+            height: seen.height,
+            checksum: seen.checksum,
+            hidden: reported.hidden,
+            relative: reported.relative,
+            suppressed: reported.suppressed,
+        };
+        let image = seen.fresh.then(|| desktop.pointer_image());
+        shared.publish_pointer(state, image);
+        return;
+    }
     let (x, y, drawn_width, drawn_height) = lowlat_capture::upright_rect(
         turn,
         (width, height),
@@ -2645,6 +2674,8 @@ fn publish_pointer(
         height: drawn_height,
         checksum: seen.checksum,
         hidden: false,
+        relative: false,
+        suppressed: false,
     };
     let Some(state) = presence.observe(
         Some(Seen {
@@ -2666,8 +2697,6 @@ fn publish_pointer(
 /// Long enough that a screen blanked while nobody was looking has a chance to
 /// come back when somebody arrives, short enough that a guest on a machine
 /// with no display at all is told so rather than held.
-// Unused on Windows until its display is built (docs/impl-plan-windows.md W2.2).
-#[cfg_attr(windows, allow(dead_code))]
 const DISPLAY_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The output most recently asked for, or nothing if none was.
@@ -2685,8 +2714,6 @@ fn requested(asked: &mpsc::Receiver<Option<String>>) -> Option<Option<String>> {
 
 /// Wait for something to scan out, and report what shape it is: its size, and
 /// how many times a second it presents.
-// Unused on Windows until its display is built (docs/impl-plan-windows.md W2.2).
-#[cfg_attr(windows, allow(dead_code))]
 fn await_display(wanted: Option<&str>) -> Option<(u32, u32, u32)> {
     let began = lowlat_common::clock::Time::now();
     let mut said = false;
@@ -2965,7 +2992,7 @@ fn encode_loop<E: Encoder + FromDevice>(
     // deliver events -- the vendor driver here refuses them outright -- would
     // pace the stream at the cap instead of at the frame clock, which is a
     // capture latency of up to the cap rather than a phase-locked tick.
-    let vblank_live = display.as_deref().is_some_and(|desktop| {
+    let vblank_live = display.as_deref_mut().is_some_and(|desktop| {
         desktop.arm_vblank().is_ok() && vblank_event(desktop, VBLANK_PROBE_MS)
     });
     if display.is_some() && !vblank_live {

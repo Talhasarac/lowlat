@@ -22,5 +22,23 @@ ash.workspace = true
 khronos-egl.workspace = true
 libloading.workspace = true
 
+# The duplication and the conversion run on the system's graphics interface
+# through the device seam the encoder and the decoders already use. The
+# desktop, pointer, awareness and power calls are the system's own
+# declarations, as the IO shell takes them: linked by name at build time with
+# no import libraries.
+[target.'cfg(windows)'.dependencies]
+lowlat-drivers.workspace = true
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [lints]
 workspace = true

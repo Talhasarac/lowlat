@@ -40,14 +40,18 @@ use crate::ffi::d3d11::{
     _D3DKMT_ADAPTERTYPE__bindgen_ty_1__bindgen_ty_1 as AdapterFlags, D3D_DRIVER_TYPE_UNKNOWN,
     D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
     D3D11_FENCE_FLAG_NONE, D3D11_QUERY_DESC, D3D11_QUERY_TIMESTAMP, D3D11_QUERY_TIMESTAMP_DISJOINT,
-    D3D11_RESOURCE_MISC_SHARED, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3DKMT_ADAPTERTYPE, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID, D3DKMT_QUERYADAPTERINFO,
-    DXGI_ADAPTER_DESC1, DXGI_FORMAT, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, DXGI_SAMPLE_DESC, GUID,
-    HANDLE, HRESULT, ID3D11Asynchronous, ID3D11Device, ID3D11Device5, ID3D11DeviceContext,
+    D3D11_RESOURCE_MISC_SHARED, D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC__bindgen_ty_1, D3D11_SRV_DIMENSION_TEXTURE2D, D3D11_TEX2D_SRV,
+    D3D11_TEX2D_UAV, D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
+    D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC__bindgen_ty_1,
+    D3D11_USAGE_DEFAULT, D3DKMT_ADAPTERTYPE, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID,
+    D3DKMT_QUERYADAPTERINFO, DXGI_ADAPTER_DESC1, DXGI_FORMAT, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+    DXGI_MODE_ROTATION, DXGI_OUTPUT_DESC, DXGI_SAMPLE_DESC, GUID, HANDLE, HRESULT,
+    ID3D11Asynchronous, ID3D11ComputeShader, ID3D11Device, ID3D11Device5, ID3D11DeviceContext,
     ID3D11DeviceContext4, ID3D11Fence, ID3D11Multithread, ID3D11Query, ID3D11Resource,
-    ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext, ID3D11VideoDevice,
-    IDXGIAdapter, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory6, IDXGIResource, IUnknown,
-    KMTQAITYPE_ADAPTERTYPE, LARGE_INTEGER, LUID, NTSTATUS,
+    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext,
+    ID3D11VideoDevice, IDXGIAdapter, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory6, IDXGIOutput,
+    IDXGIResource, IUnknown, KMTQAITYPE_ADAPTERTYPE, LARGE_INTEGER, LUID, NTSTATUS,
 };
 use crate::ffi::d3d11_guids::{
     IID_ID3D11Device5, IID_ID3D11DeviceContext4, IID_ID3D11Fence, IID_ID3D11Multithread,
@@ -145,6 +149,15 @@ impl<T> Com<T> {
 
     pub fn as_ptr(&self) -> *mut T {
         self.ptr.as_ptr()
+    }
+
+    /// A second reference to the same interface, released on its own drop.
+    pub fn clone_ref(&self) -> Self {
+        let base = self.ptr.as_ptr().cast::<IUnknown>();
+        // SAFETY: a live interface whose reference this holds; the reference
+        // taken here is the new value's, released by its drop.
+        unsafe { vcall!(base, AddRef) };
+        Self { ptr: self.ptr }
     }
 }
 
@@ -267,6 +280,29 @@ impl Adapter {
             _ => None,
         }
     }
+}
+
+/// One output an adapter drives, as the system describes it.
+///
+/// **The rectangle is in the calling thread's own coordinates**: physical
+/// pixels on a thread that is per-monitor aware, scaled by the display's
+/// scale on one that is not. The caller sets the thread's awareness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Output {
+    /// The system's own name for it, `DISPLAY1`, without the `\\.\` prefix.
+    pub name: String,
+    /// Where it sits on the desktop, right and bottom exclusive, in the
+    /// desktop's own orientation.
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    /// Part of the desktop, rather than connected and switched off.
+    pub attached: bool,
+    /// Which way the output is turned against its panel.
+    pub rotation: DXGI_MODE_ROTATION,
+    /// The adapter that scans it out.
+    pub adapter: Adapter,
 }
 
 /// The libraries and the entry points resolved from them.
@@ -407,6 +443,98 @@ impl D3d11 {
             check(hr)?;
             if Luid::of(desc.AdapterLuid) == luid {
                 return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every output an adapter drives, the adapter with it, in the plain
+    /// enumeration: the order in which an output is listed under the adapter
+    /// that scans it out, which the high-performance order is not on a
+    /// machine with two GPUs.
+    pub fn outputs(&self) -> Result<Vec<Output>> {
+        let mut out = Vec::new();
+        self.walk_outputs::<()>(|_, output| {
+            out.push(output);
+            Ok(None)
+        })?;
+        Ok(out)
+    }
+
+    /// The output with this name, with the interface a duplication of it is
+    /// made from; `None` for a name no adapter drives.
+    pub fn output(&self, name: &str) -> Result<Option<(Com<IDXGIOutput>, Output)>> {
+        self.walk_outputs(|interface, output| {
+            Ok((output.name == name).then(|| (interface.clone_ref(), output)))
+        })
+    }
+
+    /// Walk every adapter's outputs in the plain enumeration, handing each
+    /// to `each` until it returns `Some`.
+    fn walk_outputs<R>(
+        &self,
+        mut each: impl FnMut(&Com<IDXGIOutput>, Output) -> Result<Option<R>>,
+    ) -> Result<Option<R>> {
+        let factory = self.factory()?;
+        for index in 0.. {
+            let mut raw: *mut IDXGIAdapter1 = core::ptr::null_mut();
+            // SAFETY: a live factory; the output is a live local.
+            let hr = unsafe { vcall!(factory.as_ptr(), EnumAdapters1, index, &raw mut raw) }
+                .ok_or(Error::MissingSymbol)?;
+            if hr == DXGI_ERROR_NOT_FOUND {
+                break;
+            }
+            check(hr)?;
+            // SAFETY: an adapter whose reference the call handed over.
+            let Some(adapter) = (unsafe { Com::from_raw(raw) }) else {
+                continue;
+            };
+            // SAFETY: plain data, filled whole by the call.
+            let mut desc: DXGI_ADAPTER_DESC1 = unsafe { core::mem::zeroed() };
+            // SAFETY: a live adapter; the output is a live local.
+            let hr = unsafe { vcall!(adapter.as_ptr(), GetDesc1, &raw mut desc) }
+                .ok_or(Error::MissingSymbol)?;
+            check(hr)?;
+            let described = self.describe(&adapter, &desc);
+            for slot in 0.. {
+                let mut raw: *mut IDXGIOutput = core::ptr::null_mut();
+                // SAFETY: a live adapter; the output is a live local.
+                let hr = unsafe { vcall!(adapter.as_ptr(), EnumOutputs, slot, &raw mut raw) }
+                    .ok_or(Error::MissingSymbol)?;
+                if hr == DXGI_ERROR_NOT_FOUND {
+                    break;
+                }
+                check(hr)?;
+                // SAFETY: an output whose reference the call handed over.
+                let Some(interface) = (unsafe { Com::from_raw(raw) }) else {
+                    continue;
+                };
+                // SAFETY: plain data, filled whole by the call.
+                let mut desc: DXGI_OUTPUT_DESC = unsafe { core::mem::zeroed() };
+                // SAFETY: a live output; the output is a live local.
+                let hr = unsafe { vcall!(interface.as_ptr(), GetDesc, &raw mut desc) }
+                    .ok_or(Error::MissingSymbol)?;
+                check(hr)?;
+                let name = desc
+                    .DeviceName
+                    .iter()
+                    .position(|&c| c == 0)
+                    .map_or(&desc.DeviceName[..], |end| &desc.DeviceName[..end]);
+                let name = String::from_utf16_lossy(name);
+                let rect = desc.DesktopCoordinates;
+                let output = Output {
+                    name: name.strip_prefix(r"\\.\").unwrap_or(&name).to_string(),
+                    left: rect.left,
+                    top: rect.top,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                    attached: desc.AttachedToDesktop != 0,
+                    rotation: desc.Rotation,
+                    adapter: described.clone(),
+                };
+                if let Some(found) = each(&interface, output)? {
+                    return Ok(Some(found));
+                }
             }
         }
         Ok(None)
@@ -583,8 +711,8 @@ impl Drop for Locked<'_> {
     }
 }
 
-/// Another interface of a live object.
-fn query<T>(object: *mut IUnknown, iid: &GUID) -> Result<Com<T>> {
+/// Another interface of a live object, `iid` naming `T`.
+pub fn query<T>(object: *mut IUnknown, iid: &GUID) -> Result<Com<T>> {
     let mut out: *mut c_void = core::ptr::null_mut();
     // SAFETY: a live object; the identifier and the output are live.
     let hr =
@@ -835,7 +963,167 @@ impl Device {
         // ours.
         unsafe { Com::from_raw(out.cast::<ID3D11Texture2D>()) }.ok_or(Error::Unavailable)
     }
+
+    /// A compute shader of this device's, from the compiler's bytecode.
+    pub fn compute_shader(&self, code: &[u8]) -> Result<Com<ID3D11ComputeShader>> {
+        let mut shader: *mut ID3D11ComputeShader = core::ptr::null_mut();
+        // SAFETY: a live device; the bytecode is live for the call and the
+        // output is a live local.
+        let hr = unsafe {
+            vcall!(
+                self.device.as_ptr(),
+                CreateComputeShader,
+                code.as_ptr().cast(),
+                u64::try_from(code.len()).unwrap_or(0),
+                core::ptr::null_mut(),
+                &raw mut shader
+            )
+        }
+        .ok_or(Error::MissingSymbol)?;
+        check(hr)?;
+        // SAFETY: a shader whose reference the call handed over.
+        unsafe { Com::from_raw(shader) }.ok_or(Error::Unavailable)
+    }
+
+    /// The view a shader reads the whole of a texture through, at `format`.
+    pub fn shader_view(
+        &self,
+        texture: *mut ID3D11Texture2D,
+        format: DXGI_FORMAT,
+    ) -> Result<Com<ID3D11ShaderResourceView>> {
+        let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+            __bindgen_anon_1: D3D11_SHADER_RESOURCE_VIEW_DESC__bindgen_ty_1 {
+                Texture2D: D3D11_TEX2D_SRV {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                },
+            },
+        };
+        let mut view: *mut ID3D11ShaderResourceView = core::ptr::null_mut();
+        // SAFETY: a live device; the texture is the caller's live one, and the
+        // description and output are live.
+        let hr = unsafe {
+            vcall!(
+                self.device.as_ptr(),
+                CreateShaderResourceView,
+                texture.cast::<ID3D11Resource>(),
+                &raw const desc,
+                &raw mut view
+            )
+        }
+        .ok_or(Error::MissingSymbol)?;
+        check(hr)?;
+        // SAFETY: a view whose reference the call handed over.
+        unsafe { Com::from_raw(view) }.ok_or(Error::Unavailable)
+    }
+
+    /// The view a shader writes a texture through, at `format`. **On a
+    /// texture of two planes the format names the plane**: one channel its
+    /// luma, two its chroma.
+    pub fn unordered_view(
+        &self,
+        texture: *mut ID3D11Texture2D,
+        format: DXGI_FORMAT,
+    ) -> Result<Com<ID3D11UnorderedAccessView>> {
+        let desc = D3D11_UNORDERED_ACCESS_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D11_UAV_DIMENSION_TEXTURE2D,
+            __bindgen_anon_1: D3D11_UNORDERED_ACCESS_VIEW_DESC__bindgen_ty_1 {
+                Texture2D: D3D11_TEX2D_UAV { MipSlice: 0 },
+            },
+        };
+        let mut view: *mut ID3D11UnorderedAccessView = core::ptr::null_mut();
+        // SAFETY: a live device; the texture is the caller's live one, and the
+        // description and output are live.
+        let hr = unsafe {
+            vcall!(
+                self.device.as_ptr(),
+                CreateUnorderedAccessView,
+                texture.cast::<ID3D11Resource>(),
+                &raw const desc,
+                &raw mut view
+            )
+        }
+        .ok_or(Error::MissingSymbol)?;
+        check(hr)?;
+        // SAFETY: a view whose reference the call handed over.
+        unsafe { Com::from_raw(view) }.ok_or(Error::Unavailable)
+    }
+
+    /// Queue one run of `shader` over `groups`, reading `sources` and
+    /// writing `targets`, each bound from slot zero: on the opening thread,
+    /// as the context is, and under the device's lock, so a runtime calling
+    /// into the context from a thread of its own waits while the bindings
+    /// stand. Every binding is undone before this returns, so nothing of the
+    /// run stays bound into the device's next work. At most [`BOUND`] of
+    /// each.
+    pub fn dispatch(
+        &self,
+        shader: &Com<ID3D11ComputeShader>,
+        sources: &[*mut ID3D11ShaderResourceView],
+        targets: &[*mut ID3D11UnorderedAccessView],
+        (columns, rows): (u32, u32),
+    ) -> Result<()> {
+        if sources.len() > BOUND || targets.len() > BOUND {
+            return Err(Error::Status(E_INVALIDARG));
+        }
+        let none_srv = [core::ptr::null_mut::<ID3D11ShaderResourceView>(); BOUND];
+        let none_uav = [core::ptr::null_mut::<ID3D11UnorderedAccessView>(); BOUND];
+        let counts = (
+            u32::try_from(sources.len()).unwrap_or(0),
+            u32::try_from(targets.len()).unwrap_or(0),
+        );
+        let context = self.context.as_ptr();
+        let _locked = self.lock();
+        // SAFETY: a live context on its own thread; the shader, the views and
+        // the targets are the caller's live ones, each array as long as the
+        // count it is passed with.
+        unsafe {
+            vcall!(context, CSSetShader, shader.as_ptr(), core::ptr::null(), 0);
+            vcall!(context, CSSetShaderResources, 0, counts.0, sources.as_ptr());
+            vcall!(
+                context,
+                CSSetUnorderedAccessViews,
+                0,
+                counts.1,
+                targets.as_ptr(),
+                core::ptr::null()
+            );
+            vcall!(context, Dispatch, columns, rows, 1);
+            vcall!(
+                context,
+                CSSetShaderResources,
+                0,
+                counts.0,
+                none_srv.as_ptr()
+            );
+            vcall!(
+                context,
+                CSSetUnorderedAccessViews,
+                0,
+                counts.1,
+                none_uav.as_ptr(),
+                core::ptr::null()
+            );
+            vcall!(
+                context,
+                CSSetShader,
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                0
+            );
+        }
+        Ok(())
+    }
 }
+
+/// The most views of each kind one [`Device::dispatch`] binds.
+pub const BOUND: usize = 8;
+
+/// An argument out of range.
+const E_INVALIDARG: HRESULT = 0x8007_0057_u32 as HRESULT;
 
 /// A fence: a value the device raises as the work queued before each signal
 /// finishes. Read and waited on from any thread.

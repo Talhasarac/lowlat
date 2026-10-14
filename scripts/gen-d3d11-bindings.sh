@@ -60,7 +60,7 @@ EOF
 # called themselves: opaque, so their own tables are not generated, and
 # allowlisted as well, since an opaque type nothing allowlists is not emitted.
 opaque=(
-    'IDXGI(Surface|Output|SwapChain|SwapChain1|Adapter)'
+    'IDXGI(Surface|SwapChain|SwapChain1|Adapter)'
     'ID3D11(DepthStencilState|BlendState|RasterizerState|Buffer|Texture1D|Texture3D)'
     'ID3D11(ShaderResourceView|RenderTargetView|DepthStencilView|UnorderedAccessView)'
     'ID3D11(Vertex|Hull|Domain|Geometry|Pixel|Compute)Shader'
@@ -92,6 +92,10 @@ bindgen "$work/d3d11.h" \
     `# of its own.` \
     --allowlist-type 'ID3D11(Device5|DeviceContext4|Fence|Multithread)' \
     --allowlist-type 'IDXGIResource' \
+    `# The outputs an adapter drives and the duplication of one: its frames,` \
+    `# the pointer's shape and position, and which way the output is turned.` \
+    --allowlist-type 'IDXGIOutput|IDXGIOutput5|IDXGIOutputDuplication' \
+    --allowlist-type 'DXGI_OUTDUPL_.*|DXGI_OUTPUT_DESC|DXGI_MODE_ROTATION' \
     `# The two entry points resolved at run time, and the kernel's adapter type.` \
     --allowlist-type 'PFN_D3D11_CREATE_DEVICE' \
     --allowlist-type 'PFND3DKMT_(OPENADAPTERFROMLUID|QUERYADAPTERINFO|CLOSEADAPTER)' \
@@ -130,6 +134,7 @@ interfaces = {
     "um/d3d11_3.h": ["ID3D11Fence", "ID3D11DeviceContext4"],
     "um/d3d11_4.h": ["ID3D11Device5", "ID3D11Multithread"],
     "shared/dxgi.h": ["IDXGIFactory1", "IDXGIAdapter1", "IDXGIDevice", "IDXGIResource"],
+    "shared/dxgi1_5.h": ["IDXGIOutput5"],
     "shared/dxgi1_6.h": ["IDXGIFactory6"],
 }
 # The decoder profiles every codec here is opened with.

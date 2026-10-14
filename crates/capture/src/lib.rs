@@ -16,18 +16,26 @@
 //! output where every consumer can read it, and it disappears when real
 //! capture arrives with a handle of its own.
 
-// The backends are Linux's (docs/impl-plan-windows.md); the frame, the
-// generator and what an output and its pointer are build everywhere.
+// Each platform has its own backends (docs/impl-plan-windows.md); the frame,
+// the generator and what an output and its pointer are build everywhere.
 #[cfg(target_os = "linux")]
 pub mod convert;
 #[cfg(target_os = "linux")]
 pub mod cursor;
+/// The conversion on Windows, over the system's graphics interface.
+#[cfg(windows)]
+pub mod d3d11;
 #[cfg(target_os = "linux")]
 pub mod desktop;
+/// The desktop as Windows duplicates it, and the pointer over it.
+#[cfg(windows)]
+pub mod duplication;
 #[cfg(target_os = "linux")]
 pub mod gl;
 #[cfg(target_os = "linux")]
 pub mod mode;
+#[cfg(test)]
+mod reference;
 #[cfg(target_os = "linux")]
 pub mod scanout;
 pub mod synthetic;
@@ -168,6 +176,31 @@ pub struct Pointer {
     /// resets any timer watching for one that has gone, three times out of
     /// four, so it never expires.
     pub looked: bool,
+    /// What the system itself reports of the pointer, where it reports it:
+    /// a read that carries this is a message owed to the guests, settled by
+    /// the display. Nothing where the pointer is inferred from what is drawn,
+    /// which the stream settles instead.
+    pub reported: Option<Reported>,
+}
+
+/// The pointer as a system that reports it says it is, in the desktop's own
+/// orientation (docs/05-host.md section 8.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reported {
+    /// Where the pointer points -- its hotspot -- on the captured output.
+    pub x: u16,
+    pub y: u16,
+    /// The hotspot inside the picture.
+    pub hot_x: u16,
+    pub hot_y: u16,
+    /// The system draws no pointer of its own over the picture: it draws one
+    /// into the picture, or none at all.
+    pub hidden: bool,
+    /// Something wants the pointer's motion rather than its position: an
+    /// application hid it, or set one with nothing to see.
+    pub relative: bool,
+    /// The system holds the pointer back while a touch or a pen drives.
+    pub suppressed: bool,
 }
 
 /// Where a rectangle drawn in a turned framebuffer sits in the desktop the

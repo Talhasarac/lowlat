@@ -21,7 +21,8 @@ use super::{Api, Chroma, Config, Depth, Encoder, Error, IN_FLIGHT, Input, Sessio
 use crate::ffi::d3d11::{
     D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE, D3D11_MAPPED_SUBRESOURCE,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, DXGI_FORMAT,
-    DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_SAMPLE_DESC, ID3D11Resource, ID3D11Texture2D,
+    DXGI_FORMAT_AYUV, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_FORMAT_Y410, DXGI_SAMPLE_DESC,
+    ID3D11Resource, ID3D11Texture2D,
 };
 use crate::ffi::nvenc::{
     NV_ENC_DEVICE_TYPE_DIRECTX, NV_ENC_EVENT_PARAMS, NV_ENC_INPUT_IMAGE,
@@ -166,11 +167,11 @@ impl Encoder<'_> {
         let format = match (self.config.chroma, self.config.depth) {
             (Chroma::Yuv420, Depth::Eight) => DXGI_FORMAT_NV12,
             (Chroma::Yuv420, Depth::Ten) => DXGI_FORMAT_P010,
-            // **Refused, not made.** Every frame offered here comes from
-            // ordinary memory, which carries two planes, so a full-chroma
-            // session could never be fed; the layout its textures take is the
-            // conversion's to settle.
-            (Chroma::Yuv444, _) => return Err(Error::ChromaMismatch),
+            // **None for full chroma.** Every frame these slots take comes
+            // from ordinary memory, which carries two planes, so a full-chroma
+            // session is fed only by the display's conversion, through
+            // textures it registers itself ([`Self::register_texture`]).
+            (Chroma::Yuv444, _) => return Ok(()),
         };
         let device = Arc::clone(&self.session.device);
         let texture = describe(format, self.config, D3D11_USAGE_DEFAULT);
@@ -189,9 +190,47 @@ impl Encoder<'_> {
     }
 
     /// Register one of the session's textures as an input.
+    fn register(&self, texture: &Com<ID3D11Texture2D>) -> Result<Input, Error> {
+        self.register_as(texture, self.config.chroma.buffer_format(self.config.depth))
+    }
+
+    /// Register a texture something else on this session's device writes --
+    /// the display's conversion -- as an input, registered once and handed
+    /// over by reference with [`Encoder::submit_registered`] from then on.
+    ///
+    /// **The layout is the texture's own format**, and must be one this
+    /// session codes: the two-plane layouts at its depth, or at full chroma
+    /// the packed words, AYUV at eight bits and Y410 at ten. Anything else
+    /// is refused rather than read as the session's layout.
+    ///
+    /// The texture must outlive the session: the registration is taken back
+    /// when the session goes, which is after its last picture.
+    pub fn register_texture(&self, texture: &Com<ID3D11Texture2D>) -> Result<Input, Error> {
+        use crate::ffi::nvenc as f;
+        // SAFETY: plain data the call fills whole.
+        let mut desc: D3D11_TEXTURE2D_DESC = unsafe { core::mem::zeroed() };
+        // SAFETY: a live texture; the output is a live local.
+        unsafe { vcall!(texture.as_ptr(), GetDesc, &raw mut desc) };
+        let format = match (desc.Format, self.config.chroma, self.config.depth) {
+            (DXGI_FORMAT_NV12, Chroma::Yuv420, Depth::Eight) => f::NV_ENC_BUFFER_FORMAT_NV12,
+            (DXGI_FORMAT_P010, Chroma::Yuv420, Depth::Ten) => f::NV_ENC_BUFFER_FORMAT_YUV420_10BIT,
+            (DXGI_FORMAT_AYUV, Chroma::Yuv444, Depth::Eight) => f::NV_ENC_BUFFER_FORMAT_AYUV,
+            // The runtime names no packed ten-bit word, and takes this
+            // texture under the planar name, reading it by its own format.
+            (DXGI_FORMAT_Y410, Chroma::Yuv444, Depth::Ten) => f::NV_ENC_BUFFER_FORMAT_YUV444_10BIT,
+            _ => return Err(Error::ChromaMismatch),
+        };
+        self.register_as(texture, format)
+    }
+
+    /// Register a texture of this session's device as an input in `format`.
     ///
     /// **No pitch**: the runtime reads a texture's layout from the texture.
-    fn register(&self, texture: &Com<ID3D11Texture2D>) -> Result<Input, Error> {
+    fn register_as(
+        &self,
+        texture: &Com<ID3D11Texture2D>,
+        format: crate::ffi::nvenc::NV_ENC_BUFFER_FORMAT,
+    ) -> Result<Input, Error> {
         let register = self
             .functions()
             .nvEncRegisterResource
@@ -203,7 +242,7 @@ impl Encoder<'_> {
         params.width = self.config.width;
         params.height = self.config.height;
         params.resourceToRegister = texture.as_ptr().cast();
-        params.bufferFormat = self.config.chroma.buffer_format(self.config.depth);
+        params.bufferFormat = format;
         params.bufferUsage = NV_ENC_INPUT_IMAGE;
         // SAFETY: the encoder and the texture are live and the block is
         // stamped and live for the call; the texture outlives the

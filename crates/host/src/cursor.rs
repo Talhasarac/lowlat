@@ -208,12 +208,12 @@ impl Sender {
             // (crate::stream) rather than following the hardware plane
             // directly.
             hidden: state.hidden,
-            // **Not set, and not the same question.** The far side decides how
-            // to enforce relative motion; this says what the pointer is doing.
-            relative: false,
-            // Needs a signal that says a touchscreen is driving, which this
-            // backend does not have.
-            suppressed: false,
+            // **The intent, where the display has a source for it** -- the
+            // system's show state, or a pointer with nothing to see -- and
+            // false from one that has none.
+            relative: state.relative,
+            // Where the display has a signal that a touch or a pen drives.
+            suppressed: state.suppressed,
         };
 
         // **Decided before anything is borrowed.** The picture is lent out of
@@ -332,6 +332,8 @@ mod tests {
             height: 24,
             checksum,
             hidden: false,
+            relative: false,
+            suppressed: false,
         }
     }
 
@@ -535,13 +537,11 @@ mod tests {
         assert!(flags(old).contains(Flags::IMAGE));
     }
 
-    /// **The hidden bit is never set from this backend, and that is not an
-    /// omission.** A client's test for relative mode is `relative || hidden`,
-    /// so this bit takes a guest's pointer away and locks it into relative
-    /// motion. Nothing here can tell an application hiding the pointer from a
-    /// pointer that merely outgrew the hardware plane, or from the moment
-    /// after a mode change, so setting it on any of those traps a guest whose
-    /// pointer was never taken over.
+    /// **Each of the pointer's bits travels as the state says, and only it.**
+    /// A client's test for relative mode is `relative || hidden`, so either
+    /// takes a guest's pointer away and locks it into relative motion; the
+    /// state arrives debounced (crate::stream, or the display that reports
+    /// it), and nothing here derives one bit from another.
     #[test]
     fn the_bit_a_client_reads_as_relative_carries_the_debounced_answer() {
         let mut sender = sender(true);
@@ -552,9 +552,15 @@ mod tests {
         gone.hidden = true;
         let message = sender.update(gone).expect("an update");
         assert!(flags(message).contains(Flags::HIDDEN));
-        // **Never set beside it.** Enforcing relative motion is the far side's
-        // to do; this says what the pointer is doing, and a host that set both
-        // would be answering a question it was not asked.
+        // Hidden does not bring relative with it.
         assert!(!flags(message).contains(Flags::RELATIVE));
+
+        let mut wanted = state(7);
+        wanted.relative = true;
+        wanted.suppressed = true;
+        let message = sender.update(wanted).expect("an update");
+        assert!(flags(message).contains(Flags::RELATIVE));
+        assert!(flags(message).contains(Flags::SUPPRESSED));
+        assert!(!flags(message).contains(Flags::HIDDEN));
     }
 }

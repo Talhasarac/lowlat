@@ -27,6 +27,12 @@ drm.workspace = true
 # The vblank poll: one fd in the loop's own wait, polled rather than slept.
 libc.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# The display builds the capture's device and names the output and texture
+# types from the device seam the encoder is bound through. Already in the
+# graph under both; a direct edge, not a new dependency.
+lowlat-drivers.workspace = true
+
 [dev-dependencies]
 # The allocation counter behind the per-report path's assertion.
 lowlat-common = { workspace = true, features = ["alloc-counter"] }

@@ -384,6 +384,7 @@ impl Watcher {
             checksum: held.checksum,
             fresh,
             looked,
+            reported: None,
         }))
     }
 

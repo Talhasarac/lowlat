@@ -55,25 +55,7 @@ struct Shaders {
 
 impl Shaders {
     fn new(device: &Device) -> Result<Self> {
-        let make = |bytes: &[u8]| -> Result<Com<ID3D11ComputeShader>> {
-            let mut shader: *mut ID3D11ComputeShader = core::ptr::null_mut();
-            // SAFETY: a live device; the bytecode is the compiler's, live for
-            // the call, and the output is a live local.
-            let hr = unsafe {
-                vcall!(
-                    device.device(),
-                    CreateComputeShader,
-                    bytes.as_ptr().cast(),
-                    u64::try_from(bytes.len()).unwrap_or(0),
-                    core::ptr::null_mut(),
-                    &raw mut shader
-                )
-            }
-            .ok_or(Error::NoProfile)?;
-            check(hr)?;
-            // SAFETY: a shader whose reference the call handed over.
-            unsafe { Com::from_raw(shader) }.ok_or(Error::NoProfile)
-        };
+        let make = |bytes: &[u8]| device.compute_shader(bytes).map_err(device_error);
         Ok(Self {
             planar8: make(code::PLANAR8)?,
             planar16: make(code::PLANAR16)?,
@@ -82,13 +64,23 @@ impl Shaders {
         })
     }
 
-    fn for_format(&self, format: Format) -> *mut ID3D11ComputeShader {
+    fn for_format(&self, format: Format) -> &Com<ID3D11ComputeShader> {
         match format {
-            Format::Nv12 => self.planar8.as_ptr(),
-            Format::P010 => self.planar16.as_ptr(),
-            Format::Yuv444 => self.vuya.as_ptr(),
-            Format::Yuv444_16 => self.y410.as_ptr(),
+            Format::Nv12 => &self.planar8,
+            Format::P010 => &self.planar16,
+            Format::Yuv444 => &self.vuya,
+            Format::Yuv444_16 => &self.y410,
         }
+    }
+}
+
+/// What the device's own helpers answered, as this backend's error: a call
+/// that failed keeps the reading [`check`] gives it, a lost device's
+/// included; anything else is the device lacking what the split needs.
+fn device_error(error: lowlat_drivers::d3d11::Error) -> Error {
+    match error {
+        lowlat_drivers::d3d11::Error::Status(hr) => check(hr).err().unwrap_or(Error::Status(hr)),
+        _ => Error::NoProfile,
     }
 }
 
@@ -240,7 +232,6 @@ impl Split {
         planes: [Option<&SharedTexture>; 3],
         (width, height): (u32, u32),
     ) -> Result<()> {
-        let context = device.context();
         let uavs: [*mut ID3D11UnorderedAccessView; 3] =
             planes.map(|p| p.map_or(core::ptr::null_mut(), SharedTexture::view));
         let wanted = if format.full_chroma() { 3 } else { 2 };
@@ -254,44 +245,17 @@ impl Split {
         } else {
             (width.div_ceil(2), height.div_ceil(2))
         };
-        let none_srv = [core::ptr::null_mut::<ID3D11ShaderResourceView>(); 2];
-        let none_uav = [core::ptr::null_mut::<ID3D11UnorderedAccessView>(); 3];
         // A vendor's runtime calls into this context from a thread of its
-        // own; its calls wait while the split's bindings stand, rather than
-        // falling between them.
-        let _locked = device.lock();
-        // SAFETY: a live context on this thread; the shader, the views and the
-        // targets are live, and every binding is undone before returning so
-        // nothing of the split stays bound into the next decode.
-        unsafe {
-            vcall!(
-                context,
-                CSSetShader,
+        // own; the dispatch holds the device's lock, so its calls wait while
+        // the split's bindings stand rather than falling between them.
+        device
+            .dispatch(
                 self.shaders.for_format(format),
-                core::ptr::null(),
-                0
-            );
-            vcall!(context, CSSetShaderResources, 0, 2, sources.as_ptr());
-            vcall!(
-                context,
-                CSSetUnorderedAccessViews,
-                0,
-                3,
-                uavs.as_ptr(),
-                core::ptr::null()
-            );
-            vcall!(context, Dispatch, cols.div_ceil(8), rows.div_ceil(8), 1);
-            vcall!(context, CSSetShaderResources, 0, 2, none_srv.as_ptr());
-            vcall!(
-                context,
-                CSSetUnorderedAccessViews,
-                0,
-                3,
-                none_uav.as_ptr(),
-                core::ptr::null()
-            );
-        }
-        Ok(())
+                &sources,
+                &uavs,
+                (cols.div_ceil(8), rows.div_ceil(8)),
+            )
+            .map_err(device_error)
     }
 
     /// Signal the fence behind the work queued so far -- the span closed

@@ -770,6 +770,8 @@ dependencies = [
  "libloading",
  "lowlat-common",
  "lowlat-core",
+ "lowlat-drivers",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -866,6 +868,7 @@ dependencies = [
  "lowlat-common",
  "lowlat-core",
  "lowlat-crypto",
+ "lowlat-drivers",
  "lowlat-encode",
  "lowlat-inject",
  "lowlat-net",
