@@ -486,6 +486,13 @@ once, here.
   duplication's, and the pixels that invert the screen beneath them, which a picture cannot
   carry, are drawn dark grey (a masked colour pointer) or black with a light halo (a monochrome
   one); and a message goes out once the whole state has held for more than 18 ms.
+  *Amended 2026-10-14, at the build:* a frame that carries only the pointer ends no wait. The
+  pointer moves a thousand times a second, so ending the wait on it would tick at once on the
+  deadline whenever the pointer moved, and a composition that followed a millisecond later
+  would wait a whole frame interval; the frame's pointer is taken and the wait goes on. A wait
+  past the deadline that sees no composition for a refresh is the present of an unchanged
+  picture, so a still desktop ticks once a refresh, as a display's vblank would. Ten-bit full
+  chroma is granted: its round trip through the library's decoder agreed.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -574,7 +581,7 @@ once, here.
   encode is now 1.3 to 3.0 ms at the median and 6 to 10 at the p99; what the tail has left is
   the card lowering its clocks under a load this light, to be compared with the established host
   at its own load in W2.2.
-- [ ] **W2.2 desktop duplication and the conversion**: the capture, the conversion and its
+- [x] **W2.2 desktop duplication and the conversion**: the capture, the conversion and its
   shaders, the pointer, rotation, and naming and switching outputs. Run as the system account in
   the console session by a process launcher until W2.5. Checked by the desktop streaming to an
   established client through the lock screen and an elevation prompt.
@@ -586,6 +593,29 @@ once, here.
   against the encoder's own conversion first ([05 §3](05-host.md)): the same cost here, and
   HEVC at 2560x1440 and 120 a second reaches the frame interval at its p99 (~8.5 ms) while the
   card sits in a low power state.
+  *Built and checked live 2026-10-14.* The duplication and the conversion are capture's,
+  over the device seam the encoder uses; the display is the host's, on the output's own
+  adapter, the encoder built on that device at the output's size and the conversion's four
+  targets registered with it once. The conversion is one compute shader per layout, compiled
+  offline: on the development card it lands on the colour reference sample for sample in all
+  four (NV12, P010, AYUV, Y410), and a desktop-like picture converted, encoded and decoded by
+  the library's own decoder comes back at 57 dB of chroma or better in each, the packed
+  full-chroma words carrying colour that changes every pixel. On the real desktop the loop's
+  own sequence runs at the display's pace in all four layouts: the first present in 6 ms, no
+  wait past the deadline longer than 10.3 ms at 120 a second, a composition handed over in
+  0.05 ms at the median and its conversion queued by 0.26. A duplication lost to a switch of
+  desktop is made again on the input desktop, the encoder kept; one out of reach holds the last
+  picture and is asked for again every 50 ms. The pointer's message is settled by the display.
+  `lowlatd` declares per-monitor awareness in its manifest and lists both displays at their
+  physical sizes. **Live**, as the system account in the console session, an established
+  client on a remote Windows machine over the internet streamed the desktop through the lock
+  screen and the secure attention screen -- which stands in for an elevation prompt, since the
+  development machine raises none -- through a switch from one display to the other and back,
+  and through H.264 and HEVC, the encode about 3 ms at the median, no packet asked for again.
+  **Recorded at 120 a second**: composition to the conversion queued 0.35 to 1.5 ms at the
+  median, 4.6 to 7.2 at the p95 and 7.5 to 8.6 at the p99, and the conversion 0.07 ms on the
+  device; the tail is the frame clock, not the duplication -- a composition that lands while
+  the loop sleeps to its deadline waits for it, up to a refresh.
 - [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.
@@ -644,6 +674,11 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-14: W2.2 built and checked live: the duplication and the conversion in all four
+  layouts, the display on the output's own adapter, the pointer settled by the display, the
+  daemon per-monitor aware; streamed as the system account through the lock screen, the secure
+  attention screen and a switch of display. A frame of the pointer alone ends no wait, and
+  ten-bit full chroma is granted, amending the review's two defaults.
 - 2026-10-14: W2.2 reviewed before its build: the pointer's three bits each from its own
   source and one message per settled state ([05 §8](05-host.md) corrected with it); the host
   per-monitor DPI aware, its duplication call refused otherwise; a still desktop's presents;

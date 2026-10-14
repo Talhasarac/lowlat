@@ -3,6 +3,49 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2.2: the desktop duplicated and converted on its own device
+
+### Changed
+- **The Windows host captures its desktop** ([impl-plan-windows.md](impl-plan-windows.md)
+  W2.2): desktop duplication of the output asked for, or the primary, on its own adapter; the
+  device, the encoder and the conversion on that adapter; the encoder's four inputs written by
+  the conversion and registered once; the frame let go as soon as its conversion is queued. An
+  output another adapter scans out is refused rather than copied across. Outputs are listed
+  and named `DISPLAY1`, at their physical sizes and places on the desktop, with their turn.
+- **The conversion runs on D3D11** in every layout the encoder takes there: NV12 and P010, and
+  at full chroma the packed AYUV and Y410 words ([05 §3](05-host.md)). One compute shader per
+  layout, compiled offline and committed as generated code, carrying the same rules as the
+  Linux conversion and checked against the same reference. **Ten-bit full chroma is granted**
+  on this platform, its round trip having agreed.
+- **The present on Windows is the duplication's wait** ([05 §2](05-host.md)): a new image, or a
+  refresh past the deadline with nothing composed, which is the same picture presented again; a
+  frame of the pointer alone ends no wait.
+- **The pointer is reported by the display itself on Windows** ([05 §8](05-host.md)): position,
+  hotspot, picture and the three bits as the system gives them, one message once the state has
+  held. The shared pointer type carries the reported state and the relative and suppressed bits
+  reach the wire; Linux keeps its own rule.
+- **A switch of desktop is followed**: a duplication lost to the lock screen, an elevation
+  prompt or a mode change is made again on the input desktop, the encoder kept, and a desktop
+  out of reach holds the last picture; each is said once in the log, with the desktop it landed
+  on. The display is kept awake while a capture exists.
+- `lowlatd` declares per-monitor awareness in its manifest, embedded by its build script.
+- The client's plane split and the host's conversion share the device's compute helpers.
+
+### Measured
+- The conversion lands on the colour reference sample for sample in all four layouts on the
+  development card; a desktop-like picture converted, encoded and decoded comes back at 57 dB
+  of chroma or better in each, full-chroma detail at 52-54 dB where a subsampled stream would
+  give 12.
+- On the real desktop at 2560x1440 and 120 a second: the first present in 6 ms, every wait past
+  the deadline within 10.3 ms, a composition handed over in 0.05 ms at the median and its
+  conversion queued by 0.26 ms.
+- Live, as the system account, to an established client on a remote Windows machine over the
+  internet: the desktop through the lock screen, the secure attention screen, a switch of
+  display and both codecs, the encode about 3 ms at the median and no packet asked for again.
+  Composition to the conversion queued 0.35-1.5 / 4.6-7.2 / 7.5-8.6 ms at p50 / p95 / p99, the
+  conversion 0.07 ms on the device: the tail is the frame clock's deadline, which a composition
+  landing before it waits for.
+
 ## 2026-10-14 - W2.2 reviewed: the pointer's bits, DPI awareness, a still desktop
 
 ### Decided

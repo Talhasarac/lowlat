@@ -55,6 +55,12 @@ Rules:
   universal, and it is probed rather than assumed: measured 2026-08-25, the open stack
   delivers the events and the proprietary NVIDIA driver refuses the request outright, so a
   stream asks once at start and falls back to the timer when the answer is no.
+  *Added 2026-10-14:* on Windows the present is desktop duplication's own wait, which answers
+  only when the image or the pointer changed. A new image is a present; a wait past the
+  frame's deadline that sees no composition for a refresh is a present of the same picture, so
+  a still desktop still ticks once a refresh; and a frame that carries only the pointer is no
+  present at all -- the pointer moves a thousand times a second, and ending the wait on it
+  would make a composition a millisecond behind it wait a whole frame interval.
 - **The rate is read from the display, not only bounded by it.** The mode the lit controller is
   running carries how often it presents, so the frame clock is set from `min(asked, refresh)` and
   from the refresh alone when nothing was asked. Bounding without reading is not enough: the
@@ -187,6 +193,10 @@ it returns, the conversion is one body per layout, not per depth**: the vendor i
 three planar planes and the open stack one packed plane (AYUV or XYUV at eight bits, Y410 at
 ten), each body keeping the depth uniform and the colour rules shared
 ([the plan, Phase 11.6](impl-plan.md)).
+*Added 2026-10-14:* on Windows the vendor interface takes the packed words as well, AYUV at
+eight bits and Y410 at ten, which a D3D11 device writes through one typed view and the encoder
+reads by the texture's own format; no planar full-chroma layout is taken there. Both came back
+through the library's own decoder carrying colour that changes every pixel.
 
 **Chroma is averaged over each 2x2 block on the way out.** This is worth stating because the
 reverse direction is free and invites the assumption that this one is too: a decoder samples
