@@ -829,6 +829,7 @@ dependencies = [
 name = "lowlat-decode"
 version = "0.0.0"
 dependencies = [
+ "lowlat-capture",
  "lowlat-common",
  "lowlat-core",
  "lowlat-drivers",

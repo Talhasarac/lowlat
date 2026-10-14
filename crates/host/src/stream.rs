@@ -2666,6 +2666,8 @@ fn publish_pointer(
 /// Long enough that a screen blanked while nobody was looking has a chance to
 /// come back when somebody arrives, short enough that a guest on a machine
 /// with no display at all is told so rather than held.
+// Unused on Windows until its display is built (docs/impl-plan-windows.md W2.2).
+#[cfg_attr(windows, allow(dead_code))]
 const DISPLAY_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The output most recently asked for, or nothing if none was.
@@ -2683,6 +2685,8 @@ fn requested(asked: &mpsc::Receiver<Option<String>>) -> Option<Option<String>> {
 
 /// Wait for something to scan out, and report what shape it is: its size, and
 /// how many times a second it presents.
+// Unused on Windows until its display is built (docs/impl-plan-windows.md W2.2).
+#[cfg_attr(windows, allow(dead_code))]
 fn await_display(wanted: Option<&str>) -> Option<(u32, u32, u32)> {
     let began = lowlat_common::clock::Time::now();
     let mut said = false;
@@ -3658,7 +3662,14 @@ fn encode_loop<E: Encoder + FromDevice>(
             continue;
         }
         if waiting && until > POLL_MS * 2.0 {
-            std::thread::sleep(COLLECT_WAIT);
+            // **On the picture itself where the encoder can say**, so the
+            // collect lands as it finishes rather than on the poll after, and
+            // never into the frame's final approach. Elsewhere, the polls.
+            let limit = std::time::Duration::try_from_secs_f64((until - POLL_MS * 2.0) / 1000.0)
+                .unwrap_or(COLLECT_WAIT);
+            if !encoder.wait_finished(limit) {
+                std::thread::sleep(COLLECT_WAIT);
+            }
         } else if until > 0.0 {
             lowlat_common::clock::precise_sleep(std::time::Duration::from_secs_f64(until / 1000.0));
         }

@@ -192,6 +192,7 @@ fn main() {
                 fps: 60,
                 bitrate_bps: 20_000_000,
                 min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
                 chroma,
                 depth: if ten_bit {
                     nvenc::Depth::Ten

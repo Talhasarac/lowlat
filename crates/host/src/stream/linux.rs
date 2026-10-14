@@ -684,6 +684,7 @@ fn run_vendor(
             fps: config.fps,
             bitrate_bps: start_bps(&config),
             min_qp: config.quality.min_qp(),
+            thorough: config.quality.thorough(),
             // Full chroma is granted per session, never configured; the
             // census that gates it already ran before this encoder exists.
             chroma: if config.chroma_444 {

@@ -335,6 +335,28 @@ pub(crate) struct Introduced {
     pub(crate) name: String,
 }
 
+/// Raise this process's priority class to high, once, as the established host
+/// does for its own.
+///
+/// **The whole process, never a thread of it.** Every thread rises together
+/// and keeps its order; a thread raised alone outranks the rest of its own
+/// process, which has hung a two-core machine (docs/02-io-shell.md section 1).
+/// The library never does this -- the process is its application's -- but this
+/// program is the whole of its process.
+#[cfg(windows)]
+fn raise_process_class() {
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        fn SetPriorityClass(process: *mut core::ffi::c_void, class: u32) -> i32;
+    }
+    const HIGH_PRIORITY_CLASS: u32 = 0x80;
+    // SAFETY: the pseudo-handle for this process, which needs no closing, and
+    // a class the call documents.
+    if unsafe { SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS) } == 0 {
+        lowlat_common::log_warn!("lowlatd: the process's priority class could not be raised");
+    }
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // **Decided before any flag is read**, which is the whole of the rule: a
     // role that depends on a line having been scanned is a role a line can be
@@ -365,6 +387,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Program::Tray => session_side::tray(),
         Program::Service => {}
     }
+    // **The host's waits are milliseconds, and Windows rounds each one up to
+    // its tick, about 15.6 ms, until the process raises it.** The library's
+    // handles each hold one; this program drives the host directly, so it
+    // holds its own for as long as it runs. Nothing elsewhere.
+    let _timer = lowlat_common::clock::TimerResolution::raise();
+    #[cfg(windows)]
+    raise_process_class();
     // **Before anything else is set up.** It answers the one question that has
     // to be answered before --output can be used at all, and a machine being
     // asked what it has is not a machine about to host.

@@ -795,6 +795,26 @@ impl Device {
         })
     }
 
+    /// A texture of this device's as `desc` describes it, its contents
+    /// undefined until written.
+    pub fn texture(&self, desc: &D3D11_TEXTURE2D_DESC) -> Result<Com<ID3D11Texture2D>> {
+        let mut raw: *mut ID3D11Texture2D = core::ptr::null_mut();
+        // SAFETY: a live device; the description and output are live.
+        let hr = unsafe {
+            vcall!(
+                self.device.as_ptr(),
+                CreateTexture2D,
+                desc,
+                core::ptr::null(),
+                &raw mut raw
+            )
+        }
+        .ok_or(Error::MissingSymbol)?;
+        check(hr)?;
+        // SAFETY: a texture whose reference the call handed over.
+        unsafe { Com::from_raw(raw) }.ok_or(Error::Unavailable)
+    }
+
     /// A texture another device shared by its handle, opened on this one.
     pub fn open_shared(&self, handle: u64) -> Result<Com<ID3D11Texture2D>> {
         let mut out: *mut c_void = core::ptr::null_mut();
@@ -1066,6 +1086,22 @@ impl Event {
             .max(1);
         // SAFETY: a live event.
         unsafe { WaitForSingleObject(self.0, ms) == 0 }
+    }
+
+    /// Whether the event is set, asked without sleeping: the poll [`wait`]
+    /// never turns into, for a caller that goes round its loop instead.
+    /// Takes the set as a wait does.
+    ///
+    /// [`wait`]: Self::wait
+    pub fn try_wait(&self) -> bool {
+        // SAFETY: a live event; a zero timeout only asks.
+        unsafe { WaitForSingleObject(self.0, 0) == 0 }
+    }
+
+    /// The event's handle, for a runtime that sets it itself. Valid while
+    /// this lives.
+    pub fn handle(&self) -> HANDLE {
+        self.0
     }
 }
 

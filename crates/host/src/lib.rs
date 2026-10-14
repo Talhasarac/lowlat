@@ -5,10 +5,7 @@
 
 // What is the platform's -- the display, and what a stream is built on -- is a
 // module per platform (docs/impl-plan-windows.md); the rest is written once.
-// On Windows the encode loop has no caller until the platform's encoder is
-// built (W2.1), so what only the loop uses is allowed to sit unused there.
 pub mod admission;
-#[cfg_attr(windows, allow(dead_code))]
 pub(crate) mod audio;
 pub mod cursor;
 pub mod display;
@@ -20,7 +17,6 @@ pub mod padsink;
 pub mod rate;
 pub mod session;
 pub mod stock;
-#[cfg_attr(windows, allow(dead_code))]
 pub mod stream;
 pub mod timing;
 pub mod video;

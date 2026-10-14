@@ -5,15 +5,18 @@
 
 // Phase 5 lands the hardware backend; Phase 11 the software one.
 
-// The backends are Linux's so far (docs/impl-plan-windows.md); the trait and
-// the parameter sets build everywhere.
+// The open and Vulkan backends are Linux's; the vendor's is on both, bound to
+// each platform's device (docs/impl-plan-windows.md). The trait and the
+// parameter sets build everywhere.
 pub mod bitstream;
 pub use lowlat_drivers::cuda;
-#[cfg(target_os = "linux")]
+/// The device the vendor encoder is bound to on Windows, re-exported for the
+/// stream that opens one.
+#[cfg(windows)]
+pub use lowlat_drivers::d3d11;
 pub(crate) use lowlat_drivers::ffi;
 pub mod h264;
 pub mod h265;
-#[cfg(target_os = "linux")]
 pub mod nvenc;
 #[cfg(target_os = "linux")]
 pub mod vaapi;
@@ -145,6 +148,19 @@ pub trait Encoder {
     /// those would put a visible stutter in the stream every time the network
     /// hiccuped.
     fn reconfigure(&mut self, bitrate_bps: u32) -> Result<(), Self::Error>;
+
+    /// Sleep until the oldest picture in flight may be collected, or until
+    /// `limit` passes, whichever is first; true when this slept on the
+    /// picture itself.
+    ///
+    /// **Most backends cannot, and answer false at once**, leaving the caller
+    /// to pace its own polls. One whose device reports completion through an
+    /// object sleeps on it, so a collect lands as the picture finishes rather
+    /// than on the next poll after: about two milliseconds sooner, measured
+    /// against polls a millisecond apart.
+    fn wait_finished(&mut self, _limit: core::time::Duration) -> bool {
+        false
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -372,6 +388,7 @@ mod tests {
                     fps: 60,
                     bitrate_bps: 20_000_000,
                     min_qp: DEFAULT_MIN_QP,
+                    thorough: false,
                     chroma: nvenc::Chroma::default(),
                     depth: nvenc::Depth::Eight,
                 },
@@ -487,6 +504,7 @@ mod tests {
                         fps: 60,
                         bitrate_bps: 20_000_000,
                         min_qp,
+                        thorough: false,
                         chroma: nvenc::Chroma::default(),
                         depth: nvenc::Depth::Eight,
                     },
@@ -557,6 +575,7 @@ mod tests {
                     fps: 60,
                     bitrate_bps: 20_000_000,
                     min_qp: DEFAULT_MIN_QP,
+                    thorough: false,
                     chroma: nvenc::Chroma::default(),
                     depth: nvenc::Depth::Eight,
                 },

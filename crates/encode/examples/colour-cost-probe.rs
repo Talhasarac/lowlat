@@ -381,6 +381,7 @@ fn measure(
         )]
         bitrate_bps: (mbit * 1_000_000.0) as u32,
         min_qp: lowlat_encode::DEFAULT_MIN_QP,
+        thorough: false,
         chroma,
         depth,
     };

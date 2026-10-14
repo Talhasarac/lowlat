@@ -21,9 +21,10 @@ lowlat-drivers.workspace = true
 lowlat-common = { workspace = true, features = ["alloc-counter"] }
 
 # The parameter-set writers, so what the encoders write is checked to parse
-# back to what they were told. The encoders are built on Linux so far.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# back to what they were told; and on Windows the vendor encoder itself, fed
+# the synthetic source, whose every picture the D3D11 decoder takes back.
 lowlat-encode.workspace = true
+lowlat-capture.workspace = true
 
 [lints]
 workspace = true

@@ -11,6 +11,11 @@
 //! status that says only "invalid version" and names neither number. So the
 //! check happens once, here, where both numbers are in hand and the failure can
 //! say what it actually is.
+//!
+//! **One encoder on both platforms; what it is bound to is the platform's**
+//! (docs/impl-plan-windows.md): a compute context on Linux, a graphics device
+//! on Windows, with the inputs made on it and how a finished picture is known.
+//! The configuration, the queue and the collect are written once, here.
 
 use core::ffi::CStr;
 use core::mem::MaybeUninit;
@@ -24,9 +29,20 @@ use crate::ffi::nvenc::{
 use crate::ffi::versions::NV_ENCODE_API_FUNCTION_LIST_VER;
 use crate::{Encoder as EncoderTrait, Poll};
 
+#[cfg(target_os = "linux")]
+#[path = "nvenc/linux.rs"]
+mod sys;
+#[cfg(windows)]
+#[path = "nvenc/windows.rs"]
+mod sys;
+
 /// Versioned first. The unversioned alias belongs to the development package
 /// and is absent on a machine that merely has the driver.
-const SONAMES: [&CStr; 2] = [c"libnvidia-encode.so.1", c"libnvidia-encode.so"];
+#[cfg(target_os = "linux")]
+const SONAMES: &[&CStr] = &[c"libnvidia-encode.so.1", c"libnvidia-encode.so"];
+/// Installed with the display driver, in the system directory.
+#[cfg(windows)]
+const SONAMES: &[&CStr] = &[c"nvEncodeAPI64.dll"];
 
 type CreateInstance = unsafe extern "C" fn(*mut NV_ENCODE_API_FUNCTION_LIST) -> NVENCSTATUS;
 type MaxSupportedVersion = unsafe extern "C" fn(*mut u32) -> NVENCSTATUS;
@@ -57,6 +73,10 @@ pub enum Error {
     /// so this is a picture that cannot be expressed rather than one that
     /// could be converted.
     ChromaMismatch,
+    /// The graphics device refused a call the encoder's inputs need: a
+    /// texture, a mapping, an event.
+    #[cfg(windows)]
+    Device(lowlat_drivers::d3d11::Error),
 }
 
 impl core::fmt::Display for Error {
@@ -74,6 +94,8 @@ impl core::fmt::Display for Error {
             Self::ChromaMismatch => {
                 f.write_str("a two-plane frame cannot be uploaded to a full-chroma session")
             }
+            #[cfg(windows)]
+            Self::Device(error) => write!(f, "graphics device: {error}"),
         }
     }
 }
@@ -128,7 +150,7 @@ pub struct Api {
 impl Api {
     /// Open the runtime, check the version, and take the function table.
     pub fn load() -> Result<Self, Error> {
-        let library = Library::open_first(&SONAMES).ok_or(Error::Unavailable)?;
+        let library = Library::open_first(SONAMES).ok_or(Error::Unavailable)?;
 
         // SAFETY: both signatures are transcribed from the vendored header and
         // are checked against it by the layout assertions on the types they
@@ -227,6 +249,7 @@ mod tests {
     /// encode that succeeds, and a picture nothing reads correctly. So this
     /// encodes and writes the result out for a decoder that is not this code.
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires the vendor driver"]
     fn it_encodes_ten_bit_and_the_stream_says_so() {
         let cuda = crate::cuda::Cuda::load().expect("compute runtime");
@@ -248,6 +271,7 @@ mod tests {
             fps: 60,
             bitrate_bps: 20_000_000,
             min_qp: crate::DEFAULT_MIN_QP,
+            thorough: false,
             chroma: Chroma::default(),
             depth: Depth::Ten,
         };
@@ -312,6 +336,7 @@ mod tests {
     ///     -bsf:v trace_headers -f null - 2>&1 | grep -E 'reorder|restriction'
     /// ```
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires the vendor driver"]
     fn it_encodes_h264_for_an_external_parser() {
         let cuda = crate::cuda::Cuda::load().expect("compute runtime");
@@ -326,6 +351,7 @@ mod tests {
             fps: 60,
             bitrate_bps: 20_000_000,
             min_qp: crate::DEFAULT_MIN_QP,
+            thorough: false,
             chroma: Chroma::default(),
             depth: Depth::Eight,
         };
@@ -403,6 +429,7 @@ mod tests {
     /// where the phase's open question gets its answer: whether the collect
     /// can be non-blocking, and whether the bitrate actuator exists at all.
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires the vendor driver"]
     fn the_hardware_answers_what_the_pipeline_depends_on() {
         let cuda = crate::cuda::Cuda::load().expect("compute runtime");
@@ -434,6 +461,7 @@ mod tests {
     /// frames, which needs the submit path, so this asserts the call is
     /// accepted and the counting arrives with the encode loop.
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires the vendor driver"]
     fn an_encoder_configures_and_changes_rate_without_reinitialising() {
         for codec in [Codec::H264, Codec::H265] {
@@ -450,6 +478,7 @@ mod tests {
                 fps: 60,
                 bitrate_bps: 20_000_000,
                 min_qp: crate::DEFAULT_MIN_QP,
+                thorough: false,
                 chroma: Chroma::default(),
                 depth: Depth::Eight,
             };
@@ -481,6 +510,7 @@ mod tests {
     /// whole drain; one that asks is bounded by a driver round trip no matter
     /// how much work is queued behind it.
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires the vendor driver"]
     fn the_collect_does_not_block() {
         use std::time::Instant;
@@ -498,6 +528,7 @@ mod tests {
             fps: 60,
             bitrate_bps: 20_000_000,
             min_qp: crate::DEFAULT_MIN_QP,
+            thorough: false,
             chroma: Chroma::default(),
             depth: Depth::Eight,
         };
@@ -652,19 +683,6 @@ pub enum Chroma {
 }
 
 impl Chroma {
-    /// Rows one planar frame occupies at this chroma, luma included.
-    ///
-    /// Both layouts are one allocation at one pitch with the planes stacked,
-    /// which is why the registration takes a single address either way: 4:2:0
-    /// is luma then half as many rows of interleaved colour, 4:4:4 is three
-    /// full planes.
-    const fn rows_for(self, height: u32) -> u32 {
-        match self {
-            Self::Yuv420 => height + height.div_ceil(2),
-            Self::Yuv444 => height * 3,
-        }
-    }
-
     const fn buffer_format(self, depth: Depth) -> crate::ffi::nvenc::NV_ENC_BUFFER_FORMAT {
         match (self, depth) {
             (Self::Yuv420, Depth::Eight) => crate::ffi::nvenc::NV_ENC_BUFFER_FORMAT_NV12,
@@ -678,9 +696,9 @@ impl Chroma {
 /// What the hardware will actually do, asked rather than assumed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caps {
-    /// Completion delivered through an event object. **Absent on this
-    /// platform**, which is why the collect must use the non-blocking lock
-    /// instead of waiting on anything.
+    /// Completion delivered through an event object. **Absent on Linux**,
+    /// which is why the collect there must use the non-blocking lock instead
+    /// of waiting on anything; Windows has it, and the collect asks the event.
     pub async_encode: bool,
     /// Bitrate may be changed without reinitialising. The precondition for the
     /// congestion controller's only actuator; without it the phase gate that
@@ -712,48 +730,12 @@ pub struct Session<'a> {
     encoder: *mut core::ffi::c_void,
     /// Released after the encoder is destroyed, because the encoder was opened
     /// against it.
+    #[cfg(target_os = "linux")]
     _context: crate::cuda::Context,
-}
-
-impl<'a> Api {
-    /// Open a session against a compute context.
-    ///
-    /// The context is taken rather than borrowed: an encoder outliving the
-    /// context it was opened against is a use-after-free that presents as a
-    /// driver fault with no line number.
-    pub fn open_session(&'a self, context: crate::cuda::Context) -> Result<Session<'a>, Error> {
-        // Everything from here on runs against whatever context is current on
-        // this thread, including allocations made for it, so bind it now
-        // rather than leaving each call site to remember.
-        context.make_current().map_err(|_| Error::NoContext)?;
-
-        let open = self
-            .functions
-            .nvEncOpenEncodeSessionEx
-            .ok_or(Error::MissingSymbol)?;
-
-        let mut params = unsafe {
-            core::mem::zeroed::<crate::ffi::nvenc::NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS>()
-        };
-        params.version = crate::ffi::versions::NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
-        params.deviceType = crate::ffi::nvenc::NV_ENC_DEVICE_TYPE_CUDA;
-        params.device = context.raw().cast();
-        params.apiVersion = crate::ffi::nvenc::NVENCAPI_VERSION;
-
-        let mut encoder: *mut core::ffi::c_void = core::ptr::null_mut();
-        // SAFETY: both pointers are to live storage for the duration of the
-        // call, and the parameter block is stamped with its own version.
-        let status = unsafe { open(&raw mut params, &raw mut encoder) };
-        if status != NV_ENC_SUCCESS {
-            return Err(Error::Status(status));
-        }
-
-        Ok(Session {
-            api: self,
-            encoder,
-            _context: context,
-        })
-    }
+    /// The device the encoder was opened on, which its inputs are made on and
+    /// written through. Released after the encoder is destroyed, as above.
+    #[cfg(windows)]
+    device: std::sync::Arc<lowlat_drivers::d3d11::Device>,
 }
 
 impl Session<'_> {
@@ -882,6 +864,14 @@ pub struct Config {
     /// quality one, and it is the default for a product whose first goal is
     /// latency. Raising it trades visible sharpness for smaller frames.
     pub min_qp: u32,
+    /// The effort half of the quality setting ([`crate::Quality::thorough`]):
+    /// the device's most thorough preset and a second pass, where every other
+    /// setting takes its fastest in one.
+    ///
+    /// **Settled when the encoder is built**, as the setting is settled when
+    /// hosting starts: a preset is part of the session, and changing it means
+    /// building the session again.
+    pub thorough: bool,
     /// How much chroma to code. Every shipped path leaves this at its default;
     /// see [`Chroma`] for why the other value exists.
     pub chroma: Chroma,
@@ -1029,8 +1019,14 @@ pub struct Encoder<'a> {
     /// passed.
     /// Boxed so the address handed to the encoder stays valid however this
     /// value is moved afterwards.
+    #[cfg(target_os = "linux")]
     stream: Box<crate::cuda::Stream>,
+    #[cfg(target_os = "linux")]
     events: [crate::cuda::Event; IN_FLIGHT],
+    /// The events the encoder sets as each picture finishes, which the
+    /// collect asks instead of a marker of its own.
+    #[cfg(windows)]
+    completion: sys::Completion,
     config: Config,
     /// Retained so a reconfigure can resend the whole block. The interface
     /// takes a complete configuration every time, not a delta.
@@ -1044,7 +1040,7 @@ pub struct Encoder<'a> {
     /// the hardware has not finished reading, so the encoder produces the
     /// newest content under an older picture's timestamp. Declared before the
     /// session so the allocations are freed while the context still exists.
-    inputs: Vec<InputSlot>,
+    inputs: Vec<sys::InputSlot>,
     /// Submitted and not yet collected, oldest first.
     pending: std::collections::VecDeque<Pending>,
     /// Where a collected access unit is copied to.
@@ -1095,16 +1091,33 @@ fn vbv_bits(bitrate_bps: u32, fps: u32) -> u32 {
     u32::try_from(scaled).unwrap_or(u32::MAX).min(VBV_MAX_BITS)
 }
 
-impl<'a> Session<'a> {
-    /// Configure the encoder for low latency and initialise it.
-    pub fn initialize(
-        self,
-        cuda: &crate::cuda::Cuda,
-        config: Config,
-    ) -> Result<Encoder<'a>, Error> {
+/// What a configured session hands the encoder built on it: the
+/// configuration it was initialised with, kept for a reconfigure, and its
+/// output buffers.
+type Configured = (
+    crate::ffi::nvenc::NV_ENC_CONFIG,
+    crate::ffi::nvenc::NV_ENC_INITIALIZE_PARAMS,
+    [crate::ffi::nvenc::NV_ENC_OUTPUT_PTR; IN_FLIGHT],
+);
+
+impl Session<'_> {
+    /// Configure the encoder for low latency, initialise it, and make its
+    /// output buffers: all of an encoder but its device's half, which each
+    /// platform's `initialize` adds. `asynchronous` says completion is
+    /// reported through an event object.
+    fn configure(&self, config: &Config, asynchronous: bool) -> Result<Configured, Error> {
         use crate::ffi::nvenc as f;
 
-        let preset = crate::ffi::guids::NV_ENC_PRESET_P4_GUID;
+        // **The device's fastest unless the setting asked for thorough**, which
+        // takes its most thorough (docs/05-host.md 4.1). Effort the bitrate
+        // will not let the encoder spend is delay with nothing to show for it:
+        // measured at 1080p, the fastest took 3.2 ms a picture where the middle
+        // one this used to start from at every setting took 3.7.
+        let preset = if config.thorough {
+            crate::ffi::guids::NV_ENC_PRESET_P7_GUID
+        } else {
+            crate::ffi::guids::NV_ENC_PRESET_P1_GUID
+        };
         let tuning = f::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
 
         // Start from the preset the hardware recommends, then override only
@@ -1188,6 +1201,18 @@ impl<'a> Session<'a> {
         rc.set_enableNonRefP(1);
         // Output order is capture order. Any reordering is latency on every frame.
         rc.set_zeroReorderDelay(1);
+        // **One pass, unless the setting asked for thorough.** Every preset
+        // turns on a second one at a quarter of the resolution: rate control
+        // spending a pass on every picture to place its bits better. Measured
+        // on Windows at 1080p, a picture took 6.3 ms with it and 3.65 without,
+        // the card's clocks lowered either way. The video buffer and the
+        // quantiser floor already bound what a picture may cost, so the pass
+        // buys an accuracy this pipeline needs only where it was asked for.
+        rc.multiPass = if config.thorough {
+            f::NV_ENC_TWO_PASS_QUARTER_RESOLUTION
+        } else {
+            f::NV_ENC_MULTI_PASS_DISABLED
+        };
 
         // SAFETY: the union member written is the one matching the codec, and
         // it is read back through the same member for the life of the encoder.
@@ -1280,9 +1305,10 @@ impl<'a> Session<'a> {
         init_params.darHeight = config.height;
         init_params.frameRateNum = config.fps;
         init_params.frameRateDen = 1;
-        // No completion object: the hardware reports no asynchronous support
-        // on this platform, so the collect is a non-blocking poll instead.
-        init_params.enableEncodeAsync = 0;
+        // A completion object where the platform has one, which the collect
+        // then asks; on Linux the hardware reports no asynchronous support and
+        // the collect asks a marker of its own instead.
+        init_params.enableEncodeAsync = u32::from(asynchronous);
         // The encoder decides picture types, which is what lets a keyframe be
         // requested per frame rather than scheduled.
         init_params.enablePTD = 1;
@@ -1326,44 +1352,7 @@ impl<'a> Session<'a> {
             *slot = buffer.bitstreamBuffer;
         }
 
-        // Our own stream, so completion can be marked behind each picture.
-        // Without this the encoder runs on the default stream, where a marker
-        // would also catch unrelated work.
-        let stream = Box::new(cuda.create_stream().map_err(|_| Error::NoContext)?);
-        if let Some(set_streams) = self.api.functions.nvEncSetIOCudaStreams {
-            // SAFETY: the encoder is live, and the pointer is to the boxed
-            // handle, which outlives the encoder because it is owned by the
-            // value returned below and does not move with it. One stream
-            // serves both directions: there is a single producer here.
-            let status =
-                unsafe { set_streams(self.encoder, stream.handle_ptr(), stream.handle_ptr()) };
-            if status != NV_ENC_SUCCESS {
-                return Err(Error::Status(status));
-            }
-        }
-        let events = [
-            cuda.create_event().map_err(|_| Error::NoContext)?,
-            cuda.create_event().map_err(|_| Error::NoContext)?,
-            cuda.create_event().map_err(|_| Error::NoContext)?,
-            cuda.create_event().map_err(|_| Error::NoContext)?,
-        ];
-
-        let mut encoder = Encoder {
-            session: self,
-            config,
-            stream,
-            events,
-            encode_config,
-            init_params,
-            outputs,
-            next_output: 0,
-            inputs: Vec::with_capacity(IN_FLIGHT),
-            pending: std::collections::VecDeque::with_capacity(IN_FLIGHT),
-            collected: Vec::new(),
-            last_lock: None,
-        };
-        encoder.allocate_inputs(cuda)?;
-        Ok(encoder)
+        Ok((encode_config, init_params, outputs))
     }
 }
 
@@ -1392,8 +1381,9 @@ impl Encoder<'_> {
     ///
     /// **The floor only, and it takes effect on the next reconfigure**, which
     /// the rate loop performs every pass. The effort half is the preset and
-    /// tuning this encoder was built with, and changing those means building
-    /// the session again -- which is not what a live setting may cost.
+    /// pass count this encoder was built with ([`Config::thorough`]), and
+    /// changing those means building the session again -- which is not what a
+    /// live setting may cost.
     pub fn set_quality_setting(&mut self, quality: crate::Quality) {
         self.encode_config.rcParams.minQP.qpIntra = quality.min_qp();
         self.encode_config.rcParams.minQP.qpInterP = quality.min_qp();
@@ -1464,16 +1454,6 @@ pub struct Input {
     pitch: u32,
 }
 
-/// One slot of the input pool: the allocation and its registration.
-///
-/// The buffer is declared first so it is freed before the registration that
-/// names it is dropped.
-#[derive(Debug)]
-struct InputSlot {
-    buffer: crate::cuda::DeviceBuffer,
-    input: Input,
-}
-
 #[derive(Debug)]
 struct Pending {
     output: crate::ffi::nvenc::NV_ENC_OUTPUT_PTR,
@@ -1487,6 +1467,8 @@ impl Drop for Encoder<'_> {
     /// encoder they belong to. Anything still in flight is unmapped first, so
     /// a teardown mid-stream does not leak a mapping.
     fn drop(&mut self) {
+        // Whatever the platform has to see finished before anything goes.
+        self.settle();
         let functions = self.session.api.functions;
         if let Some(unmap) = functions.nvEncUnmapInputResource {
             for entry in &self.pending {
@@ -1516,136 +1498,6 @@ impl Drop for Encoder<'_> {
 impl Encoder<'_> {
     fn functions(&self) -> &crate::ffi::nvenc::NV_ENCODE_API_FUNCTION_LIST {
         &self.session.api.functions
-    }
-
-    /// Write a frame into one slot of the input pool.
-    ///
-    /// The two planes are one allocation: luma at row zero, chroma directly
-    /// after the last luma row. That is the layout the format declared at
-    /// registration means, and the encoder derives the chroma offset from the
-    /// height it was given rather than being told separately.
-    fn upload(&self, slot: usize, frame: &lowlat_capture::Frame<'_>) -> Result<(), Error> {
-        // **Refused rather than written into the top of a larger pool.** A
-        // frame from ordinary memory has two planes and full chroma needs
-        // three, so there is no widening to do here the way there is for the
-        // depth: the type cannot carry the picture. Written anyway, the
-        // subsampled bytes land in the top of a pool registered as full
-        // chroma, and what comes out is a picture with a third of its colour
-        // and two thirds of whatever the allocation held. Nothing else
-        // refuses it, because the address and the row length are both what the
-        // registration promised.
-        if self.config.chroma == Chroma::Yuv444 {
-            return Err(Error::ChromaMismatch);
-        }
-        let held = self.inputs.get(slot).ok_or(Error::NoContext)?;
-        let width = usize::try_from(frame.width).unwrap_or(0);
-        let rows = usize::try_from(frame.height).unwrap_or(0);
-        let chroma_width = width.div_ceil(2) * 2;
-        let chroma_rows = rows.div_ceil(2);
-
-        // **A frame from ordinary memory is eight bits and the pool may not
-        // be.** Widened here rather than refused, because this is the path a
-        // synthetic source and the device tests take; a picture converted on
-        // the device already arrives at the pool's depth and is handed over by
-        // reference without passing through this at all.
-        if self.config.depth.ten_bit() {
-            let luma = widen(&frame.luma, width, rows);
-            let chroma = widen(&frame.chroma, chroma_width, chroma_rows);
-            held.buffer
-                .write_rows(0, &luma, width * 2, width * 2, rows)
-                .map_err(|_| Error::NoContext)?;
-            return held
-                .buffer
-                .write_rows(
-                    rows,
-                    &chroma,
-                    chroma_width * 2,
-                    chroma_width * 2,
-                    chroma_rows,
-                )
-                .map_err(|_| Error::NoContext);
-        }
-
-        held.buffer
-            .write_rows(0, frame.luma.bytes, frame.luma.stride, width, rows)
-            .map_err(|_| Error::NoContext)?;
-        held.buffer
-            .write_rows(
-                rows,
-                frame.chroma.bytes,
-                frame.chroma.stride,
-                chroma_width,
-                chroma_rows,
-            )
-            .map_err(|_| Error::NoContext)
-    }
-
-    /// Allocate and register the input pool, one surface per in-flight
-    /// picture.
-    fn allocate_inputs(&mut self, cuda: &crate::cuda::Cuda) -> Result<(), Error> {
-        // One planar frame per allocation: luma rows, then half as many rows
-        // of interleaved chroma, at the driver's preferred pitch.
-        //
-        // **The depth widens a row, it does not add rows.** Ten bits are one
-        // sample to a sixteen-bit word, so the picture is the same shape at
-        // twice the bytes across; sizing this by rows alone hands the encoder
-        // half the picture it was promised.
-        let width =
-            usize::try_from(self.config.width).unwrap_or(0) * self.config.depth.bytes_per_sample();
-        let rows = usize::try_from(self.config.chroma.rows_for(self.config.height)).unwrap_or(0);
-        for _ in 0..IN_FLIGHT {
-            let buffer = cuda
-                .alloc_pitch(width, rows)
-                .map_err(|_| Error::NoContext)?;
-            let input = self.register(&buffer)?;
-            self.inputs.push(InputSlot { buffer, input });
-        }
-        Ok(())
-    }
-
-    /// Register a device allocation holding one planar frame.
-    pub fn register(&self, buffer: &crate::cuda::DeviceBuffer) -> Result<Input, Error> {
-        self.register_ptr(buffer.ptr(), buffer.pitch())
-    }
-
-    /// Register one planar frame by address.
-    ///
-    /// **One address and one row length, and the colour plane is assumed to
-    /// begin exactly one luma plane in.** There is no field here in which to
-    /// say otherwise, which is why a frame produced elsewhere has to be laid
-    /// out that way before it arrives.
-    pub fn register_ptr(
-        &self,
-        ptr: crate::ffi::cuda::CUdeviceptr,
-        pitch: usize,
-    ) -> Result<Input, Error> {
-        use crate::ffi::nvenc as f;
-        let register = self
-            .functions()
-            .nvEncRegisterResource
-            .ok_or(Error::MissingSymbol)?;
-
-        let mut params = unsafe { core::mem::zeroed::<f::NV_ENC_REGISTER_RESOURCE>() };
-        params.version = crate::ffi::versions::NV_ENC_REGISTER_RESOURCE_VER;
-        params.resourceType = f::NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
-        params.width = self.config.width;
-        params.height = self.config.height;
-        params.pitch = u32::try_from(pitch).map_err(|_| Error::MissingSymbol)?;
-        params.resourceToRegister = ptr as *mut core::ffi::c_void;
-        params.bufferFormat = self.config.chroma.buffer_format(self.config.depth);
-        params.bufferUsage = f::NV_ENC_INPUT_IMAGE;
-
-        // SAFETY: the block is stamped and live for the call.
-        let status = unsafe { register(self.session.encoder, &raw mut params) };
-        if status != NV_ENC_SUCCESS {
-            return Err(Error::Status(status));
-        }
-        Ok(Input {
-            registered: params.registeredResource,
-            width: self.config.width,
-            height: self.config.height,
-            pitch: params.pitch,
-        })
     }
 
     /// Hand a frame to the hardware. Returns as soon as it is queued.
@@ -1730,6 +1582,9 @@ impl Encoder<'_> {
         if force_keyframe {
             pic.encodePicFlags = f::NV_ENC_PIC_FLAG_FORCEIDR;
         }
+        // Where the encoder reports completion itself, the picture names the
+        // object it is to set.
+        self.arm(slot, &mut pic);
 
         // SAFETY: the block is stamped and live; the mapped input and the
         // output buffer both outlive the encode because they are held in the
@@ -1739,11 +1594,10 @@ impl Encoder<'_> {
             return Err(Error::Status(status));
         }
 
-        // Marker behind the work just queued. Recorded after the submit so it
-        // cannot pass before the picture it stands for.
-        self.events[slot]
-            .record(&self.stream)
-            .map_err(|_| Error::NoContext)?;
+        // Marker behind the work just queued, where the platform keeps one.
+        // Recorded after the submit so it cannot pass before the picture it
+        // stands for.
+        self.mark(slot)?;
 
         self.pending.push_back(Pending {
             output,
@@ -1766,6 +1620,10 @@ impl Encoder<'_> {
     /// separate engine, so it passes before the picture is finished. The lock
     /// covers the rest of that wait. **The interface's no-wait flag does not
     /// avoid it** -- see where it is set below.
+    ///
+    /// That is Linux. On Windows the marker is the encoder's own event, set
+    /// once the picture is finished, so the lock behind it has nothing left
+    /// to wait for: 18 to 24 us at 1080p.
     pub fn poll(&mut self) -> Result<Poll<'_>, Error> {
         use crate::ffi::nvenc as f;
         let Some(head) = self.pending.front() else {
@@ -1775,7 +1633,7 @@ impl Encoder<'_> {
 
         // Ask, never wait. A picture that is not finished is the ordinary
         // case and the caller goes round its loop.
-        if !self.events[event].ready().map_err(|_| Error::NoContext)? {
+        if !self.passed(event)? {
             return Ok(Poll::Pending);
         }
 
@@ -1876,5 +1734,12 @@ impl EncoderTrait for Encoder<'_> {
 
     fn reconfigure(&mut self, bitrate_bps: u32) -> Result<(), Error> {
         Encoder::reconfigure(self, bitrate_bps)
+    }
+
+    // Linux's marker cannot be slept on with a bound, so it keeps the default
+    // and its caller's polls.
+    #[cfg(windows)]
+    fn wait_finished(&mut self, limit: core::time::Duration) -> bool {
+        Encoder::wait_finished(self, limit)
     }
 }
