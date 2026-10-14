@@ -16,18 +16,24 @@
 //! output where every consumer can read it, and it disappears when real
 //! capture arrives with a handle of its own.
 
-// Built where its platform's half is written, which is Linux so far
-// (docs/impl-plan-windows.md); elsewhere the crate is empty.
-#![cfg(target_os = "linux")]
-
+// The backends are Linux's (docs/impl-plan-windows.md); the frame, the
+// generator and what an output and its pointer are build everywhere.
+#[cfg(target_os = "linux")]
 pub mod convert;
+#[cfg(target_os = "linux")]
 pub mod cursor;
+#[cfg(target_os = "linux")]
 pub mod desktop;
+#[cfg(target_os = "linux")]
 pub mod gl;
+#[cfg(target_os = "linux")]
 pub mod mode;
+#[cfg(target_os = "linux")]
 pub mod scanout;
 pub mod synthetic;
+#[cfg(target_os = "linux")]
 pub mod vulkan;
+#[cfg(target_os = "linux")]
 mod wayland;
 
 use lowlat_common::clock::Time;
@@ -134,6 +140,67 @@ pub struct Placement {
     /// framebuffer that keeps its landscape shape, so the picture captured
     /// from it is on its side and only the session can say by how much.
     pub rotation: lowlat_core::video::Rotation,
+}
+
+/// The pointer as it should reach a peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pointer {
+    /// Top-left of the **drawn part** on the display: the plane's own corner
+    /// plus where the drawing begins inside it.
+    ///
+    /// Signed, and it goes negative at the left and top edges. The drawn part
+    /// is what travels, so sending the plane's corner instead would place
+    /// every pointer up and to the left of itself by however much padding the
+    /// compositor happened to leave.
+    pub x: i32,
+    pub y: i32,
+    pub width: u16,
+    pub height: u16,
+    /// Names the image, and is what a peer that keeps pointers holds it by.
+    pub checksum: u32,
+    /// True when this read produced a picture that has not been seen before.
+    pub fresh: bool,
+    /// True when this read actually examined the pixels.
+    ///
+    /// **Only a read that looked can say whether a pointer is being drawn.**
+    /// The picture is read on a cadence, so most reads report the one they
+    /// already had; taking those as evidence that a pointer is still on screen
+    /// resets any timer watching for one that has gone, three times out of
+    /// four, so it never expires.
+    pub looked: bool,
+}
+
+/// Where a rectangle drawn in a turned framebuffer sits in the desktop the
+/// framebuffer shows.
+///
+/// `frame` is the framebuffer's own size and the rectangle is in its pixels;
+/// the answer is in the desktop's, which for a quarter turn has the frame's
+/// sides swapped. Signed, because a pointer straddles the edges.
+pub fn upright_rect(
+    turn: lowlat_core::video::Rotation,
+    frame: (u32, u32),
+    rect: (i32, i32, u32, u32),
+) -> (i32, i32, u32, u32) {
+    use lowlat_core::video::Rotation;
+    let (fw, fh) = (i64::from(frame.0), i64::from(frame.1));
+    let (x, y, w, h) = (
+        i64::from(rect.0),
+        i64::from(rect.1),
+        i64::from(rect.2),
+        i64::from(rect.3),
+    );
+    let (x, y, w, h) = match turn {
+        Rotation::Deg90 => (fh - y - h, x, h, w),
+        Rotation::Deg270 => (y, fw - x - w, h, w),
+        Rotation::Deg180 => (fw - x - w, fh - y - h, w, h),
+        _ => (x, y, w, h),
+    };
+    (
+        i32::try_from(x).unwrap_or(i32::MAX),
+        i32::try_from(y).unwrap_or(i32::MAX),
+        u32::try_from(w).unwrap_or(u32::MAX),
+        u32::try_from(h).unwrap_or(u32::MAX),
+    )
 }
 
 /// One plane of a frame.

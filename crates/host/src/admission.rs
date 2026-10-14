@@ -3657,12 +3657,8 @@ mod tests {
     /// see.
     #[test]
     fn a_supplied_port_is_where_the_bind_starts() {
-        let probe = Socket::open(0).expect("probe");
-        let asked = probe.local_addr().expect("addr").port();
-        drop(probe);
-        let other = Socket::open(0).expect("probe");
-        let base = other.local_addr().expect("addr").port();
-        drop(other);
+        let asked = quiet_ports(1);
+        let base = quiet_ports(1);
         assert_ne!(
             asked, base,
             "the two probes must differ for this to prove anything"
@@ -3687,13 +3683,40 @@ mod tests {
         seam.end_connection("b");
     }
 
+    /// A base for a test about which port the walk takes: `count` ports free
+    /// now, **below both systems' ephemeral ranges**.
+    ///
+    /// A port taken from the ephemeral range and released is the next one a
+    /// test binding port zero beside this one is handed -- every time on a
+    /// system that allocates them in order -- so the walk being tested found
+    /// it taken. Each call takes the next window, so two such tests never
+    /// share one.
+    fn quiet_ports(count: u16) -> u16 {
+        static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(30_000);
+        loop {
+            let base = NEXT.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+            assert!(
+                base < 32_000,
+                "no {count} free ports below the ephemeral ranges"
+            );
+            let held: Vec<_> = (base..base + count)
+                .map(|port| {
+                    Socket::open(port)
+                        .ok()
+                        .filter(|bound| bound.local_addr().is_ok_and(|addr| addr.port() == port))
+                })
+                .collect();
+            if held.iter().all(Option::is_some) {
+                return base;
+            }
+        }
+    }
+
     #[test]
     fn concurrent_guests_land_on_consecutive_ports() {
         // A base the first guest can actually take. Ephemeral would give each
         // guest an unrelated port and prove nothing about walking.
-        let probe = Socket::open(0).expect("probe");
-        let base = probe.local_addr().expect("addr").port();
-        drop(probe);
+        let base = quiet_ports(3);
 
         let mut seam = Admission::new(Config {
             microphone: None,

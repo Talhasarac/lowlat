@@ -4551,7 +4551,7 @@ mod tests {
 
     /// The host's own admission, one guest and no stream: the peer the
     /// session tests here connect to on loopback.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     fn a_host() -> ::lowlat_host::admission::Admission {
         use ::lowlat_host::admission::{self, Admission};
         Admission::new(admission::Config {
@@ -4570,7 +4570,7 @@ mod tests {
     }
 
     /// Attempt `id` on the handle: the credentials for its offer.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     fn an_offer(handle: *mut lowlat_client, id: &core::ffi::CStr) -> lowlat_credentials {
         let mut ours: lowlat_credentials = unsafe { core::mem::zeroed() };
         ours.size = core::mem::size_of::<lowlat_credentials>() as u32;
@@ -4592,7 +4592,7 @@ mod tests {
     /// A session through the boundary against the host's own admission on
     /// loopback, the exchange relayed by hand as a signaling service would:
     /// the handle with its session up, and the host holding the other end.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     fn a_session() -> (*mut lowlat_client, ::lowlat_host::admission::Admission) {
         let mut host = a_host();
         let mut handle: *mut lowlat_client = core::ptr::null_mut();
@@ -4607,7 +4607,7 @@ mod tests {
     }
 
     /// Attempt `id`, offered with `ours`, through to a session with `host`.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     fn connect(
         handle: *mut lowlat_client,
         host: &mut ::lowlat_host::admission::Admission,
@@ -4729,7 +4729,7 @@ mod tests {
     /// attempt, and a new attempt is refused as one already started until the
     /// departure is over, then taken. The departure is timed as well, because
     /// a call answered after it had ended would show nothing.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     #[test]
     fn a_call_made_while_the_session_leaves_is_answered_at_once() {
         use ::lowlat_host::admission::{Event as HostEvent, Outcome as HostOutcome};
@@ -4814,7 +4814,7 @@ mod tests {
     /// acquire after a reconnect comes back at once and a render loop paced
     /// by the wait spins. There is no decoder, so no picture ever comes and
     /// every acquire here runs to its timeout.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     #[test]
     fn a_second_session_on_the_handle_waits_for_its_pictures() {
         use std::time::Instant;
@@ -4861,7 +4861,7 @@ mod tests {
     /// attempt's name, and the status and the figures describe the new
     /// attempt -- connecting rather than over, nothing counted -- until its
     /// own session says otherwise.
-    #[cfg(all(feature = "host", target_os = "linux"))]
+    #[cfg(feature = "host")]
     #[test]
     fn a_new_attempt_starts_from_nothing_the_last_session_left() {
         use std::time::Instant;

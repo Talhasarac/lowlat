@@ -3,19 +3,21 @@
 //!
 //! See docs/05-host.md section 4.
 
-// Built where its platform's half is written, which is Linux so far
-// (docs/impl-plan-windows.md); elsewhere the crate is empty.
-#![cfg(target_os = "linux")]
-
 // Phase 5 lands the hardware backend; Phase 11 the software one.
 
+// The backends are Linux's so far (docs/impl-plan-windows.md); the trait and
+// the parameter sets build everywhere.
 pub mod bitstream;
 pub use lowlat_drivers::cuda;
+#[cfg(target_os = "linux")]
 pub(crate) use lowlat_drivers::ffi;
 pub mod h264;
 pub mod h265;
+#[cfg(target_os = "linux")]
 pub mod nvenc;
+#[cfg(target_os = "linux")]
 pub mod vaapi;
+#[cfg(target_os = "linux")]
 pub mod vulkan;
 
 /// The quantiser floor that buys latency without costing anything the eye
@@ -145,7 +147,7 @@ pub trait Encoder {
     fn reconfigure(&mut self, bitrate_bps: u32) -> Result<(), Self::Error>;
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

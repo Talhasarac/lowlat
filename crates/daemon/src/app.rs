@@ -98,7 +98,9 @@ impl Clipboard {
         owner || matches!(self, Self::Send | Self::Both)
     }
 
-    /// Whether the desktop's clipboard may reach this guest.
+    /// Whether the desktop's clipboard may reach this guest. Asked by the
+    /// session's side, which only Linux has so far.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     const fn gives_to(self, owner: bool) -> bool {
         owner || matches!(self, Self::Both)
     }
@@ -344,7 +346,7 @@ pub(crate) fn on_message(
         id::CLIPBOARD => {
             let owner = seam.guests().iter().any(|g| g.number == guest && g.owner);
             if settings.guest_clipboard.takes_from(owner) {
-                let reached = crate::channel::clipboard(body);
+                let reached = crate::session_side::clipboard(body);
                 lowlat_common::log_info!(
                     "lowlatd: guest {guest} sent a clipboard of {} bytes, session={}",
                     body.len(),
@@ -368,6 +370,7 @@ pub(crate) fn on_message(
 /// **Non-zero, and one the peer already has words for.** A peer carries on
 /// through a zero, and a value outside its own enumeration shows as a blank
 /// reason rather than as one.
+#[cfg(target_os = "linux")]
 const KICKED: i32 = 5;
 
 /// Act on what a tray asked for, saying who asked.
@@ -376,6 +379,7 @@ const KICKED: i32 = 5;
 /// Any local user may act, which is a deferral with its cost written down
 /// (docs/07-platforms.md section 5.1); what keeps it a deferral is that a
 /// kick or a change can be attributed afterwards.
+#[cfg(target_os = "linux")]
 pub(crate) fn on_action(
     seam: &mut Admission,
     settings: &Settings,
@@ -414,6 +418,7 @@ pub(crate) fn on_action(
 /// else a tray shows is a field the seam already holds; the name needs the
 /// display devices enumerated, which is not something to do twenty times a
 /// second for an icon.
+#[cfg(target_os = "linux")]
 #[derive(Debug, Default)]
 pub(crate) struct Shown {
     captured: u32,
@@ -424,6 +429,7 @@ pub(crate) struct Shown {
 ///
 /// **Whether anybody needs to hear it is the channel's decision**, which
 /// compares against what it last sent; this only says what is true now.
+#[cfg(target_os = "linux")]
 pub(crate) fn state(
     seam: &Admission,
     shown: &mut Shown,
@@ -481,6 +487,7 @@ pub(crate) fn state(
 /// **Sent rather than offered, because that is the shape the message has.**
 /// Copied text travels as an application message with no request behind it, so
 /// a host that waited to be asked would never send one.
+#[cfg(target_os = "linux")]
 pub(crate) fn clipboard_to_guests(seam: &mut Admission, settings: &Settings, text: &[u8]) {
     let mut reached = 0u32;
     for guest in seam.guests() {
@@ -887,11 +894,7 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
         let output = lowlat_host::display::captured(listed, seam.captured())
             .map(|output| output.connector.clone())
             .unwrap_or_default();
-        match crate::channel::ask_mode(crate::channel::ModeAsk {
-            output: &output,
-            size: asked_size,
-            rotation: asked_rotation,
-        }) {
+        match crate::session_side::ask_mode(&output, asked_size, asked_rotation) {
             Ok(()) => lowlat_common::log_info!(
                 "lowlatd: {who} asked for {output} at {:?} rotation={:?}, asking the session",
                 asked_size,

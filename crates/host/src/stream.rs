@@ -57,6 +57,9 @@ use crate::rate::{Budget, Sample};
 #[cfg(target_os = "linux")]
 #[path = "stream/linux.rs"]
 mod sys;
+#[cfg(windows)]
+#[path = "stream/windows.rs"]
+mod sys;
 
 /// Seats, and therefore the compile-time guest cap.
 pub const MAX_SEATS: usize = gate::MAX_GUESTS;
@@ -2605,7 +2608,7 @@ fn publish_pointer(
         }
         return;
     };
-    let (x, y, drawn_width, drawn_height) = lowlat_capture::cursor::upright_rect(
+    let (x, y, drawn_width, drawn_height) = lowlat_capture::upright_rect(
         turn,
         (width, height),
         (
@@ -4944,7 +4947,7 @@ mod tests {
             .expect("a free seat");
 
         assert_eq!(seat.rotation(), Rotation::None, "nothing placed is flat");
-        let mut place = lowlat_capture::desktop::Placement {
+        let mut place = lowlat_capture::Placement {
             x: 2560,
             y: 0,
             width: 1440,
@@ -5690,6 +5693,7 @@ mod tests {
     /// **Preferring the third encoder refuses full chroma before any device is
     /// asked**, which is the census gate a mixed selection ends at, forced
     /// rather than read off the code.
+    #[cfg(target_os = "linux")]
     #[test]
     fn full_chroma_is_refused_when_the_third_encoder_is_preferred() {
         let mut config = test_config(Codec::H265);
@@ -5709,6 +5713,7 @@ mod tests {
     /// move onto a part that cannot code full chroma would end the session
     /// rather than degrade. Off by default because the answer is the
     /// machine's; on a machine whose census passes there is nothing to say.
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "the answer is the machine's"]
     fn a_mixed_machine_refuses_full_chroma_with_the_gate_named() {

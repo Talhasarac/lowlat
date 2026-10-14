@@ -18,9 +18,7 @@ pub use shared::*;
 
 #[cfg(feature = "host")]
 pub mod host;
-// The module is Linux's alone (its own first line); the guard the header
-// takes is the feature's, on the declaration above.
-#[cfg(all(feature = "host", target_os = "linux"))]
+#[cfg(feature = "host")]
 pub use host::*;
 
 #[cfg(feature = "client")]
@@ -176,8 +174,7 @@ pub const LOWLAT_FEATURE_GPL_LIBAVCODEC: u32 = 4;
 #[unsafe(no_mangle)]
 pub extern "C" fn lowlat_features() -> u32 {
     let mut bits = 0;
-    // What was built, not what was asked for: the host half is Linux's.
-    if cfg!(all(feature = "host", target_os = "linux")) {
+    if cfg!(feature = "host") {
         bits |= LOWLAT_FEATURE_HOST;
     }
     if cfg!(feature = "client") {
@@ -449,10 +446,7 @@ mod tests {
     #[test]
     fn the_features_are_the_builds_own() {
         let bits = lowlat_features();
-        assert_eq!(
-            bits & LOWLAT_FEATURE_HOST != 0,
-            cfg!(all(feature = "host", target_os = "linux"))
-        );
+        assert_eq!(bits & LOWLAT_FEATURE_HOST != 0, cfg!(feature = "host"));
         assert_eq!(bits & LOWLAT_FEATURE_CLIENT != 0, cfg!(feature = "client"));
         assert_eq!(
             bits & LOWLAT_FEATURE_GPL_LIBAVCODEC != 0,

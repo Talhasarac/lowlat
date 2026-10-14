@@ -24,16 +24,20 @@
 // on one -- the events, the pads, the usage table -- builds everywhere.
 pub mod event;
 pub mod gamepad;
+pub mod handback;
 #[cfg(target_os = "linux")]
 pub mod uhid;
 #[cfg(target_os = "linux")]
 pub mod uinput;
 pub mod usage;
+#[cfg(windows)]
+mod windows;
 
 // The devices a guest's input lands on and what they hand back, by the names
 // the guest loop uses whatever the platform; the kernel's input layer
-// provides them here.
+// provides them on Linux.
+pub use handback::{Forward, Forwarded, PadWritten, WRITTEN_MAX};
 #[cfg(target_os = "linux")]
-pub use uhid::WRITTEN_MAX;
-#[cfg(target_os = "linux")]
-pub use uinput::{Devices, Forward, Forwarded, PadWritten};
+pub use uinput::{Devices, console_takes_the_chord};
+#[cfg(windows)]
+pub use windows::{Devices, console_takes_the_chord};

@@ -10,9 +10,9 @@
 //!   KESSEL_SESSION=... [KESSEL_WS_SERVER=...] lowlatd [--name NAME] [--port N]
 //!   lowlatd session
 
-// The program is Linux's so far (docs/impl-plan-windows.md); elsewhere the
-// binary says so and exits.
-#[cfg(target_os = "linux")]
+// The service is written once; what the session's side of it is, is the
+// platform's (docs/impl-plan-windows.md). The channel, the bus, the seat and
+// the tray are how Linux's session side is reached.
 mod app;
 #[cfg(target_os = "linux")]
 mod channel;
@@ -20,18 +20,16 @@ mod channel;
 mod dbus;
 #[cfg(target_os = "linux")]
 mod seat;
-#[cfg(target_os = "linux")]
 mod service;
+#[cfg(target_os = "linux")]
+#[path = "session_side/linux.rs"]
+mod session_side;
+#[cfg(windows)]
+#[path = "session_side/windows.rs"]
+mod session_side;
 #[cfg(target_os = "linux")]
 mod sni;
 
-#[cfg(target_os = "linux")]
 fn main() {
     service::main();
-}
-
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("lowlatd: not built for this platform yet");
-    std::process::exit(1);
 }

@@ -11,9 +11,15 @@ use lowlat_common::clock::Time;
 #[cfg(target_os = "linux")]
 #[path = "display/linux.rs"]
 mod sys;
+#[cfg(windows)]
+#[path = "display/windows.rs"]
+mod sys;
 
+#[cfg(target_os = "linux")]
+pub use sys::Register;
+#[cfg(target_os = "linux")]
 pub(crate) use sys::driver_of;
-pub use sys::{Display, Error, Register, Registration};
+pub use sys::{Display, Error, Registration};
 
 /// One output a host can be asked to capture.
 #[derive(Debug, Clone)]

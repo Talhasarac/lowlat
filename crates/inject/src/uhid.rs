@@ -82,9 +82,7 @@ const BUS_USB: u16 = 0x03;
 /// from it.
 const VERSION: u32 = 0x8111;
 
-/// The largest report the device is written: the DualSense's output report
-/// is 63 bytes, the feature writes at most 64.
-pub const WRITTEN_MAX: usize = pad::FEATURE_MAX;
+pub use crate::handback::{WRITTEN_MAX, Written};
 
 /// Why a device could not be created; the same three tellings-apart the
 /// input layer makes, because each has a different fix.
@@ -232,15 +230,6 @@ fn descriptor(product: Product) -> &'static [u8] {
         Product::DualShock4 => include_bytes!("../../core/tests/data/pad/ds4/descriptor.bin"),
         _ => include_bytes!("../../core/tests/data/pad/ds5/descriptor.bin"),
     }
-}
-
-/// What an application on this host wrote to the device, for the peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Written {
-    pub kind: pad::OutputKind,
-    pub len: usize,
-    /// The report, identifier byte first: the USB form.
-    pub report: [u8; WRITTEN_MAX],
 }
 
 /// One controller on the HID layer.
