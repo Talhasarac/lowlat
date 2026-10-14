@@ -170,12 +170,69 @@ fn primary(listed: &[Output]) -> Option<&Output> {
 }
 
 /// The output a request names, or with none the primary; only one that is
-/// part of the desktop.
+/// part of the desktop. **A name the system renumbered is followed** to the
+/// output now showing the monitor it named ([`renamed`]).
 fn chosen<'a>(listed: &'a [Output], wanted: Option<&str>) -> Option<&'a Output> {
     match wanted {
-        Some(wanted) => listed.iter().find(|o| o.attached && named(wanted, &o.name)),
+        Some(wanted) => listed
+            .iter()
+            .find(|o| o.attached && named(wanted, &o.name))
+            .or_else(|| {
+                let now = renamed(wanted)?;
+                listed.iter().find(|o| o.attached && named(&now, &o.name))
+            }),
         None => primary(listed),
     }
+}
+
+/// The monitor behind each output this process captured, by the name the
+/// output had then.
+///
+/// **A name is the system's number for an output, and a driver restart
+/// renews every number** -- two displays came back from one as DISPLAY27 and
+/// DISPLAY28 -- while the monitors stay where they are. A request names the
+/// monitor a person picked, so a stream asked for a name that has gone
+/// follows the monitor to its new name rather than waiting for the old one.
+static MONITORS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Remember which monitor the output named `name` shows.
+fn remember(name: &str) {
+    let Some(monitor) = duplication::shown()
+        .into_iter()
+        .find(|shown| shown.name.eq_ignore_ascii_case(name))
+        .map(|shown| shown.monitor)
+        .filter(|monitor| !monitor.is_empty())
+    else {
+        return;
+    };
+    let mut held = MONITORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    held.retain(|(was, _)| !was.eq_ignore_ascii_case(name));
+    held.push((name.to_string(), monitor));
+}
+
+/// The name the monitor `wanted` named carries now, where `wanted` names no
+/// output of its own any more.
+fn renamed(wanted: &str) -> Option<String> {
+    let held = MONITORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    follow(&held, &duplication::shown(), wanted)
+}
+
+/// Which output shows the monitor `wanted` showed when it was remembered:
+/// the monitor's own path, not the output's number.
+fn follow(held: &[(String, String)], shown: &[duplication::Shown], wanted: &str) -> Option<String> {
+    let monitor = held
+        .iter()
+        .find(|(was, _)| named(wanted, was))
+        .map(|(_, monitor)| monitor)?;
+    shown
+        .iter()
+        .find(|output| !output.monitor.is_empty() && output.monitor == *monitor)
+        .map(|output| output.name.clone())
 }
 
 /// Presents a second, rounded to the nearest as a mode's rate is, or zero
@@ -596,7 +653,16 @@ impl Display {
     /// The output a request names, or the primary, with the adapter that
     /// scans it out: what decides the device everything is built on.
     pub fn locate(wanted: Option<&str>) -> Option<Output> {
-        chosen(&listed(), wanted).cloned()
+        let found = chosen(&listed(), wanted).cloned()?;
+        if let Some(wanted) = wanted
+            && !named(wanted, &found.name)
+        {
+            lowlat_common::log_info!(
+                "display: {wanted} is {} now, the same monitor renumbered",
+                found.name
+            );
+        }
+        Some(found)
     }
 
     /// Prepare to capture the output named `name` on `device`, its own
@@ -660,6 +726,7 @@ impl Display {
             desktop: None,
             _aware: aware,
         };
+        remember(name);
         match display.duplicate() {
             Ok(()) => {}
             Err(Error::Duplication(duplication::Error::Busy(_) | duplication::Error::Lost)) => {
@@ -1140,6 +1207,49 @@ mod tests {
         let mut moved = cursor(true);
         moved.x = 500;
         assert_eq!(settle.look(Some(true), None, moved, 200.0), None);
+    }
+
+    /// **A renumbered output is found again by the monitor it shows**, as a
+    /// driver restart renews every number while the monitors stay: the name
+    /// asked for leads to its monitor's path, and the path to the output
+    /// showing it now. A name never captured, a monitor gone, and a path the
+    /// system would not give all find nothing.
+    #[test]
+    fn a_renumbered_output_is_followed_by_its_monitor() {
+        let shown = |name: &str, monitor: &str| duplication::Shown {
+            name: name.to_string(),
+            refresh: (60, 1),
+            monitor: monitor.to_string(),
+        };
+        let held = vec![
+            ("DISPLAY1".to_string(), r"\\?\DISPLAY#AAA1#UID1".to_string()),
+            ("DISPLAY2".to_string(), r"\\?\DISPLAY#BBB2#UID2".to_string()),
+        ];
+        let now = [
+            shown("DISPLAY28", r"\\?\DISPLAY#AAA1#UID1"),
+            shown("DISPLAY27", r"\\?\DISPLAY#BBB2#UID2"),
+            shown("DISPLAY29", ""),
+        ];
+        assert_eq!(
+            follow(&held, &now, "DISPLAY2").as_deref(),
+            Some("DISPLAY27")
+        );
+        assert_eq!(
+            follow(&held, &now, r"\\.\display1").as_deref(),
+            Some("DISPLAY28")
+        );
+        assert_eq!(follow(&held, &now, "DISPLAY3"), None, "never captured");
+        assert_eq!(
+            follow(&held, &now[..1], "DISPLAY2"),
+            None,
+            "the monitor is gone"
+        );
+        let blank = vec![("DISPLAY9".to_string(), String::new())];
+        assert_eq!(
+            follow(&blank, &now, "DISPLAY9"),
+            None,
+            "an empty path is no monitor"
+        );
     }
 
     /// The name a request carries matches the system's own, prefixed or

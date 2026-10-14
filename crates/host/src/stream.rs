@@ -3274,6 +3274,17 @@ fn encode_loop<E: Encoder + FromDevice>(
         // thing that eventually noticed was each peer's own liveness deadline.
         failures = if collected.failed { failures + 1 } else { 0 };
         if failures >= COLLECT_FAILURES {
+            // **A device that went away is a rebuild, not a refusal.** An
+            // encoder whose device was reset or lost its driver fails every
+            // collect, and a stream built again on the device as it is now
+            // carries on; read as a refusal, the failure would cost the
+            // guests their preferences one by one on the way back.
+            if display
+                .as_deref()
+                .is_some_and(|desktop| !desktop.attached())
+            {
+                return Exit::Rediscover("the device being captured went away");
+            }
             lowlat_common::log_error!(
                 "stream: encoder stopped answering after {failures} attempts, ending {} guest(s)",
                 active.len()

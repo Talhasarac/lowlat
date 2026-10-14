@@ -24,8 +24,9 @@ use lowlat_drivers::ffi::d3d11::{
 use lowlat_drivers::ffi::d3d11_guids::{IID_ID3D11Texture2D, IID_IDXGIOutput5};
 use lowlat_drivers::vcall;
 use windows_sys::Win32::Devices::Display::{
-    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DISPLAYCONFIG_TARGET_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
     QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
 };
 use windows_sys::Win32::Foundation::GENERIC_ALL;
@@ -519,16 +520,45 @@ pub fn cursor() -> Option<Cursor> {
     })
 }
 
+/// One active output as the system's display configuration describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    /// The output's name, `DISPLAY1`.
+    pub name: String,
+    /// How many times a second it presents, as a ratio; zero below the line
+    /// where the system will not say.
+    pub refresh: (u32, u32),
+    /// The monitor's own device path: the same monitor on the same connector
+    /// whatever number the output carries, which a driver restart renews.
+    /// Empty where the system will not say.
+    pub monitor: String,
+}
+
 /// How many times a second the output named `name` presents, as a ratio,
 /// from the system's own description of its active displays; nothing for a
 /// name it does not drive.
 pub fn refresh_of(name: &str) -> Option<(u32, u32)> {
+    shown()
+        .into_iter()
+        .find(|output| output.name == name)
+        .and_then(|output| (output.refresh.1 != 0).then_some(output.refresh))
+}
+
+/// A name the system wrote, up to its terminator.
+fn wide(text: &[u16]) -> String {
+    let end = text.iter().position(|&c| c == 0).unwrap_or(text.len());
+    String::from_utf16_lossy(text.get(..end).unwrap_or_default())
+}
+
+/// Every active output as the system's display configuration has it: its
+/// name, its rate and the monitor it shows.
+pub fn shown() -> Vec<Shown> {
     let (mut paths, mut modes) = (0u32, 0u32);
     // SAFETY: the outputs are live locals.
     if unsafe { GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &raw mut paths, &raw mut modes) }
         != 0
     {
-        return None;
+        return Vec::new();
     }
     let mut path_list = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
     let mut mode_list = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
@@ -544,30 +574,41 @@ pub fn refresh_of(name: &str) -> Option<(u32, u32)> {
         )
     };
     if status != 0 {
-        return None;
+        return Vec::new();
     }
+    let mut out = Vec::with_capacity(paths as usize);
     for path in path_list.iter().take(paths as usize) {
         let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
         source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
-        source.header.size = u32::try_from(size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>()).ok()?;
+        source.header.size =
+            u32::try_from(size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>()).unwrap_or(0);
         source.header.adapterId = path.sourceInfo.adapterId;
         source.header.id = path.sourceInfo.id;
         // SAFETY: a live request whose size and kind are stamped.
         if unsafe { DisplayConfigGetDeviceInfo(&raw mut source.header) } != 0 {
             continue;
         }
-        let end = source
-            .viewGdiDeviceName
-            .iter()
-            .position(|&c| c == 0)
-            .unwrap_or(source.viewGdiDeviceName.len());
-        let named = String::from_utf16_lossy(source.viewGdiDeviceName.get(..end)?);
-        if named.strip_prefix(r"\\.\").unwrap_or(&named) == name {
-            let rate = path.targetInfo.refreshRate;
-            return (rate.Denominator != 0).then_some((rate.Numerator, rate.Denominator));
-        }
+        let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+        target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        target.header.size =
+            u32::try_from(size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>()).unwrap_or(0);
+        target.header.adapterId = path.targetInfo.adapterId;
+        target.header.id = path.targetInfo.id;
+        // SAFETY: as above.
+        let monitor = if unsafe { DisplayConfigGetDeviceInfo(&raw mut target.header) } == 0 {
+            wide(&target.monitorDevicePath)
+        } else {
+            String::new()
+        };
+        let named = wide(&source.viewGdiDeviceName);
+        let rate = path.targetInfo.refreshRate;
+        out.push(Shown {
+            name: named.strip_prefix(r"\\.\").unwrap_or(&named).to_string(),
+            refresh: (rate.Numerator, rate.Denominator),
+            monitor,
+        });
     }
-    None
+    out
 }
 
 /// Whether this process runs in the console's session, which is the one
@@ -818,6 +859,31 @@ mod tests {
         assert!(one_value(&[0; 64]));
         assert!(one_value(&[9, 9, 9, 9, 9, 9, 9, 9]));
         assert!(!one_value(&[0, 0, 0, 0, 0, 0, 0, 1]));
+    }
+
+    /// **Every active output names the monitor it shows**, by a path that is
+    /// the monitor's and the connector's rather than the output's number --
+    /// what follows a display through a renumbering -- and two outputs never
+    /// share one. Needs a display, so off by default.
+    #[test]
+    #[ignore = "requires a display"]
+    fn every_output_names_its_monitor() {
+        let shown = shown();
+        assert!(!shown.is_empty(), "no active output");
+        for output in &shown {
+            println!("{} {:?} {}", output.name, output.refresh, output.monitor);
+            assert!(
+                !output.monitor.is_empty(),
+                "{} names no monitor",
+                output.name
+            );
+            assert_eq!(
+                shown.iter().filter(|o| o.monitor == output.monitor).count(),
+                1,
+                "{} shares its monitor's path",
+                output.name
+            );
+        }
     }
 
     /// **The input desktop attaches and says its name**: on a desktop a
