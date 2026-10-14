@@ -3,6 +3,26 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-14 - W2.2 checked further: a lost device, a game's fullscreen
+
+### Changed
+- **An encoder that fails because its device went away is a rebuild** ([05 §2](05-host.md)),
+  on both platforms: where the collects fail in a row and the display says its device is gone,
+  the stream is built again on the device as it is now, and the guests keep what they asked
+  for. Read as a refusal before, the failure would have dropped their preferences one by one.
+- **On Windows an output asked for by name follows its monitor** when the system renumbers its
+  outputs, which a driver restart does to every one: the monitor's own device path, learned
+  when the output was captured, finds it again under its new name, said once in the log.
+
+### Measured
+- A restart of the GPU's driver under a stream to an established client over the internet:
+  the device's loss seen within a frame, the stream rebuilt on the device as it came back, the
+  monitor followed from `DISPLAY27` to `DISPLAY32`, the guest kept -- about four seconds, most
+  of it the restart. Before the fix the stream waited for the old name and ended the guest.
+- A program taking the display in exclusive fullscreen at 1280x720 and 100 a second, in the
+  legacy and in the flip model: the stream rebuilt at its size and rate on the way in and at
+  the desktop's on the way out, every frame of it carried.
+
 ## 2026-10-14 - W2.2: the desktop duplicated and converted on its own device
 
 ### Changed

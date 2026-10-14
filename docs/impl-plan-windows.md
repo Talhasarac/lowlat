@@ -505,6 +505,10 @@ once, here.
   Asked for nothing, the host takes the output at the desktop's corner, which on Windows is the
   primary display; the adapter, and the encoder with it, follows the output; a switch is the
   rebuild a resolution change is.
+  *Amended 2026-10-14, at W2.2's build:* a restart of the GPU's driver renumbers every output
+  while the monitors stay where they are -- the development machine's two came back as
+  `DISPLAY27` and `DISPLAY28` -- so a stream asked for a name that has gone follows the monitor
+  it named, by the monitor's own device path, to its new name, and says so once.
 - **The conversion's shaders** are HLSL compiled offline and committed as generated code, as
   the client's plane split is: no build machine needs the compiler and nothing compiles one at
   run time. The formats follow the Linux host's where NVENC's D3D11 input takes them; full
@@ -616,6 +620,13 @@ once, here.
   median, 4.6 to 7.2 at the p95 and 7.5 to 8.6 at the p99, and the conversion 0.07 ms on the
   device; the tail is the frame clock, not the duplication -- a composition that lands while
   the loop sleeps to its deadline waits for it, up to a refresh.
+  *Checked further the same day:* a restart of the GPU's driver under the stream -- the device
+  lost -- is a rebuild on the device as it comes back, the monitor followed through the
+  renumbering and the guest kept, about four seconds in all, most of it the restart; an
+  encoder that fails because its device went away is rebuilt, never read as refusing the
+  guests' preferences. A program taking the display in exclusive fullscreen at another mode,
+  in the legacy model and in the flip model, is followed both ways: the stream rebuilds at its
+  size and rate and back when it leaves.
 - [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.
@@ -674,6 +685,9 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-14: W2.2 checked further: a lost device is a rebuild with the guest kept, and a name
+  the system renumbered follows its monitor (amending the naming decision); exclusive
+  fullscreen at another mode is followed in both presentation models.
 - 2026-10-14: W2.2 built and checked live: the duplication and the conversion in all four
   layouts, the display on the output's own adapter, the pointer settled by the display, the
   daemon per-monitor aware; streamed as the system account through the lock screen, the secure

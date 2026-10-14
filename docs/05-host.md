@@ -46,6 +46,12 @@ Rules:
 - **`Lost` triggers backend reinitialization, not session teardown.** Display mode changes,
   resolution changes, and compositor restarts are normal events. Guests see at most a brief
   freeze and a keyframe.
+  *Added 2026-10-14:* so is a device lost under the stream -- the GPU reset, its driver
+  restarted -- which is a rebuild on the device as it comes back; an encoder failing because
+  its device went away is never read as refusing what the guests asked for. On Windows the
+  restart also renumbers every output while the monitors stay, so an output asked for by name
+  is followed by the monitor it showed. A program taking the display in exclusive fullscreen at
+  another mode is a resolution change, and is followed both ways.
 - The acquire timeout is one frame interval. A timeout is not an error; it means the screen
   did not change, and the correct response is to skip the iteration rather than to encode a
   duplicate.
