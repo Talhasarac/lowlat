@@ -662,13 +662,20 @@ Other rules:
 
 Injection goes through the kernel input layer, below the display server. That is what makes it
 work identically on X11, on Wayland, and at the login screen, and it is the capability that
-display-server-level injection cannot match.
+display-server-level injection cannot match. *On Windows* (*2026-10-15*) it is the system's
+batch input call, made by a process of the system account on the session's input desktop,
+which reaches the lock screen and an elevation prompt the same way; the expansion below is
+shared and only the last step differs.
 
 - **Batches are expanded and injected as a unit.** The wire delivers input batches; expansion
   to device events is a pure, unit-tested function with no device dependency, so the mapping
   is testable everywhere and only the final write needs hardware.
 - **Keyboard arrives as usage codes** and maps to kernel key codes through a static table.
-  Layout is the far side's concern; we inject physical keys.
+  Layout is the far side's concern; we inject physical keys. On Windows the table gives the
+  scancode the system's own translation gives the key on a USB keyboard, and is generated from
+  that translation; the few keys a scancode cannot carry -- Pause, Break, SysRq -- go as the
+  system's keyboard driver reports them, and **the power key is not mapped**, so a guest cannot
+  put the host to sleep or turn it off (*2026-10-15*).
 - **Absolute coordinates arrive in stream space** and are mapped to the output's geometry at
   injection, accounting for rotation. Relative deltas pass through.
 - **The mapping is a normalisation at both ends, and that is why a stream smaller than the
@@ -738,9 +745,12 @@ display-server-level injection cannot match.
 - **One injector per guest**, holding that guest's pressed-key state. On disconnect it
   releases everything it is holding. Without this, a guest that vanishes mid-keystroke leaves
   a key held down on a machine nobody is sitting at.
-- **While the host cursor is hidden, absolute motion converts to relative deltas at
+- **While an application holds the pointer, absolute motion converts to relative deltas at
   injection.** This is a safety net for a peer that ignores the mode signal, so aiming works
-  regardless.
+  regardless. *Corrected 2026-10-15, read from an established Windows host:* this said "while
+  the host cursor is hidden". The trigger is the intent (`relative`,
+  [§8.1](#81-three-states-never-conflated)) -- the show state, or a picture of one value --
+  read as each motion arrives, not the overlay.
 - **Three permissions gate dispatch -- keyboard, pointer, gamepad -- and the gate lives in the
   injector.** The SDK invents no permission model beyond them; they arrive from signaling
   ([04 §3](04-signaling.md)). The gate belongs next to the pressed state rather than in the
@@ -867,6 +877,13 @@ Three things the host owes such a device, all decided at the report's arrival:
   system uses with its own virtual-device driver, and it is why that driver is the
   application's and not this library's.
 
+**A host with no device for a pad's own report does not take the report** (*2026-10-15*;
+Windows, until a HID device of the host's own exists). The pad is made from its whole states,
+which a peer sends beside its reports, as the sixteen-button pad, as an established host in
+its Xbox mode plays it; an application that takes the reports itself still gets them. Taken,
+the report would fix the pad as one that drops the states, and the peer's controller would do
+nothing at all.
+
 ### §7.3 The attention chord
 
 **A guest asks for `Ctrl+Alt+Del` rather than typing it**, because the operating system the
@@ -888,6 +905,13 @@ Three things make it a host action rather than an ordinary keystroke:
   keyboard mode says which, and the request is refused and logged in the second case. A machine
   with no virtual terminal subsystem at all has nothing that could run the combination and is
   not the dangerous case.
+
+**On Windows the chord cannot be typed** (*2026-10-15*): the system raises its secure screen
+for the keys only from the keyboard, and for software only through its own call for it, which a
+machine's policy has to allow and which may answer a service alone. Whether a process like the
+host's may make the call is probed before it is built
+([impl-plan-windows.md](impl-plan-windows.md) W2.3); until it is, the request is refused and
+logged. The keyboard permission gates it there as here.
 
 There is no general "inject these keys" call behind this. Input comes from guests; this is the
 one chord a guest is unable to send for itself.

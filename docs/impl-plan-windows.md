@@ -523,6 +523,23 @@ once, here.
   own control codes with declarations generated from its public header; rumble returns as the
   guest's rumble message; with no bus there are no pads, said once in the log. A pad sent as
   reports waits for a HID device of the host's own, which is deferred.
+  *Amended 2026-10-15, at W2.3's review:* the translation is generated from the system's own
+  translation of usage codes into scancodes, which any program can call, as the Linux table is
+  copied from the kernel's. On top of it, the codes peers send that no keyboard does -- the
+  context-menu key's second code, mute and volume on the keyboard page, the six media keys
+  above the usage range -- land where an established host puts them, and the keys a scancode
+  cannot carry go as the system's keyboard driver reports them: Pause as its virtual key,
+  Ctrl+Pause as Break, Alt+PrintScreen as SysRq. **The power key is not mapped**, so a guest
+  cannot put the host to sleep or turn it off. The host's own lock state is read, so a lock is
+  tapped when a peer's reported state changes and the host's differs. A wheel's units go out as
+  the peer counted them. Absolute motion turns into deltas while an application holds the
+  pointer (`relative`, [05 §8.1](05-host.md)), not while the pointer is hidden. **A pad sent as
+  reports is played from its whole states as the Xbox pad** unless the application takes the
+  reports ([05 §7.2](05-host.md)), as an established host in its Xbox mode does. **Opcode 5's
+  vertical axes point down on the wire** ([01 §11.1](01-protocol.md)), opposite to the whole
+  state's: the host reads them so on both platforms, and the client's per-axis call converts at
+  the wire so its interface keeps the state's direction. The attention chord is the system's
+  own call for it, never typed keys ([05 §7.3](05-host.md)).
 - **Sound.** The loopback of the default render endpoint, event-driven, 48 kHz stereo asked and
   the system's engine converting, 20 ms a packet. **A loopback delivers nothing while nothing
   plays** -- measured on the development machine: no packet in three seconds, where a silent
@@ -637,10 +654,22 @@ once, here.
 - [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.
+  *Reviewed 2026-10-15, before its build* (the decisions above): also the lock keys from the
+  host's state, report pads played as the Xbox pad, opcode 5's direction on both platforms with
+  the client's per-axis call, and the attention chord. Checked as well by a keyboard hook and a
+  raw-input log on the host against the physical keyboard -- Pause, Break, SysRq, both Shifts,
+  the keypad either side of NumLock, media and volume keys, the context-menu key by both codes
+  -- by absolute positions swept across both displays, the second at 125 percent, against
+  where the pointer lands, and by typing on the lock screen. **Whether a process like the
+  host's may raise the attention screen is probed first**: the system may take the call from a
+  service alone, in which case it moves to W2.5 and the host refuses the chord until then.
 - [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
   spell with no gap at the guest.
 - [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
   Checked by a logoff mid-session and the guest reconnecting.
+  *Added 2026-10-15, at W2.3's review:* `lowlatd install` lets services raise the attention
+  screen and `uninstall` puts back the setting it found; where W2.3's probe shows only a service
+  may make the call, the host asks the service for it.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -692,6 +721,11 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-15: W2.3 reviewed before its build: the key translation generated from the system's
+  own, with the peers' extra codes and the keys a scancode cannot carry; the power key unmapped;
+  the locks from the host's state; report pads played as the Xbox pad without the application;
+  opcode 5's vertical axes pointing down on the wire; the attention chord the system's own call,
+  probed first.
 - 2026-10-14: W2.2 checked further: a lost device is a rebuild with the guest kept, and a name
   the system renumbered follows its monitor (amending the naming decision); exclusive
   fullscreen at another mode is followed in both presentation models.

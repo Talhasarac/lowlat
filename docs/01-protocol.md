@@ -616,6 +616,12 @@ host that maps one and shifts it into the other produces a pad whose face button
 direction pad. **Opcode 5's axis value is signed sixteen-bit** carried in an unsigned
 thirty-two-bit argument, so it needs a narrowing cast and not a comparison against zero.
 
+**Opcode 5's vertical axes point down and opcode 23's point up** (*2026-10-15*, read from an
+established host): a stick pushed away from the player is negative in the per-axis message and
+positive in the whole state, and the established host negates the first into its pad's report
+and copies the second. A host reads each in its own direction; one that reads both the same way
+plays a per-axis peer's stick upside down.
+
 **Opcode 31 carries a pad's own report, raw** (*added 2026-09-20, Phase 14*). A peer holding
 a controller with more to say than the sixteen-button layout -- a DualShock 4 or a DualSense:
 touch contacts, motion, and on the way back the lightbar and the trigger effects -- sends the

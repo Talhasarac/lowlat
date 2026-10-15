@@ -3,6 +3,34 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W2.3 reviewed: the key table from the system's own, report pads, opcode 5's direction
+
+### Decided
+- **The Windows key table is generated from the system's own translation** of usage codes into
+  scancodes ([impl-plan-windows.md](impl-plan-windows.md) W2), as Linux's is the kernel's. The
+  codes peers send that no keyboard does land where an established host puts them, and the keys
+  a scancode cannot carry -- Pause, Break, SysRq -- go as the system's keyboard driver reports
+  them. The power key is not mapped, so a guest cannot sleep or shut down the host.
+- On Windows the locks are kept in step from the host's own state, and a wheel's units go out
+  as the peer counted them.
+- **A pad sent as reports is played as the Xbox pad from its whole states** on a host with no
+  device for the report, unless the application takes the reports ([05 §7.2](05-host.md)).
+- **Opcode 5's vertical axes point down on the wire** ([01 §11.1](01-protocol.md)): the host
+  reads them so on both platforms, and the client's per-axis call converts at the wire so its
+  interface keeps the whole state's direction. Both at the build.
+- The attention chord on Windows is the system's own call for it, never typed keys
+  ([05 §7.3](05-host.md)); whether the host's kind of process may make it is probed first, and
+  otherwise it moves to the service (W2.5).
+
+### Corrected
+- [05 §7](05-host.md): absolute motion turns into deltas while an application holds the
+  pointer (`relative`), not while the pointer is hidden.
+
+### Measured
+- The system's translation, called directly, maps 135 keyboard-page usages; an established
+  host's table maps 128, adds the peers' extra codes, and leaves out the power key, F20 to F24
+  and the language keys.
+
 ## 2026-10-15 - W2.2 followed up: the deadline takes its phase from the compositions
 
 ### Changed
