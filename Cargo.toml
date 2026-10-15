@@ -18,6 +18,8 @@ members = [
     "crates/sdk",
     "crates/kessel",
     "crates/daemon",
+    "crates/vdd-proto",
+    "crates/vdd",
 ]
 exclude = ["fuzz"]
 
@@ -45,6 +47,7 @@ lowlat-decode = { path = "crates/decode" }
 lowlat-client = { path = "crates/client" }
 lowlat-sdk = { path = "crates/sdk" }
 lowlat-kessel = { path = "crates/kessel" }
+lowlat-vdd-proto = { path = "crates/vdd-proto" }
 
 libc = "0.2"
 getrandom = "0.2"

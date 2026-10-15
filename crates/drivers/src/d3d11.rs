@@ -38,9 +38,10 @@ use lowlat_common::dynlib::Library;
 
 use crate::ffi::d3d11::{
     _D3DKMT_ADAPTERTYPE__bindgen_ty_1__bindgen_ty_1 as AdapterFlags, D3D_DRIVER_TYPE_UNKNOWN,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-    D3D11_FENCE_FLAG_NONE, D3D11_QUERY_DESC, D3D11_QUERY_TIMESTAMP, D3D11_QUERY_TIMESTAMP_DISJOINT,
-    D3D11_RESOURCE_MISC_SHARED, D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_FENCE_FLAG_NONE, D3D11_QUERY_DESC,
+    D3D11_QUERY_TIMESTAMP, D3D11_QUERY_TIMESTAMP_DISJOINT, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
     D3D11_SHADER_RESOURCE_VIEW_DESC__bindgen_ty_1, D3D11_SRV_DIMENSION_TEXTURE2D, D3D11_TEX2D_SRV,
     D3D11_TEX2D_UAV, D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
     D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC__bindgen_ty_1,
@@ -637,6 +638,48 @@ impl D3d11 {
                 return Err(Error::NoAdapter);
             }
             self.device_on(adapter, described).map(Some)
+        })?;
+        found.ok_or(Error::NoAdapter)
+    }
+
+    /// A plain device on the adapter with this identity, whatever kind of
+    /// adapter it is: no video interfaces, no refusal. It is the device a
+    /// display driver gives the system for a swapchain, which renders where
+    /// the system put it -- a software adapter included.
+    pub fn plain_device(
+        &self,
+        luid: Luid,
+    ) -> Result<(Com<ID3D11Device>, Com<ID3D11DeviceContext>)> {
+        let found = self.walk(|adapter, desc| {
+            if Luid::of(desc.AdapterLuid) != luid {
+                return Ok(None);
+            }
+            let mut device: *mut ID3D11Device = core::ptr::null_mut();
+            let mut context: *mut ID3D11DeviceContext = core::ptr::null_mut();
+            // SAFETY: a live adapter; the outputs are live locals. An explicit
+            // adapter takes the unknown driver type; the default feature
+            // levels are asked for, with the eight-bit BGRA formats a
+            // swapchain's buffers are.
+            let hr = unsafe {
+                (self.create_device)(
+                    adapter.as_ptr().cast::<IDXGIAdapter>(),
+                    D3D_DRIVER_TYPE_UNKNOWN,
+                    core::ptr::null_mut(),
+                    u32::try_from(D3D11_CREATE_DEVICE_BGRA_SUPPORT).unwrap_or(0),
+                    core::ptr::null(),
+                    0,
+                    D3D11_SDK_VERSION,
+                    &raw mut device,
+                    core::ptr::null_mut(),
+                    &raw mut context,
+                )
+            };
+            check(hr)?;
+            // SAFETY: references the call handed over.
+            let device = unsafe { Com::from_raw(device) }.ok_or(Error::Unavailable)?;
+            // SAFETY: as above.
+            let context = unsafe { Com::from_raw(context) }.ok_or(Error::Unavailable)?;
+            Ok(Some((device, context)))
         })?;
         found.ok_or(Error::NoAdapter)
     }

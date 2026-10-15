@@ -958,6 +958,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lowlat-vdd"
+version = "0.0.0"
+dependencies = [
+ "lowlat-common",
+ "lowlat-drivers",
+ "lowlat-vdd-proto",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lowlat-vdd-proto"
+version = "0.0.0"
+
+[[package]]
 name = "lowlatd"
 version = "0.0.0"
 dependencies = [

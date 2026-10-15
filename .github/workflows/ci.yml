@@ -154,6 +154,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # The display driver links the driver kit's stub libraries: the kit,
+      # pinned by its digest, unpacked into target/wdk (docs/11-drivers.md).
+      - name: Driver kit
+        run: python scripts/fetch-wdk.py
+
       - name: Clippy
         run: cargo clippy --workspace --lib --bins --tests -- -D warnings
 
@@ -161,6 +166,10 @@ jobs:
       # the shared runner once stopped the job before the library's own gates.
       - name: Tests
         run: cargo test --workspace --lib --bins --tests --no-fail-fast
+
+      # The driver as it is packaged: a release build, linked.
+      - name: The display driver
+        run: cargo build -p lowlat-vdd --release
 
   loom:
     name: model checking

@@ -1,0 +1,37 @@
+[package]
+name = "lowlat-vdd"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The host's own display driver: a library the system's user-mode driver host
+# loads (docs/11-drivers.md). Built for Windows alone; elsewhere it is empty.
+[lib]
+crate-type = ["cdylib"]
+# What can be tested without the driver host -- the requests, the identity, the
+# modes -- is lowlat-vdd-proto's and tested there. This crate is the glue the
+# frameworks call into, checked live (docs/impl-plan-windows.md W3.0).
+test = false
+doctest = false
+
+[target.'cfg(windows)'.dependencies]
+lowlat-common.workspace = true
+# The device a swapchain is given, made through the same loader and
+# declarations the host's own devices are.
+lowlat-drivers.workspace = true
+lowlat-vdd-proto.workspace = true
+# The events a swapchain's worker waits on and the debugger stream the log
+# goes to.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true
