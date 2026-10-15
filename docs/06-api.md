@@ -416,6 +416,12 @@ lowlat_status lowlat_client_probe_nat(lowlat_client *cl, const lowlat_nat_probe 
 lowlat_status lowlat_client_get_nat(lowlat_client *cl, lowlat_nat_info *out);  /* minor 23 */
 ```
 
+**A pad's sticks are given one way round, whichever call carries them** (*2026-10-15*):
+pushed right or away from the player is positive, in `lowlat_pad_state` and in
+`lowlat_client_send_pad_axis` alike. The per-axis message carries its vertical axes pointing
+down ([01 §11.1](01-protocol.md)), so the call turns them over at the wire, the far end of the
+range kept inside it.
+
 **Minor 11 (2026-09-21): the software decoder, and a decoder chosen mid-session.**
 `lowlat_client_set_decoder(cl, decoder, device)` takes the kind and render node of creation
 and of the listing's rows (`LOWLAT_DECODER_AUTO` walks the automatic order again). The

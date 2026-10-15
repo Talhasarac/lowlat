@@ -3,6 +3,52 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W2.3 built and checked live: input on Windows
+
+### Added
+- **A guest's keys, pointer and pads on Windows** ([impl-plan-windows.md](impl-plan-windows.md)
+  W2.3, [05 §7](05-host.md)): the batch input call by scancode for the keys and one mouse for
+  both pointers, and an Xbox 360 pad on the ViGEm bus for each pad, spoken to over the bus's own
+  requests. The key table is generated from the system's own translation of a USB keyboard's
+  keys and committed with its generator, as are the bus's declarations from its public header.
+- The guest's thread follows the input desktop: attached with its devices and again when the
+  input call refuses, the refused input going again at once.
+- A pad is held until the bus says it is ready, then reported whole; a rumble an application
+  raises returns as the guest's rumble message, from a request kept outstanding and polled by
+  the guest's loop.
+
+### Changed
+- **The per-axis pad message's vertical axes are read pointing down** on both platforms
+  ([01 §11.1](01-protocol.md)), and the client's per-axis call turns them over at the wire, so
+  an application gives a stick the same way round to either call ([06](06-api.md)).
+- Absolute motion converts to deltas on the host's `relative` bit, published by the display as
+  it turns ([05 §7](05-host.md)); on Linux the display has no source for it yet.
+- **An absolute position names the centre of its pixel** ([05 §7](05-host.md)), on both
+  platforms: the input stack truncates the value back to a pixel, and a value at a pixel's near
+  edge landed on the one before. The peer's far edge is the output's last pixel.
+- On Windows a lock is corrected towards the host's own state, the peer's first message
+  counting only for a lock it has on; **a lock key is the peer's lock state there, never a
+  keystroke**, since a peer that reports the lock as a modifier sends the key down as the lock
+  goes on and up as it goes off.
+- A host refuses a pad's own report where it has nowhere to put one, and plays the pad from its
+  whole states; the attention chord is refused on Windows until the service makes it.
+
+### Measured
+- Off the input desktop the batch input call inserts nothing and answers access denied; on it
+  again, it inserts. The lock toggle reads true on a thread with no window.
+- On the development machine, through the system's own pad interface: a whole state read back
+  exactly, the bus ready 3 ms after the pad was plugged in, a rumble raised there back as the
+  guest's rumble message, and the pad gone on its unplug and with its guest.
+- Absolute positions through a guest's own devices, swept over both displays (the second at 125
+  percent) and read back where the system put the pointer: every one a pixel up and to the left
+  before the centre, and an output's first column on its neighbour's; every one exact after.
+- Live, as the system account in the console session, from established clients on a MacBook
+  and a Windows laptop: every key class landed as the scancode a keyboard on the machine gives;
+  the buttons, both wheels in the peer's units, motion either way; a pad and its rumble, the bus
+  ready 5 to 19 ms after plug-in; typing on the lock screen; the chord refused and logged. From
+  the MacBook, Caps Lock toggled the host once every two presses until the lock key became the
+  peer's state; an established host does the same.
+
 ## 2026-10-15 - W2.3 reviewed: the key table from the system's own, report pads, opcode 5's direction
 
 ### Decided

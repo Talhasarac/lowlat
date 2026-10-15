@@ -899,6 +899,13 @@ errors, open the shared library, call the panicking entry, and walk the symbol t
   picture puts the pointer on the neighbouring output, where this host's pointer plane goes
   empty, which it cannot tell from an application hiding the pointer -- so the peer is told to
   switch to relative motion and has to walk its cursor back by hand.
+- [ ] **The absolute value aimed at its pixel's centre, measured here** (*changed 2026-10-15*,
+  [impl-plan-windows.md](impl-plan-windows.md) W2.3). The input stack truncates
+  `value * desktop / 65536` back to a pixel, so the value used to name a pixel's near edge and
+  every position landed one short -- the near-edge bias this platform measured and left, an
+  output's first column on its neighbour's last. The shared mapping now names the centre, which
+  the Windows sweep showed exact on both displays; the same sweep against this platform's
+  desktop, a second output and a scaled one included, is owed before it is ticked.
 - [x] **A guest without the pointer is shown that it does not have it**, rather than finding
   out by nothing happening ([05 §7.1](05-host.md)). Cursor updates are already per guest, so
   this is a different image to one guest and not a new mechanism.

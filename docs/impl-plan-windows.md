@@ -651,7 +651,7 @@ once, here.
   exact and the processor time on a still desktop unchanged within what the system resolves.
   A picture in flight is now polled for while the loop waits for the display, which the new
   waiting needed: without it the encode a peer was shown on a still desktop read 9-10 ms.
-- [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
+- [x] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.
   *Reviewed 2026-10-15, before its build* (the decisions above): also the lock keys from the
@@ -664,6 +664,50 @@ once, here.
   lock screen. **The attention chord is the service's** (W2.5): the system takes its call for
   the secure screen from a service alone, so until the service exists the host refuses the
   chord and logs it.
+  *Built and checked live 2026-10-15.* The translation is the system's, generated and
+  committed: 135 keys, with the two keys that do not answer as one code recorded in the form the
+  system gives them under a modifier -- PrintScreen without its fake Shift, Pause as Break --
+  and the generator checking the system's answer for every key under every modifier; with the
+  peers' ten extra codes and the power, sleep and wake keys refused, 141 codes map. Pause goes
+  as its virtual key, or as Break while the guest's own keyboard holds Ctrl, and PrintScreen as
+  SysRq while it holds Alt, each released as it went down. The two pointers are one mouse to
+  the batch input call: positions over the virtual desktop, deltas, the wheels in the units the
+  peer counted, the side buttons as the extra buttons. A guest's thread is made per-monitor
+  aware and attached to the input desktop with its devices, and attached again when the call
+  refuses -- a thread on another desktop is answered with access denied and nothing inserted,
+  measured -- after which the input goes again. The locks are read from the host's own state on
+  the guest's thread, whose view of a lock follows one changed anywhere on the desk (measured
+  on a thread with no window). A pad is the bus's, through its own requests from declarations
+  generated from its public header: plugged in by its first message, held until the bus
+  answers that it is ready, then reported whole; its rumble is a request kept outstanding for
+  it and polled by the guest's loop. Checked on the development machine through the system's
+  own pad interface, as a game reads it: a whole state read back exactly, up still up, the bus
+  ready 3 ms after the pad was plugged in, a rumble a game raised back as the guest's rumble
+  message, and the pad gone on its unplug message and with its guest's devices. The per-axis
+  message's vertical axes are read pointing down on both platforms, and the client's per-axis
+  call turns them over at the wire. The chord is refused on Windows with a log line.
+  **Found before the live run and fixed: every absolute position landed a pixel up and to the
+  left**, and an output's first column on its neighbour's last -- a sweep through a guest's own
+  devices over both displays, the second at 125 percent, read back where the system put the
+  pointer, three times a point. The system truncates `value * desktop / 65536` back to a pixel
+  and the value named a pixel's near edge; it now names the pixel's centre
+  ([05 §7](05-host.md)), and the sweep lands every position on its pixel on both displays. The
+  mapping is shared, so Linux moved with it; its measurement there is owed
+  ([impl-plan.md](impl-plan.md) Phase 9). **Found live and fixed: Caps Lock toggled the host
+  once every two presses from a macOS client**, whose platform reports the lock as a modifier --
+  the key down as the lock goes on and up as it goes off -- and an established host does the
+  same; a lock key is now the peer's lock state where the host reads its own, and the peer's
+  first message counts only for a lock it has on, since a keyboard with no such key reports it
+  off. **Live**, as the system account in the console session, from established clients on a
+  MacBook and a Windows laptop: every key class -- letters, digits, the F-row, navigation, the
+  keypad either side of Num Lock, both sides' modifiers, the Windows and context-menu keys,
+  Pause, PrintScreen, the media and volume keys, the locks -- landed as the scancode a keyboard
+  on the machine gives, read by a low-level hook and raw input; the buttons, both wheels in the
+  units the peer counted, motion either way; a pad's buttons and sticks and its rumble back,
+  the bus ready 5 to 19 ms after the pad was plugged in; typing on the lock screen, the guest's
+  input following the desktop there; and the attention chord refused and logged. Break and
+  SysRq never reached the host from either client, so their forms are the generator's check
+  alone.
 - [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
   spell with no gap at the guest.
 - [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
@@ -722,6 +766,11 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-15: W2.3 built and checked live: the generated key translation, the batch input call
+  following the input desktop, the locks from the host's state with a lock key as the peer's
+  state, the bus's pads with their readiness and rumble, opcode 5 pointing down on both
+  platforms, the chord refused; absolute positions aimed at their pixel's centre on both
+  platforms, Linux's measurement owed.
 - 2026-10-15: W2.3 reviewed before its build: the key translation generated from the system's
   own, with the peers' extra codes and the keys a scancode cannot carry; the power key unmapped;
   the locks from the host's state; report pads played as the Xbox pad without the application;

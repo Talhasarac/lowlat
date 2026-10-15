@@ -697,6 +697,14 @@ shared and only the last step differs.
   rectangle within the desktop. With one output the rectangle is the desktop and the two
   conversions cancel, which is why this is one multiplication rather than a special case.
 
+  **The value names the centre of its pixel** (*2026-10-15*). The input stack takes the axis
+  back to a pixel as `value * desktop / 65536`, truncated -- measured on Windows, and the Linux
+  input library computes the same -- so a value at a pixel's near edge lands on the pixel
+  before it. Measured before the change: every position a pixel up and to the left, and an
+  output's first column on the neighbouring output's last; after it, every position on its
+  pixel on both displays of the development machine, one of them scaled. The peer's far edge,
+  the extent itself, is the output's last pixel.
+
   **The clamp is load bearing and is not merely tidiness.** A coordinate past the picture would
   otherwise put the pointer on the neighbouring output, where the hardware pointer plane this
   host reads goes empty -- indistinguishable from an application hiding the pointer, so the peer
@@ -745,6 +753,25 @@ shared and only the last step differs.
 - **One injector per guest**, holding that guest's pressed-key state. On disconnect it
   releases everything it is holding. Without this, a guest that vanishes mid-keystroke leaves
   a key held down on a machine nobody is sitting at.
+- **A lock the peer changed is brought into step before its next key.** A peer reports its
+  locks on every keystroke, and a lock it toggled while looking elsewhere reaches the host no
+  other way. Below a display server the host's own state cannot be read, so the first message
+  is the baseline and a change taps the lock. *On Windows* (*2026-10-15*) the host's state is
+  read, and a lock is tapped only where the host's differs from the peer's. The first message
+  counts for a lock the peer has on and not for one it has off, since a peer whose keyboard has
+  no such key reports it off and would turn the host's off. **A lock key is the peer's lock
+  state there, never a keystroke**: a peer whose platform reports a lock as a modifier sends
+  the key down as the lock goes on and up as it goes off, so a key passed through toggled the
+  host once every two presses (measured, a macOS client); each lock key message brings the host
+  to the state it reports instead, whichever way round the peer sends it.
+- *On Windows* (*2026-10-15*) **each guest's input follows the input desktop.** The batch input
+  call refuses a thread on any desktop but the one receiving input, which the lock screen and
+  an elevation prompt replace with their own; the guest's thread is attached to it as its
+  devices are made, and again when the call refuses, and the refused input goes again at once.
+  **Pause and PrintScreen take the form the guest's own keyboard gives them**: Break while that
+  keyboard holds Ctrl, SysRq while it holds Alt, each released as it went down. A key held on
+  another guest's keyboard, or the desk's, changes neither, as the system's keyboard driver keeps
+  the modifiers of each keyboard apart.
 - **While an application holds the pointer, absolute motion converts to relative deltas at
   injection.** This is a safety net for a peer that ignores the mode signal, so aiming works
   regardless. *Corrected 2026-10-15, read from an established Windows host:* this said "while
@@ -876,6 +903,14 @@ Three things the host owes such a device, all decided at the report's arrival:
   median, 26 us at the ninety-ninth percentile). It is the shape a host on another operating
   system uses with its own virtual-device driver, and it is why that driver is the
   application's and not this library's.
+
+*On Windows* (*2026-10-15*) **a pad is an Xbox 360 pad on the ViGEm bus**, plugged in by the
+first message for it, through one bus handle per guest, so the handle closing with the guest
+takes every pad it plugged in. **The bus says when a pad is ready**, so nothing waits on a
+clock: until it does, the pad's latest whole state is held, which is all a pad owes since each
+report is the whole pad, and it goes in as the bus answers. What an application asks the pad to
+vibrate at is the bus's answer to a request kept outstanding for each pad, polled by the
+guest's own loop and asked again at once, so no change falls between two.
 
 **A host with no device for a pad's own report does not take the report** (*2026-10-15*;
 Windows, until a HID device of the host's own exists). The pad is made from its whole states,
