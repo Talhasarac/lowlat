@@ -1,0 +1,163 @@
+"""Generate crates/inject/src/scancode.rs: keyboard usages to Set-1 scancodes.
+
+The table is the system's own: each usage code is put through
+`HidP_TranslateUsagesToI8042ScanCodes`, the translation a USB keyboard's
+keys go through on their way into Windows, and the scancode it answers is
+recorded. Nothing is transcribed, so the table is a copy of the system's
+answer rather than a second opinion about it, as the Linux table is the
+kernel's.
+
+A code is the make code, with the E0 prefix carried in bit 7. Three kinds of
+key do not answer with one code, and each is recorded in the form the system
+gives it under a modifier rather than invented:
+
+- PrintScreen is preceded by a fake Shift unless Shift or Ctrl is held; the
+  fake Shift is dropped, which is the key's form under either. Under Alt it
+  is another code altogether, recorded beside the table.
+- Pause is three bytes with an E1 prefix, which no single scancode carries;
+  its form under Ctrl, Break, is the code recorded, and without Ctrl the key
+  goes out by its virtual key.
+- Two language keys send a make code and no break; recorded as sent.
+
+Every other key is checked to be the same under every modifier, which is
+what lets the sink follow only Ctrl and Alt.
+
+Windows only, since it calls the system:
+
+    python.exe -I scripts/gen-scancodes.py > crates/inject/src/scancode.rs
+"""
+
+import ctypes
+import sys
+
+LCTRL, LSHIFT, LALT = 0x01, 0x02, 0x04
+RCTRL, RSHIFT, RALT = 0x10, 0x20, 0x40
+MODIFIERS = (LCTRL, LSHIFT, LALT, RCTRL, RSHIFT, RALT)
+
+hid = ctypes.WinDLL("hid.dll")
+INSERT = ctypes.WINFUNCTYPE(
+    ctypes.c_ubyte, ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_ulong
+)
+_got = []
+
+
+@INSERT
+def _insert(_context, codes, length):
+    _got.extend(codes[i] for i in range(length))
+    return 1
+
+
+_translate = hid.HidP_TranslateUsagesToI8042ScanCodes
+_translate.restype = ctypes.c_long
+_translate.argtypes = [
+    ctypes.POINTER(ctypes.c_ushort),
+    ctypes.c_ulong,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_ulong),
+    INSERT,
+    ctypes.c_void_p,
+]
+
+
+def translate(usage, make, modifiers=0):
+    """The bytes the system gives for one key going down or up."""
+    _got.clear()
+    code = ctypes.c_ushort(usage)
+    state = ctypes.c_ulong(modifiers)
+    _translate(ctypes.byref(code), 1, 1 if make else 0, ctypes.byref(state), _insert, None)
+    return list(_got)
+
+
+def one_code(sequence):
+    """A sequence that is one key code, as the table carries it, or None."""
+    if len(sequence) == 1:
+        return sequence[0]
+    if len(sequence) == 2 and sequence[0] == 0xE0 and sequence[1] < 0x80:
+        return 0x80 | sequence[1]
+    return None
+
+
+def fail(message):
+    raise SystemExit("the translation changed shape: " + message)
+
+
+def main():
+    table = [0] * 256
+    pause = None
+    print_screen = None
+    make_only = []
+    for usage in range(256):
+        make = translate(usage, True)
+        if not make:
+            continue
+        if make[:2] == [0xE0, 0x2A]:
+            if print_screen is not None:
+                fail("a second key with a fake Shift, usage %d" % usage)
+            make = make[2:]
+            print_screen = usage
+        if make[:1] == [0xE1]:
+            if pause is not None:
+                fail("a second key with an E1 prefix, usage %d" % usage)
+            make = translate(usage, True, LCTRL)
+            pause = usage
+        code = one_code(make)
+        if code is None:
+            fail("usage %d is %s" % (usage, make))
+        if code >= 0x80 and make[0] != 0xE0:
+            if translate(usage, False):
+                fail("usage %d has a high make code and a break" % usage)
+            make_only.append(code)
+        table[usage] = code
+
+    if pause is None or print_screen is None:
+        fail("no PrintScreen or no Pause")
+    sysrq = one_code(translate(print_screen, True, LALT))
+    for usage, code in enumerate(table):
+        if not code:
+            continue
+        for modifiers in MODIFIERS:
+            under = one_code(translate(usage, True, modifiers))
+            if usage == print_screen and modifiers in (LALT, RALT):
+                expected = sysrq
+            elif usage == pause and modifiers not in (LCTRL, RCTRL):
+                expected = None
+            else:
+                expected = code
+            if under != expected:
+                fail("usage %d under modifiers %#x is %s" % (usage, modifiers, under))
+    codes = [c for c in table if c]
+    if sysrq is None or sysrq in codes:
+        fail("PrintScreen under Alt is not a code of its own")
+    # A code with bit 7 set is either an E0 code or a make-only one; the two
+    # must never meet, or the sink cannot tell which it was handed.
+    for code in make_only:
+        if codes.count(code) > 1:
+            fail("make-only code %#x is also another key's" % code)
+
+    out = sys.stdout
+    out.write("// Keyboard usages to Set-1 scancodes. Generated by\n")
+    out.write("// scripts/gen-scancodes.py from the system's own translation of a USB\n")
+    out.write("// keyboard's keys; do not edit.\n\n")
+    out.write("/// Usage codes zero through 255, as the system translates them: the make\n")
+    out.write("/// code, with the E0 prefix in bit 7. Zero is no key.\n")
+    out.write("#[rustfmt::skip]\n")
+    out.write("pub(crate) const SET1: [u8; 256] = [\n")
+    for row in range(0, 256, 16):
+        cells = ", ".join("0x%02x" % c for c in table[row : row + 16])
+        out.write("    %s,  // %d\n" % (cells, row))
+    out.write("];\n\n")
+    out.write("/// PrintScreen's code above, and the code it is while Alt is held.\n")
+    out.write("pub(crate) const SYSRQ: (u8, u8) = (0x%02x, 0x%02x);\n\n" % (table[print_screen], sysrq))
+    out.write("/// Pause's code above, which is its form while Ctrl is held: without Ctrl\n")
+    out.write("/// the key is three bytes that no single scancode carries.\n")
+    out.write("pub(crate) const PAUSE: u8 = 0x%02x;\n\n" % table[pause])
+    out.write("/// Codes a key sends when it goes down and never when it comes up.\n")
+    out.write(
+        "pub(crate) const MAKE_ONLY: [u8; %d] = [%s];\n"
+        % (len(make_only), ", ".join("0x%02x" % c for c in make_only))
+    )
+    print("%d usages, %d make-only" % (len(codes), len(make_only)), file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

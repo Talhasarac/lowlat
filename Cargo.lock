@@ -881,6 +881,7 @@ dependencies = [
  "libc",
  "lowlat-common",
  "lowlat-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

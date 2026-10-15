@@ -326,10 +326,20 @@ pub(crate) fn on_message(
         // the compositor and produces its leave dialog, which is what asking
         // for it means. In front of a text console the terminal translates it
         // itself and the machine restarts, which is not.
+        //
+        // **Never typed on Windows**: the system raises its secure screen for
+        // the keys only from a keyboard, and for software only through its
+        // own call for it, which answers a service alone. The service makes
+        // it (docs/impl-plan-windows.md W2.5); until it exists the request is
+        // refused.
         id::SECURE_ATTENTION => {
             if lowlat_host::inject::console_takes_the_chord() {
                 lowlat_common::log_warn!(
                     "lowlatd: guest {guest} asked for the attention chord, refused=console"
+                );
+            } else if cfg!(windows) {
+                lowlat_common::log_warn!(
+                    "lowlatd: guest {guest} asked for the attention chord, refused=no-service"
                 );
             } else {
                 seam.secure_attention(guest);

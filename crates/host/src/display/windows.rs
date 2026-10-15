@@ -1023,6 +1023,14 @@ impl Display {
         })
     }
 
+    /// Whether something holds the pointer's motion, as of the last look at
+    /// it: the bit as it turns, before it has held long enough to be said,
+    /// which is what absolute motion is converted on (docs/05-host.md
+    /// section 7).
+    pub fn relative(&self) -> bool {
+        self.watch.settle.relative()
+    }
+
     /// Whether the output being captured is still part of the desktop, on
     /// the adapter it was opened on, and the device still there.
     pub fn attached(&self) -> bool {
@@ -1459,5 +1467,116 @@ mod tests {
         assert!(changed >= 1, "the desktop was never converted");
         assert_eq!(units, ticks, "a tick went unencoded");
         assert_eq!(late, 0, "a present took longer than two refreshes");
+    }
+
+    /// **An absolute position lands on the pixel it names, on every output
+    /// of the desktop**, through a guest's own devices and the place the
+    /// display gives them: the corners, the middle and points between, read
+    /// back where the system put the pointer, each exactly: a pixel short is
+    /// an output's first column landing on its neighbour.
+    #[test]
+    #[ignore = "moves the desk's pointer across every display"]
+    fn absolute_input_lands_on_the_pixel_it_names() {
+        use lowlat_core::control::{Control, op};
+        use lowlat_inject::Devices;
+        use lowlat_inject::event::{Extents, Injector, Place};
+
+        let _aware = Aware::per_monitor();
+        let mut devices = Devices::create("sweep").expect("devices");
+        let listed = listed();
+        let mut worsts = Vec::new();
+        for output in listed.iter().filter(|o| o.attached) {
+            let placed = place_of(output, &listed);
+            let (width, height) = picture_of(output);
+            let mut inject = Injector::new(Extents::placed(
+                width,
+                height,
+                Place {
+                    x: placed.x,
+                    y: placed.y,
+                    width: placed.width,
+                    height: placed.height,
+                    desktop_width: placed.desktop_width,
+                    desktop_height: placed.desktop_height,
+                },
+            ));
+            let mut worst = (0, 0);
+            for (fx, fy) in [
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (0, 4),
+                (4, 0),
+                (1, 3),
+                (3, 1),
+            ] {
+                let (x, y) = ((width - 1) * fx / 4, (height - 1) * fy / 4);
+                let motion = Control {
+                    a0: 0,
+                    a1: x,
+                    a2: y,
+                    opcode: op::MOUSE_MOTION,
+                    body: &[],
+                };
+                // Three times each, so a reading disturbed by anything else
+                // moving the pointer shows as a disagreement.
+                let mut seen = Vec::new();
+                for _ in 0..3 {
+                    let mut tee = Tee {
+                        devices: &mut devices,
+                        sent: (0, 0),
+                    };
+                    inject.on_control(&motion, &mut tee);
+                    let sent = tee.sent;
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    let at = duplication::cursor().expect("the pointer");
+                    seen.push((sent, at.x - output.left, at.y - output.top));
+                }
+                for &(sent, gx, gy) in &seen {
+                    let (dx, dy) = (
+                        gx - i32::try_from(x).unwrap(),
+                        gy - i32::try_from(y).unwrap(),
+                    );
+                    println!(
+                        "{} {x},{y} sent {},{} -> {gx},{gy} off {dx},{dy}",
+                        output.name, sent.0, sent.1
+                    );
+                    worst = (worst.0.max(dx.abs()), worst.1.max(dy.abs()));
+                }
+            }
+            println!(
+                "{} {width}x{height} at {},{} of {}x{}: worst {worst:?}",
+                output.name, placed.x, placed.y, placed.desktop_width, placed.desktop_height
+            );
+            worsts.push((output.name.clone(), worst));
+        }
+        for (name, worst) in &worsts {
+            assert_eq!(*worst, (0, 0), "{name} landed off the pixel it named");
+        }
+    }
+
+    /// The devices, and what the absolute axes were last sent.
+    struct Tee<'a> {
+        devices: &'a mut lowlat_inject::Devices,
+        sent: (i32, i32),
+    }
+
+    impl lowlat_inject::event::Sink for Tee<'_> {
+        fn emit(
+            &mut self,
+            device: lowlat_inject::event::Device,
+            events: &[lowlat_inject::event::Event],
+        ) {
+            for event in events.iter().filter(|e| e.kind == 0x03) {
+                match event.code {
+                    0x00 => self.sent.0 = event.value,
+                    0x01 => self.sent.1 = event.value,
+                    _ => {}
+                }
+            }
+            self.devices.emit(device, events);
+        }
     }
 }

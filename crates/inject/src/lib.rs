@@ -1,4 +1,5 @@
-//! Input injection through the kernel input layer.
+//! Input injection through the kernel input layer, and on Windows through the
+//! system's batch input call and a virtual pad bus.
 //!
 //! Below the display server, so it works identically on every Linux display
 //! stack and at the greeter. See docs/05-host.md section 7.
@@ -19,17 +20,39 @@
     )
 )]
 
-// The devices are built where their platform's half is written, which is Linux
-// so far (docs/impl-plan-windows.md); what a guest's input is before it lands
-// on one -- the events, the pads, the usage table -- builds everywhere.
+// The devices are each platform's; what a guest's input is before it lands on
+// one -- the events and the pads -- builds everywhere. The usage table is the
+// platform's own translation of a keyboard's keys, under one name.
 pub mod event;
 pub mod gamepad;
 pub mod handback;
+#[cfg(windows)]
+mod scancode;
 #[cfg(target_os = "linux")]
 pub mod uhid;
 #[cfg(target_os = "linux")]
 pub mod uinput;
+#[cfg(not(windows))]
 pub mod usage;
+#[cfg(windows)]
+#[path = "usage_windows.rs"]
+pub mod usage;
+// Generated from the pad bus's header, which follows C naming and declares
+// more than is called; scoped to the generated module alone. Its layout
+// assertions index at compile time, which the crate's own deny names, and a
+// group allow does not outrank a lint named explicitly.
+#[cfg(windows)]
+#[allow(
+    dead_code,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    missing_debug_implementations,
+    unreachable_pub,
+    clippy::all,
+    clippy::indexing_slicing
+)]
+mod vigem;
 #[cfg(windows)]
 mod windows;
 

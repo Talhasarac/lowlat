@@ -1498,7 +1498,7 @@ fn a_preference_changed_mid_session_costs_one_request_and_one_build() {
 
 /// **Input crosses as the host reads it.** The rectangle is the picture's
 /// own size, so the far window pixel bumps onto the far edge and the host's
-/// injector puts the pointer at the end of its axis; a press outside is not
+/// injector puts the pointer on the picture's last pixel; a press outside is not
 /// sent and its release is; a repeated pad state is sent once; the census
 /// still agrees message for message. And the host's pointer message moves
 /// the client into relative mode and back, once each, with the warp position
@@ -1598,8 +1598,9 @@ fn input_reaches_the_host_in_the_pictures_pixels() {
             op::name(opcode)
         );
     }
-    // The host's injector put the pointer at the end of both axes: the
-    // window's last pixel was bumped onto the picture's edge.
+    // The host's injector put the pointer on the picture's last pixel both
+    // ways, the window's last pixel having been bumped onto the picture's
+    // edge: the value names that pixel's centre.
     let absolute: Vec<(u16, i32)> = host
         .injected
         .events
@@ -1607,7 +1608,11 @@ fn input_reaches_the_host_in_the_pictures_pixels() {
         .filter(|(device, event)| *device == Device::PointerAbsolute && event.kind == 0x03)
         .map(|(_, event)| (event.code, event.value))
         .collect();
-    assert_eq!(absolute, vec![(0x00, 65535), (0x01, 65535)]);
+    let centre = |pixel: i32, extent: i32| (2 * pixel + 1) * 65536 / (2 * extent);
+    assert_eq!(
+        absolute,
+        vec![(0x00, centre(1919, 1920)), (0x01, centre(1079, 1080))]
+    );
     assert_eq!(host.injected.unplugged, vec![7]);
     assert_eq!(host.injector.tally().pads, 2);
 

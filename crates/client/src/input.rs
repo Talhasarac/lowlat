@@ -297,6 +297,20 @@ const fn signed(value: i32) -> u32 {
     u32::from_ne_bytes(value.to_ne_bytes())
 }
 
+/// One axis's value as the per-axis message carries it.
+///
+/// **The message's vertical axes point down** (docs/01-protocol.md section
+/// 11.1), opposite to the whole state's, which is the direction the call
+/// takes: away from the player is positive to an application either way, and
+/// is turned over here, the far end of the range held inside it.
+fn wire_axis(axis: u32, value: i16) -> i16 {
+    match axis {
+        // The left and right sticks' vertical axes.
+        1 | 3 => value.saturating_neg(),
+        _ => value,
+    }
+}
+
 impl Mapper {
     pub(crate) fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
@@ -414,7 +428,7 @@ impl Mapper {
             Input::PadAxis { pad, axis, value } => Some(Wire::bare(
                 op::GAMEPAD_AXIS,
                 axis,
-                signed(i32::from(value)),
+                signed(i32::from(wire_axis(axis, value))),
                 pad,
             )),
             Input::PadState { pad, state } => self.pad_state(pad, state),
@@ -641,6 +655,30 @@ mod tests {
             Rotation::Deg90,
         );
         assert_eq!(motion(&mut m, 1079, 1919), Some((0, 1080, 1920)));
+    }
+
+    /// **A vertical axis goes on the wire pointing down**, the call taking the
+    /// whole state's direction: away from the player is positive to the
+    /// application and negative on the wire; the horizontal axes and the
+    /// triggers pass as they are, and the far end stays inside the range.
+    #[test]
+    fn a_vertical_pad_axis_points_down_on_the_wire() {
+        let mut m = Mapper::default();
+        let mut axis = |axis, value| {
+            m.encode(&Input::PadAxis {
+                pad: 2,
+                axis,
+                value,
+            })
+            .map(|w| (w.opcode, w.a0, w.a1, w.a2))
+        };
+        let on_wire = |axis, value: i32| Some((op::GAMEPAD_AXIS, axis, signed(value), 2));
+        assert_eq!(axis(1, 20_000), on_wire(1, -20_000));
+        assert_eq!(axis(3, -20_000), on_wire(3, 20_000));
+        assert_eq!(axis(0, 20_000), on_wire(0, 20_000));
+        assert_eq!(axis(2, -5), on_wire(2, -5));
+        assert_eq!(axis(4, 20_000), on_wire(4, 20_000));
+        assert_eq!(axis(1, i16::MIN), on_wire(1, i32::from(i16::MAX)));
     }
 
     /// The bump is only the one pixel short of the edge, not a general

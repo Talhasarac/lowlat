@@ -1,62 +1,373 @@
-//! The devices a guest's input lands on, on Windows: none are built yet
-//! (docs/impl-plan-windows.md, W2.3).
+//! The devices a guest's input lands on, on Windows (docs/05-host.md section
+//! 7): the system's batch input call for the keyboard and the pointer, by
+//! scancode, and an Xbox 360 pad on the ViGEm bus for each of the guest's
+//! pads, spoken to over the bus's own requests.
 //!
-//! **Refused at creation**, so a guest is admitted without input rather than
-//! handed devices that quietly swallow what it sends.
+//! **The calling thread's state is part of the interface.** The input call
+//! reaches only the desktop that receives input, which the lock screen and an
+//! elevation prompt replace with another, and refuses a thread on any other;
+//! so the guest's thread is attached to the input desktop as its devices are
+//! made, and again whenever the call refuses, and the refused input goes
+//! again at once. The thread is made per-monitor aware as well, so a position
+//! is spread over the desktop in the physical pixels the captured output is
+//! measured in. Both belong to the guest's thread, which makes and drops its
+//! devices, and are put back as they go.
+//!
+//! **The two pointers are one mouse here**: the call has one, which takes
+//! deltas and positions alike.
 
-use crate::event::{Device, Event, Sink};
-use crate::handback::{Forward, PadWritten, Rumble};
+use lowlat_core::pad::Inbound;
+use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+    CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_Interface_List_SizeW,
+    CM_Get_Device_Interface_ListW, CR_SUCCESS,
+};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_IO_INCOMPLETE,
+    ERROR_IO_PENDING, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows_sys::Win32::System::IO::{
+    CancelIoEx, DeviceIoControl, GetOverlappedResult, OVERLAPPED,
+};
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CloseDesktop, HDESK, OpenInputDesktop, SetThreadDesktop,
+};
+use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
+    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VK_CAPITAL,
+    VK_NUMLOCK, VK_PAUSE,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{XBUTTON1, XBUTTON2};
 
-/// Why a guest's devices could not be created.
+use crate::event::{self, Device, Event, Locks, SCRATCH, Sink};
+use crate::gamepad::{self, MAX_PADS};
+use crate::handback::{Forward, Forwarding, PadWritten, Rumble};
+use crate::scancode::{MAKE_ONLY, PAUSE, SET1, SYSRQ};
+use crate::vigem;
+
+/// Why a guest's devices could not be created: never, here. The input call
+/// needs nothing made for it, and the pad bus is opened by the first pad.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Error {
-    /// No input device is built for this platform.
-    NotBuilt,
-}
+pub enum Error {}
 
 impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NotBuilt => f.write_str("no input device is built for this platform"),
-        }
+    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {}
     }
 }
 
 impl std::error::Error for Error {}
 
-/// One guest's devices. None can be made, so none exists: every method below
-/// is unreachable by construction rather than by a check.
-#[derive(Debug)]
+/// The identity a pad on the bus claims: the bus's own default, the wired
+/// Xbox 360 pad every consumer of a pad recognises.
+const PAD_VENDOR: u16 = 0x045e;
+const PAD_PRODUCT: u16 = 0x028e;
+
+/// The bus numbers its pads; a number another program holds is refused, so
+/// the next is asked for. This many are tried before a pad is given up.
+const SERIALS: u32 = 64;
+
+/// The modifiers' own codes, from the table.
+const LCTRL: u8 = SET1[224];
+const RCTRL: u8 = SET1[228];
+const LALT: u8 = SET1[226];
+const RALT: u8 = SET1[230];
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "one input is a few dozen bytes"
+)]
+const INPUT_SIZE: i32 = size_of::<INPUT>() as i32;
+
+/// A request body's size, as the bus is told it.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a request body is a few dozen bytes"
+)]
+const fn size<T>() -> u32 {
+    size_of::<T>() as u32
+}
+
+/// One guest's devices.
+///
+/// **Fields drop in the order written**: the pads first, whose requests to
+/// the bus are cancelled and waited for while it is open, then the bus,
+/// whose closing unplugs anything left; the thread's own state last.
 pub struct Devices {
-    none: core::convert::Infallible,
+    pads: [Option<Pad>; MAX_PADS],
+    bus: Option<Bus>,
+    /// Pads are off for this guest: there is no bus, or it refused one.
+    /// Said once.
+    no_pads: bool,
+    /// Set once, so a guest holding more pads than there are slots is said
+    /// rather than silently short of one.
+    refused: bool,
+    forward: Option<Forwarding>,
+    keyboard: Keyboard,
+    /// The input call is refusing, so the next refusal is not said again.
+    refusing: bool,
+    desktop: Option<Desktop>,
+    _aware: Aware,
+}
+
+impl core::fmt::Debug for Devices {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Devices")
+            .field("pads", &self.pads.iter().flatten().count())
+            .field("bus", &self.bus.is_some())
+            .field("forward", &self.forward.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Devices {
+    /// Make a guest's devices, on the guest's own thread: the thread made
+    /// per-monitor aware and attached to the input desktop as it is now.
     pub fn create(_guest: &str) -> Result<Self, Error> {
-        Err(Error::NotBuilt)
+        let aware = Aware::per_monitor();
+        let desktop = Desktop::attach();
+        if desktop.is_none() {
+            lowlat_common::log_warn!(
+                "inject: the input desktop could not be attached, error={}",
+                last_error()
+            );
+        }
+        Ok(Self {
+            pads: [const { None }; MAX_PADS],
+            bus: None,
+            no_pads: false,
+            refused: false,
+            forward: None,
+            keyboard: Keyboard::default(),
+            refusing: false,
+            desktop,
+            _aware: aware,
+        })
     }
 
-    pub fn forward_reports(&mut self, _to: Forward) {
-        match self.none {}
+    /// Hand every report pad's reports to `to` instead of playing the pad
+    /// from its whole states, and tell it when the pad is gone: the
+    /// application's device stands in (docs/05-host.md section 7.2). Set
+    /// before the first report.
+    pub fn forward_reports(&mut self, to: Forward) {
+        self.forward = Some(Forwarding::new(to));
     }
 
+    /// Nothing: no pad here is presented as its own product, so nothing is
+    /// written to one.
     pub fn written(&mut self) -> Option<PadWritten> {
-        match self.none {}
+        None
     }
 
+    /// Put each pad the bus has made ready to use, and its held report in.
+    ///
+    /// **Called from the loop that already runs**, so a pad that arrived with
+    /// one message and nothing after it is still put in once it can be.
     pub fn tick(&mut self) {
-        match self.none {}
+        let Some(bus) = self.bus.as_ref() else {
+            return;
+        };
+        for slot in &mut self.pads {
+            let Some(pad) = slot.as_mut() else {
+                continue;
+            };
+            let was_ready = pad.ready;
+            if !pad.settle(bus) {
+                *slot = None;
+            } else if !was_ready && pad.ready {
+                pad.submit(bus);
+            }
+        }
     }
 
+    /// What any of this guest's pads has been asked to vibrate at, since the
+    /// last ask.
+    ///
+    /// **Polled rather than pushed.** The bus answers a request this thread
+    /// keeps outstanding for each pad, and the guest's loop is already
+    /// turning; a thread per pad would be a thread for a message that arrives
+    /// when somebody drives over rubble.
     pub fn rumble(&mut self) -> Option<Rumble> {
-        match self.none {}
+        let bus = self.bus.as_ref()?;
+        for pad in self.pads.iter_mut().flatten() {
+            if let Some(rumble) = pad.rumbled(bus) {
+                return Some(rumble);
+            }
+        }
+        None
+    }
+
+    /// The slot of the pad for a peer's identifier, plugged in if this is its
+    /// first event.
+    fn pad(&mut self, id: u32) -> Option<usize> {
+        if let Some(index) = self
+            .pads
+            .iter()
+            .position(|p| p.as_ref().is_some_and(|p| p.id == id))
+        {
+            return Some(index);
+        }
+        if self.no_pads {
+            return None;
+        }
+        if self.bus.is_none() {
+            match Bus::open() {
+                Ok(bus) => self.bus = Some(bus),
+                Err(error) => {
+                    self.no_pads = true;
+                    lowlat_common::log_warn!("inject: no pad bus, pads are off, error={error}");
+                    return None;
+                }
+            }
+        }
+        let bus = self.bus.as_ref()?;
+        let Some(index) = self.pads.iter().position(Option::is_none) else {
+            if !self.refused {
+                self.refused = true;
+                lowlat_common::log_warn!("inject: no room for another pad, pads={MAX_PADS}");
+            }
+            return None;
+        };
+        match Pad::plug(bus, id) {
+            Ok(pad) => {
+                lowlat_common::log_info!("inject: pad created, pad={id} serial={}", pad.serial);
+                *self.pads.get_mut(index)? = Some(pad);
+                Some(index)
+            }
+            Err(error) => {
+                self.no_pads = true;
+                lowlat_common::log_warn!(
+                    "inject: pad not created, pads are off, pad={id} error={error}"
+                );
+                None
+            }
+        }
+    }
+
+    /// Put input in through the system's call, attaching this thread to the
+    /// input desktop when the call refuses a thread that is not on it.
+    fn send(&mut self, inputs: &[INPUT]) {
+        let mut rest = inputs;
+        let mut attached = false;
+        while !rest.is_empty() {
+            let count = u32::try_from(rest.len()).unwrap_or(0);
+            // SAFETY: `count` inputs from a live slice, each of the size
+            // passed; the call copies them before it returns.
+            let sent = unsafe { SendInput(count, rest.as_ptr(), INPUT_SIZE) };
+            rest = rest.get(sent as usize..).unwrap_or_default();
+            if rest.is_empty() {
+                break;
+            }
+            let error = last_error();
+            // **Refused off the input desktop**, which the lock screen and
+            // an elevation prompt replace with another: attached to the
+            // desktop that has it now, the rest goes again.
+            if error == ERROR_ACCESS_DENIED
+                && !attached
+                && let Some(desktop) = Desktop::attach()
+            {
+                attached = true;
+                self.desktop = Some(desktop);
+                continue;
+            }
+            if !self.refusing {
+                self.refusing = true;
+                lowlat_common::log_warn!(
+                    "inject: input refused, error={error} lost={}",
+                    rest.len()
+                );
+            }
+            return;
+        }
+        if attached {
+            lowlat_common::log_info!("inject: input moved to the input desktop as it is now");
+        }
+        self.refusing = false;
     }
 }
 
 impl Sink for Devices {
-    fn emit(&mut self, _device: Device, _events: &[Event]) {
-        match self.none {}
+    fn emit(&mut self, device: Device, events: &[Event]) {
+        let mut inputs = Inputs::new();
+        match device {
+            Device::Keyboard => {
+                for event in events.iter().filter(|e| e.kind == event::EV_KEY) {
+                    let down = event.value != 0;
+                    if let Some(stroke) = self.keyboard.stroke(event.code, down) {
+                        inputs.push(key_input(stroke, down));
+                    }
+                }
+            }
+            Device::Pointer | Device::PointerAbsolute => pointer_inputs(events, &mut inputs),
+            Device::Gamepad(id) => {
+                let Some(index) = self.pad(id) else {
+                    return;
+                };
+                if let (Some(slot), Some(bus)) = (self.pads.get_mut(index), self.bus.as_ref())
+                    && let Some(pad) = slot.as_mut()
+                {
+                    pad.report.apply(events);
+                    if pad.settle(bus) {
+                        pad.submit(bus);
+                    } else {
+                        *slot = None;
+                    }
+                }
+                return;
+            }
+        }
+        self.send(inputs.as_slice());
+    }
+
+    fn unplug(&mut self, pad: u32) {
+        if let Some(slot) = self
+            .pads
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|p| p.id == pad))
+            && let Some(taken) = slot.take()
+        {
+            if let Some(bus) = self.bus.as_ref() {
+                taken.unplug(bus);
+            }
+            lowlat_common::log_info!("inject: pad unplugged, pad={pad}");
+        }
+        if self.forward.as_mut().is_some_and(|f| f.unplug(pad)) {
+            lowlat_common::log_info!("inject: pad unplugged, pad={pad}");
+        }
+    }
+
+    fn report(&mut self, pad: u32, inbound: &Inbound<'_>) {
+        if let Some(forward) = self.forward.as_mut() {
+            forward.report(pad, inbound);
+        }
+    }
+
+    /// **Only to an application holding the device.** There is no device of
+    /// this host's own for a pad's own report, so without one the report is
+    /// not taken and the pad is played from its whole states.
+    fn takes_reports(&self) -> bool {
+        self.forward.is_some()
+    }
+
+    fn host_locks(&self) -> Option<Locks> {
+        // The low bit is the toggle, read on this thread; it follows a lock
+        // changed anywhere on the desk, a thread with no window included.
+        // SAFETY: two reads of a key's state, with keys the system defines.
+        let on = |key: u16| unsafe { GetKeyState(i32::from(key)) } & 1 != 0;
+        Some(Locks {
+            num: on(VK_NUMLOCK),
+            caps: on(VK_CAPITAL),
+        })
     }
 }
 
@@ -65,4 +376,1097 @@ impl Sink for Devices {
 #[must_use]
 pub fn console_takes_the_chord() -> bool {
     false
+}
+
+/// One key as the input call takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stroke {
+    /// A Set-1 code, the E0 prefix in bit 7.
+    Scan(u8),
+    /// A code sent as the byte it is, for a key that sends a make code and
+    /// no break: bit 7 is the code's own, not the prefix.
+    Make(u8),
+    /// A virtual key, for the one key no scancode carries.
+    Virtual(u16),
+}
+
+/// The guest's keyboard as the input call needs it: which of Ctrl and Alt
+/// it holds, and how each of the two keys that change form went down.
+///
+/// **Ctrl and Alt are this keyboard's, not the machine's**, as the system's
+/// own keyboard driver keeps them for each keyboard: Pause is Break under
+/// Ctrl and PrintScreen is SysRq under Alt, and a key held on another
+/// keyboard changes neither.
+#[derive(Debug, Default)]
+struct Keyboard {
+    /// Left and right, a bit each.
+    ctrl: u8,
+    alt: u8,
+    /// The stroke Pause and PrintScreen went down as, which is the stroke
+    /// they repeat and come up as: a key that comes up as another stroke
+    /// leaves the first held.
+    pause: Option<Stroke>,
+    print: Option<Stroke>,
+}
+
+impl Keyboard {
+    /// The stroke one key event goes out as, or `None` for one that sends
+    /// nothing.
+    fn stroke(&mut self, code: u16, down: bool) -> Option<Stroke> {
+        let code = u8::try_from(code).ok()?;
+        let side = |held: &mut u8, bit: u8| {
+            if down {
+                *held |= bit;
+            } else {
+                *held &= !bit;
+            }
+        };
+        match code {
+            LCTRL => side(&mut self.ctrl, 1),
+            RCTRL => side(&mut self.ctrl, 2),
+            LALT => side(&mut self.alt, 1),
+            RALT => side(&mut self.alt, 2),
+            _ => {}
+        }
+        if code == PAUSE {
+            let ctrl = self.ctrl != 0;
+            return held_as(&mut self.pause, down, || {
+                if ctrl {
+                    Stroke::Scan(PAUSE)
+                } else {
+                    Stroke::Virtual(VK_PAUSE)
+                }
+            });
+        }
+        if code == SYSRQ.0 {
+            let alt = self.alt != 0;
+            return held_as(&mut self.print, down, || {
+                Stroke::Scan(if alt { SYSRQ.1 } else { SYSRQ.0 })
+            });
+        }
+        if MAKE_ONLY.contains(&code) {
+            return down.then_some(Stroke::Make(code));
+        }
+        Some(Stroke::Scan(code))
+    }
+}
+
+/// The stroke a key that changes form goes out as: chosen as it goes down
+/// and kept while it is held, so its repeats and its release are the same
+/// stroke whatever happened to the modifiers meanwhile.
+fn held_as(
+    slot: &mut Option<Stroke>,
+    down: bool,
+    choose: impl FnOnce() -> Stroke,
+) -> Option<Stroke> {
+    if down {
+        Some(*slot.get_or_insert_with(choose))
+    } else {
+        slot.take()
+    }
+}
+
+fn key_input(stroke: Stroke, down: bool) -> INPUT {
+    let up = if down { 0 } else { KEYEVENTF_KEYUP };
+    let (virtual_key, scan, flags) = match stroke {
+        Stroke::Scan(code) => {
+            let prefix = if code & 0x80 == 0 {
+                0
+            } else {
+                KEYEVENTF_EXTENDEDKEY
+            };
+            (0, u16::from(code & 0x7f), KEYEVENTF_SCANCODE | prefix)
+        }
+        Stroke::Make(code) => (0, u16::from(code), KEYEVENTF_SCANCODE),
+        Stroke::Virtual(key) => (key, 0, 0),
+    };
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: virtual_key,
+                wScan: scan,
+                dwFlags: flags | up,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn mouse_input(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: data,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+/// A pointer batch as the input call takes it: one move a report, a wheel a
+/// turned axis, a button a press or a release.
+///
+/// **The fine wheel axes, not the stepped ones.** The stepped axis is the
+/// fine one divided into detents, for the kernel's consumers; the call takes
+/// the units the peer counted, and taking both would scroll twice.
+fn pointer_inputs(events: &[Event], inputs: &mut Inputs) {
+    let mut moved: Option<(i32, i32, u32)> = None;
+    for e in events {
+        match (e.kind, e.code) {
+            (event::EV_REL, event::REL_X) => {
+                moved.get_or_insert((0, 0, MOUSEEVENTF_MOVE)).0 = e.value
+            }
+            (event::EV_REL, event::REL_Y) => {
+                moved.get_or_insert((0, 0, MOUSEEVENTF_MOVE)).1 = e.value
+            }
+            (event::EV_ABS, event::ABS_X) => moved.get_or_insert((0, 0, ABSOLUTE)).0 = e.value,
+            (event::EV_ABS, event::ABS_Y) => moved.get_or_insert((0, 0, ABSOLUTE)).1 = e.value,
+            (event::EV_REL, event::REL_WHEEL_HI_RES) => {
+                inputs.push(mouse_input(0, 0, bits(e.value), MOUSEEVENTF_WHEEL));
+            }
+            (event::EV_REL, event::REL_HWHEEL_HI_RES) => {
+                inputs.push(mouse_input(0, 0, bits(e.value), MOUSEEVENTF_HWHEEL));
+            }
+            (event::EV_KEY, code) => {
+                if let Some((flags, data)) = button(code, e.value != 0) {
+                    inputs.push(mouse_input(0, 0, data, flags));
+                }
+            }
+            (event::EV_SYN, _) => {
+                if let Some((dx, dy, flags)) = moved.take() {
+                    inputs.push(mouse_input(dx, dy, 0, flags));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A position over the whole desktop, which the expander has already placed
+/// the captured output's picture in.
+const ABSOLUTE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+/// The flags and data a button's press or release goes out as.
+fn button(code: u16, down: bool) -> Option<(u32, u32)> {
+    let pick = |pressed: u32, released: u32| if down { pressed } else { released };
+    let x = pick(MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP);
+    Some(match code {
+        event::BTN_LEFT => (pick(MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP), 0),
+        event::BTN_RIGHT => (pick(MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP), 0),
+        event::BTN_MIDDLE => (pick(MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP), 0),
+        event::BTN_SIDE => (x, u32::from(XBUTTON1)),
+        event::BTN_EXTRA => (x, u32::from(XBUTTON2)),
+        _ => return None,
+    })
+}
+
+/// A signed wheel count in the call's unsigned field, bit for bit.
+#[allow(
+    clippy::cast_sign_loss,
+    reason = "the field is signed to the system and unsigned in its declaration"
+)]
+const fn bits(value: i32) -> u32 {
+    value as u32
+}
+
+/// One call's worth of input: the expander hands over no more events a
+/// batch than this, and no event becomes more than one input.
+struct Inputs {
+    list: [INPUT; SCRATCH],
+    used: usize,
+}
+
+impl Inputs {
+    fn new() -> Self {
+        Self {
+            list: [mouse_input(0, 0, 0, 0); SCRATCH],
+            used: 0,
+        }
+    }
+
+    fn push(&mut self, input: INPUT) {
+        if let Some(slot) = self.list.get_mut(self.used) {
+            *slot = input;
+            self.used += 1;
+        }
+    }
+
+    fn as_slice(&self) -> &[INPUT] {
+        self.list.get(..self.used).unwrap_or_default()
+    }
+}
+
+/// This thread on the desktop that receives input, as it is now.
+///
+/// **Kept rather than closed**: a desktop a thread is attached to cannot be
+/// closed, so the handle lives until the thread moves to another, and the one
+/// it replaces is closed then.
+#[derive(Debug)]
+struct Desktop(HDESK);
+
+impl Desktop {
+    /// Refused on a thread that owns a window or a hook, and where this
+    /// process may not open the desktop.
+    fn attach() -> Option<Self> {
+        // SAFETY: no flags, not inherited, every right; the handle is checked.
+        let handle = unsafe { OpenInputDesktop(0, 0, GENERIC_ALL) };
+        if handle.is_null() {
+            return None;
+        }
+        // SAFETY: a desktop just opened.
+        if unsafe { SetThreadDesktop(handle) } == 0 {
+            // SAFETY: the handle opened above, attached to nothing.
+            unsafe { CloseDesktop(handle) };
+            return None;
+        }
+        Some(Self(handle))
+    }
+}
+
+impl Drop for Desktop {
+    fn drop(&mut self) {
+        // **Fails while this thread is still attached to it**, which is the
+        // ordinary case as a guest ends; the handle then goes with the thread.
+        // SAFETY: the handle `attach` opened, closed once.
+        unsafe { CloseDesktop(self.0) };
+    }
+}
+
+/// This thread made per-monitor aware until the guard drops, which puts
+/// back what it was.
+#[derive(Debug)]
+struct Aware(DPI_AWARENESS_CONTEXT);
+
+impl Aware {
+    fn per_monitor() -> Self {
+        // SAFETY: a context the system defines; the call changes only this
+        // thread's.
+        Self(unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) })
+    }
+}
+
+impl Drop for Aware {
+    fn drop(&mut self) {
+        // A null context means the call above refused, and there is nothing
+        // to put back.
+        if !self.0.is_null() {
+            // SAFETY: the context this thread had, set back on it.
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
+}
+
+/// The calling thread's last error.
+fn last_error() -> u32 {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok())
+        .unwrap_or(0)
+}
+
+/// Why the pad bus could not be had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusError {
+    /// No bus is installed, or none is running.
+    Absent,
+    /// A bus is there and would not be opened.
+    Refused(u32),
+    /// A bus is there and speaks another version of its requests.
+    Version(u32),
+}
+
+impl core::fmt::Display for BusError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Absent => f.write_str("no bus device"),
+            Self::Refused(code) => write!(f, "the bus would not open, error={code}"),
+            Self::Version(code) => write!(f, "the bus refused this version, error={code}"),
+        }
+    }
+}
+
+/// The pad bus, opened for one guest.
+///
+/// **Closing it unplugs every pad it plugged in**, which is how a guest that
+/// leaves takes its pads with it whatever path it leaves by.
+#[derive(Debug)]
+struct Bus {
+    handle: HANDLE,
+    /// For the requests this thread waits on.
+    event: HANDLE,
+}
+
+impl Bus {
+    fn open() -> Result<Self, BusError> {
+        let mut last = BusError::Absent;
+        for path in bus_paths() {
+            // SAFETY: a NUL-terminated path; no security attributes and no
+            // template, as the call allows.
+            let handle = unsafe {
+                CreateFileW(
+                    path.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    core::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_OVERLAPPED,
+                    core::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                last = BusError::Refused(last_error());
+                continue;
+            }
+            let Some(event) = event() else {
+                last = BusError::Refused(last_error());
+                // SAFETY: the handle opened above, closed once.
+                unsafe { CloseHandle(handle) };
+                continue;
+            };
+            let bus = Self { handle, event };
+            let version = vigem::VIGEM_CHECK_VERSION {
+                Size: size::<vigem::VIGEM_CHECK_VERSION>(),
+                Version: vigem::VIGEM_COMMON_VERSION,
+            };
+            match bus.call(vigem::IOCTL_VIGEM_CHECK_VERSION, &version) {
+                Ok(()) => return Ok(bus),
+                Err(code) => last = BusError::Version(code),
+            }
+        }
+        Err(last)
+    }
+
+    /// One request this thread waits for, with nothing to read back.
+    fn call<T>(&self, code: u32, body: &T) -> Result<(), u32> {
+        let mut overlapped = OVERLAPPED {
+            hEvent: self.event,
+            ..OVERLAPPED::default()
+        };
+        let mut moved = 0u32;
+        // SAFETY: the body and the overlapped outlive the request, which is
+        // waited for below before either goes; the handle is this bus's.
+        let done = unsafe {
+            DeviceIoControl(
+                self.handle,
+                code,
+                core::ptr::from_ref(body).cast(),
+                size::<T>(),
+                core::ptr::null_mut(),
+                0,
+                &raw mut moved,
+                &raw mut overlapped,
+            )
+        };
+        if done != 0 {
+            return Ok(());
+        }
+        let error = last_error();
+        if error != ERROR_IO_PENDING {
+            return Err(error);
+        }
+        // SAFETY: the request above, on this handle, with its own event.
+        if unsafe { GetOverlappedResult(self.handle, &raw const overlapped, &raw mut moved, 1) }
+            == 0
+        {
+            return Err(last_error());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Bus {
+    fn drop(&mut self) {
+        // SAFETY: the two handles `open` made, closed once each.
+        unsafe {
+            CloseHandle(self.handle);
+            CloseHandle(self.event);
+        }
+    }
+}
+
+/// A manual-reset event, for a request to be waited on.
+fn event() -> Option<HANDLE> {
+    // SAFETY: no security attributes and no name, manual reset, not set.
+    let event = unsafe { CreateEventW(core::ptr::null(), 1, 0, core::ptr::null()) };
+    (!event.is_null()).then_some(event)
+}
+
+/// The device paths of every pad bus present, each NUL-terminated.
+fn bus_paths() -> Vec<Vec<u16>> {
+    let mut length = 0u32;
+    // SAFETY: the length is a live local; the identifier is a constant.
+    let asked = unsafe {
+        CM_Get_Device_Interface_List_SizeW(
+            &raw mut length,
+            &vigem::GUID_DEVINTERFACE_BUSENUM_VIGEM,
+            core::ptr::null(),
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        )
+    };
+    if asked != CR_SUCCESS || length <= 1 {
+        return Vec::new();
+    }
+    let mut list = vec![0u16; length as usize];
+    // SAFETY: the buffer is `length` characters, as the call is told.
+    let listed = unsafe {
+        CM_Get_Device_Interface_ListW(
+            &vigem::GUID_DEVINTERFACE_BUSENUM_VIGEM,
+            core::ptr::null(),
+            list.as_mut_ptr(),
+            length,
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        )
+    };
+    if listed != CR_SUCCESS {
+        return Vec::new();
+    }
+    list.split(|&c| c == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.iter().copied().chain([0]).collect())
+        .collect()
+}
+
+/// A request the bus keeps until it has something to say: that a pad is
+/// ready, or what it was asked to vibrate at.
+///
+/// **On the heap, and never moved or freed while the bus holds it**: the bus
+/// writes its answer into the body and the overlapped whenever it comes.
+/// Dropped while the bus holds it, it is cancelled and waited for first.
+struct Pending<T> {
+    overlapped: OVERLAPPED,
+    body: T,
+    handle: HANDLE,
+    state: State,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Idle,
+    Held,
+    Answered(Result<(), u32>),
+}
+
+impl<T> Pending<T> {
+    fn new(body: T) -> Option<Box<Self>> {
+        Some(Box::new(Self {
+            overlapped: OVERLAPPED {
+                hEvent: event()?,
+                ..OVERLAPPED::default()
+            },
+            body,
+            handle: core::ptr::null_mut(),
+            state: State::Idle,
+        }))
+    }
+
+    /// Ask, the body going in and, where `back`, the answer coming out in it.
+    /// Each ask starts from a cleared overlapped, as the system asks of one
+    /// handed to it again; its event is kept.
+    fn ask(&mut self, bus: &Bus, code: u32, back: bool) {
+        self.handle = bus.handle;
+        self.overlapped = OVERLAPPED {
+            hEvent: self.overlapped.hEvent,
+            ..OVERLAPPED::default()
+        };
+        let size = size::<T>();
+        let body = core::ptr::from_mut(&mut self.body).cast::<core::ffi::c_void>();
+        let mut moved = 0u32;
+        // SAFETY: the body and the overlapped are this boxed request's and
+        // stay put until it is answered or cancelled and waited for.
+        let done = unsafe {
+            DeviceIoControl(
+                bus.handle,
+                code,
+                body,
+                size,
+                if back { body } else { core::ptr::null_mut() },
+                if back { size } else { 0 },
+                &raw mut moved,
+                &raw mut self.overlapped,
+            )
+        };
+        self.state = if done != 0 {
+            State::Answered(Ok(()))
+        } else {
+            match last_error() {
+                ERROR_IO_PENDING => State::Held,
+                error => State::Answered(Err(error)),
+            }
+        };
+    }
+
+    /// The answer, once there is one, taken.
+    fn answer(&mut self) -> Option<Result<(), u32>> {
+        match self.state {
+            State::Idle => None,
+            State::Answered(result) => {
+                self.state = State::Idle;
+                Some(result)
+            }
+            State::Held => {
+                let mut moved = 0u32;
+                // SAFETY: the request is this one's, on the handle it went to.
+                let done = unsafe {
+                    GetOverlappedResult(self.handle, &raw const self.overlapped, &raw mut moved, 0)
+                };
+                let result = if done != 0 {
+                    Ok(())
+                } else {
+                    match last_error() {
+                        ERROR_IO_INCOMPLETE => return None,
+                        error => Err(error),
+                    }
+                };
+                self.state = State::Idle;
+                Some(result)
+            }
+        }
+    }
+}
+
+impl<T> Drop for Pending<T> {
+    fn drop(&mut self) {
+        if self.state == State::Held {
+            let mut moved = 0u32;
+            // SAFETY: the request is this one's; it is waited for until the
+            // bus lets it go, after which nothing writes to it.
+            unsafe {
+                CancelIoEx(self.handle, &raw const self.overlapped);
+                GetOverlappedResult(self.handle, &raw const self.overlapped, &raw mut moved, 1);
+            }
+        }
+        // SAFETY: the event `new` made, closed once.
+        unsafe { CloseHandle(self.overlapped.hEvent) };
+    }
+}
+
+/// One pad on the bus, addressed by the identifier its peer gave it.
+struct Pad {
+    id: u32,
+    /// The bus's number for it.
+    serial: u32,
+    /// The whole pad as it stands, folded from its events; **held until the
+    /// bus says the pad is ready**, since each report is the whole pad and
+    /// the last is all that is owed.
+    report: gamepad::Report,
+    ready: bool,
+    waiting: Box<Pending<vigem::VIGEM_WAIT_DEVICE_READY>>,
+    asked: Box<Pending<vigem::XUSB_REQUEST_NOTIFICATION>>,
+    /// What was last reported, so an effect replayed at the same strength
+    /// does not put another message on the wire.
+    last_rumble: (u8, u8),
+    /// Set once, so a report the bus refuses is said rather than repeated.
+    refused: bool,
+    plugged: lowlat_common::clock::Time,
+}
+
+impl Pad {
+    /// Plug a pad in, at the first number the bus will give it, and ask to
+    /// be told when it is ready.
+    fn plug(bus: &Bus, id: u32) -> Result<Self, u32> {
+        let mut last = 0;
+        for serial in 1..=SERIALS {
+            let target = vigem::VIGEM_PLUGIN_TARGET {
+                Size: size::<vigem::VIGEM_PLUGIN_TARGET>(),
+                SerialNo: serial,
+                TargetType: vigem::Xbox360Wired,
+                VendorId: PAD_VENDOR,
+                ProductId: PAD_PRODUCT,
+            };
+            match bus.call(vigem::IOCTL_VIGEM_PLUGIN_TARGET, &target) {
+                Ok(()) => {
+                    let (Some(mut waiting), Some(asked)) = (
+                        Pending::new(vigem::VIGEM_WAIT_DEVICE_READY {
+                            Size: size::<vigem::VIGEM_WAIT_DEVICE_READY>(),
+                            SerialNo: serial,
+                        }),
+                        Pending::new(notification(serial)),
+                    ) else {
+                        let error = last_error();
+                        unplug(bus, serial);
+                        return Err(error);
+                    };
+                    waiting.ask(bus, vigem::IOCTL_VIGEM_WAIT_DEVICE_READY, false);
+                    return Ok(Self {
+                        id,
+                        serial,
+                        report: gamepad::Report::default(),
+                        ready: false,
+                        waiting,
+                        asked,
+                        last_rumble: (0, 0),
+                        refused: false,
+                        plugged: lowlat_common::clock::Time::now(),
+                    });
+                }
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
+
+    /// Whether the pad still stands: once the bus says it is ready, reports
+    /// go in from the next one and the first ask for its rumble goes out. A
+    /// bus too old to say counts as ready, as its pads are once plugged in.
+    fn settle(&mut self, bus: &Bus) -> bool {
+        if self.ready {
+            return true;
+        }
+        match self.waiting.answer() {
+            None => true,
+            Some(Ok(()) | Err(ERROR_INVALID_PARAMETER)) => {
+                self.ready = true;
+                lowlat_common::log_info!(
+                    "inject: pad ready, pad={} after_ms={:.0}",
+                    self.id,
+                    lowlat_common::clock::elapsed_ms(self.plugged)
+                );
+                self.asked
+                    .ask(bus, vigem::IOCTL_XUSB_REQUEST_NOTIFICATION, true);
+                true
+            }
+            Some(Err(error)) => {
+                lowlat_common::log_warn!(
+                    "inject: pad never became ready, pad={} error={error}",
+                    self.id
+                );
+                unplug(bus, self.serial);
+                false
+            }
+        }
+    }
+
+    /// Put the pad's report in, once it is ready.
+    fn submit(&mut self, bus: &Bus) {
+        if !self.ready {
+            return;
+        }
+        let report = vigem::XUSB_SUBMIT_REPORT {
+            Size: size::<vigem::XUSB_SUBMIT_REPORT>(),
+            SerialNo: self.serial,
+            Report: vigem::XUSB_REPORT {
+                wButtons: self.report.buttons,
+                bLeftTrigger: self.report.left_trigger,
+                bRightTrigger: self.report.right_trigger,
+                sThumbLX: self.report.lx,
+                sThumbLY: self.report.ly,
+                sThumbRX: self.report.rx,
+                sThumbRY: self.report.ry,
+            },
+        };
+        if let Err(error) = bus.call(vigem::IOCTL_XUSB_SUBMIT_REPORT, &report)
+            && !self.refused
+        {
+            self.refused = true;
+            lowlat_common::log_warn!("inject: pad report refused, pad={} error={error}", self.id);
+        }
+    }
+
+    /// What the pad was asked to vibrate at, when that changed, and the next
+    /// ask sent at once so no change falls between two.
+    fn rumbled(&mut self, bus: &Bus) -> Option<Rumble> {
+        match self.asked.answer()? {
+            Ok(()) => {
+                let heard = (self.asked.body.LargeMotor, self.asked.body.SmallMotor);
+                self.asked.body = notification(self.serial);
+                self.asked
+                    .ask(bus, vigem::IOCTL_XUSB_REQUEST_NOTIFICATION, true);
+                if heard == self.last_rumble {
+                    return None;
+                }
+                self.last_rumble = heard;
+                Some(Rumble {
+                    pad: self.id,
+                    large: heard.0,
+                    small: heard.1,
+                })
+            }
+            Err(error) => {
+                lowlat_common::log_warn!(
+                    "inject: pad rumble no longer heard, pad={} error={error}",
+                    self.id
+                );
+                None
+            }
+        }
+    }
+
+    /// Take the pad out of the bus, its requests let go first.
+    fn unplug(self, bus: &Bus) {
+        let serial = self.serial;
+        drop(self);
+        unplug(bus, serial);
+    }
+}
+
+fn notification(serial: u32) -> vigem::XUSB_REQUEST_NOTIFICATION {
+    vigem::XUSB_REQUEST_NOTIFICATION {
+        Size: size::<vigem::XUSB_REQUEST_NOTIFICATION>(),
+        SerialNo: serial,
+        LargeMotor: 0,
+        SmallMotor: 0,
+        LedNumber: 0,
+    }
+}
+
+fn unplug(bus: &Bus, serial: u32) {
+    let target = vigem::VIGEM_UNPLUG_TARGET {
+        Size: size::<vigem::VIGEM_UNPLUG_TARGET>(),
+        SerialNo: serial,
+    };
+    if let Err(error) = bus.call(vigem::IOCTL_VIGEM_UNPLUG_TARGET, &target) {
+        lowlat_common::log_warn!("inject: pad not unplugged, serial={serial} error={error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(keyboard: &mut Keyboard, codes: &[(u8, bool)]) -> Vec<Option<Stroke>> {
+        codes
+            .iter()
+            .map(|&(code, down)| keyboard.stroke(u16::from(code), down))
+            .collect()
+    }
+
+    /// An ordinary key is its code, the E0 half carried as the prefix flag.
+    #[test]
+    fn a_key_goes_out_as_its_scancode() {
+        let mut keyboard = Keyboard::default();
+        let delete = crate::usage::key_code(76).unwrap();
+        assert_eq!(
+            keyboard.stroke(delete, true),
+            Some(Stroke::Scan(0xd3)),
+            "delete"
+        );
+        let input = key_input(Stroke::Scan(0xd3), false);
+        // SAFETY: a keyboard input, read as one.
+        let ki = unsafe { input.Anonymous.ki };
+        assert_eq!(ki.wScan, 0x53);
+        assert_eq!(
+            ki.dwFlags,
+            KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+        );
+        let input = key_input(Stroke::Scan(0x1e), true);
+        // SAFETY: as above.
+        let ki = unsafe { input.Anonymous.ki };
+        assert_eq!((ki.wScan, ki.dwFlags), (0x1e, KEYEVENTF_SCANCODE));
+    }
+
+    /// **Pause is its virtual key, and Break under Ctrl**, as the system's
+    /// own translation has it; it comes up as the stroke it went down as,
+    /// whatever Ctrl did meanwhile.
+    #[test]
+    fn pause_is_its_virtual_key_and_break_under_ctrl() {
+        let mut keyboard = Keyboard::default();
+        assert_eq!(
+            keys(&mut keyboard, &[(PAUSE, true), (PAUSE, false)]),
+            [Some(Stroke::Virtual(VK_PAUSE)); 2]
+        );
+        assert_eq!(
+            keys(
+                &mut keyboard,
+                &[(LCTRL, true), (PAUSE, true), (LCTRL, false), (PAUSE, false)]
+            ),
+            [
+                Some(Stroke::Scan(LCTRL)),
+                Some(Stroke::Scan(PAUSE)),
+                Some(Stroke::Scan(LCTRL)),
+                Some(Stroke::Scan(PAUSE)),
+            ]
+        );
+        // Held through a Ctrl press, it repeats as it went down.
+        assert_eq!(
+            keys(
+                &mut keyboard,
+                &[(PAUSE, true), (RCTRL, true), (PAUSE, true), (PAUSE, false)]
+            ),
+            [
+                Some(Stroke::Virtual(VK_PAUSE)),
+                Some(Stroke::Scan(RCTRL)),
+                Some(Stroke::Virtual(VK_PAUSE)),
+                Some(Stroke::Virtual(VK_PAUSE)),
+            ]
+        );
+    }
+
+    /// **PrintScreen is its own code, and SysRq under either Alt.**
+    #[test]
+    fn print_screen_is_sysrq_under_alt() {
+        let mut keyboard = Keyboard::default();
+        assert_eq!(
+            keyboard.stroke(u16::from(SYSRQ.0), true),
+            Some(Stroke::Scan(0xb7))
+        );
+        keyboard.stroke(u16::from(SYSRQ.0), false);
+        assert_eq!(
+            keys(
+                &mut keyboard,
+                &[
+                    (RALT, true),
+                    (SYSRQ.0, true),
+                    (RALT, false),
+                    (SYSRQ.0, false)
+                ]
+            ),
+            [
+                Some(Stroke::Scan(RALT)),
+                Some(Stroke::Scan(0x54)),
+                Some(Stroke::Scan(RALT)),
+                Some(Stroke::Scan(0x54)),
+            ]
+        );
+    }
+
+    /// A key that sends no break sends nothing as it comes up, and its code
+    /// is never read as the prefix flag.
+    #[test]
+    fn a_make_only_key_is_sent_down_and_never_up() {
+        let mut keyboard = Keyboard::default();
+        for code in MAKE_ONLY {
+            assert_eq!(
+                keyboard.stroke(u16::from(code), true),
+                Some(Stroke::Make(code))
+            );
+            assert_eq!(keyboard.stroke(u16::from(code), false), None);
+        }
+        let input = key_input(Stroke::Make(0xf2), true);
+        // SAFETY: a keyboard input, read as one.
+        let ki = unsafe { input.Anonymous.ki };
+        assert_eq!((ki.wScan, ki.dwFlags), (0xf2, KEYEVENTF_SCANCODE));
+    }
+
+    fn flags(inputs: &Inputs) -> Vec<(i32, i32, u32, u32)> {
+        inputs
+            .as_slice()
+            .iter()
+            .map(|input| {
+                // SAFETY: every input the pointer path makes is a mouse one.
+                let mi = unsafe { input.Anonymous.mi };
+                (mi.dx, mi.dy, mi.mouseData, mi.dwFlags)
+            })
+            .collect()
+    }
+
+    /// One move a report, absolute over the virtual desktop or relative; the
+    /// wheels' fine axes in the units the peer counted and the stepped ones
+    /// dropped; the side buttons as the extra buttons.
+    #[test]
+    fn a_pointer_batch_becomes_the_calls_mouse_inputs() {
+        use crate::event::{Extents, Injector};
+        use lowlat_core::control::{Control, op};
+        #[derive(Default)]
+        struct Last(Vec<Event>);
+        impl Sink for Last {
+            fn emit(&mut self, _device: Device, events: &[Event]) {
+                self.0.extend_from_slice(events);
+            }
+        }
+        let control = |opcode, a0, a1, a2| Control {
+            a0,
+            a1,
+            a2,
+            opcode,
+            body: &[],
+        };
+        let mut inject = Injector::new(Extents::alone(1920, 1080));
+        let mut last = Last::default();
+        inject.on_control(&control(op::MOUSE_MOTION, 0, 1920, 1080), &mut last);
+        inject.on_control(&control(op::MOUSE_MOTION, 1, 5, (-7i32) as u32), &mut last);
+        inject.on_control(
+            &control(op::MOUSE_WHEEL, 30, (-120i32) as u32, 0),
+            &mut last,
+        );
+        inject.on_control(&control(op::MOUSE_BUTTON, 4, 1, 0), &mut last);
+        inject.on_control(&control(op::MOUSE_BUTTON, 1, 1, 0), &mut last);
+        let mut inputs = Inputs::new();
+        pointer_inputs(&last.0, &mut inputs);
+        assert_eq!(
+            flags(&inputs),
+            vec![
+                // The centre of the last pixel each way, for an input stack
+                // that truncates value * extent / 65536.
+                (65518, 65505, 0, ABSOLUTE),
+                (5, -7, 0, MOUSEEVENTF_MOVE),
+                (0, 0, bits(-120), MOUSEEVENTF_WHEEL),
+                (0, 0, 30, MOUSEEVENTF_HWHEEL),
+                (0, 0, u32::from(XBUTTON1), MOUSEEVENTF_XDOWN),
+                (0, 0, 0, MOUSEEVENTF_LEFTDOWN),
+            ]
+        );
+    }
+}
+
+/// Tests that plug a pad into the running system's bus.
+///
+/// **Excluded from the default suite.** A pad appears to every program on the
+/// desk while one runs. Run them deliberately:
+///
+/// ```text
+/// cargo test -p lowlat-inject -- --ignored --test-threads 1
+/// ```
+#[cfg(test)]
+mod bus_tests {
+    use super::*;
+    use crate::event::{Extents, Injector};
+    use lowlat_core::control::{Control, op};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::Input::XboxController::{
+        XINPUT_STATE, XINPUT_VIBRATION, XInputGetState, XInputSetState, XUSER_MAX_COUNT,
+    };
+
+    /// The pad slots a game sees connected now.
+    fn connected() -> Vec<u32> {
+        (0..XUSER_MAX_COUNT)
+            .filter(|&index| {
+                let mut state = XINPUT_STATE::default();
+                // SAFETY: a live state for the call to fill.
+                unsafe { XInputGetState(index, &raw mut state) == 0 }
+            })
+            .collect()
+    }
+
+    fn state(index: u32) -> Option<XINPUT_STATE> {
+        let mut state = XINPUT_STATE::default();
+        // SAFETY: as above.
+        (unsafe { XInputGetState(index, &raw mut state) } == 0).then_some(state)
+    }
+
+    /// Run the loop's own calls until `done` says so, or give up.
+    fn until(devices: &mut Devices, within: Duration, mut done: impl FnMut(&mut Devices) -> bool) {
+        let started = Instant::now();
+        while !done(devices) {
+            assert!(started.elapsed() < within, "gave up after {within:?}");
+            devices.tick();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// **A whole state reaches a game as the pad it says**, from the bus's
+    /// ready on, with up still up; **what a game asks it to vibrate at comes
+    /// back** for the peer; and the pad's own message takes it away again.
+    #[test]
+    #[ignore = "plugs a pad into the system's bus"]
+    fn a_pad_reaches_a_game_and_its_rumble_comes_back() {
+        let before = connected();
+        let mut devices = Devices::create("bus-test").expect("devices");
+        let mut inject = Injector::new(Extents::alone(1920, 1080));
+        let mut body = vec![0xAB, 0xCD, 0xEF];
+        body.extend_from_slice(&(gamepad::bit::A | gamepad::bit::DPAD_LEFT).to_be_bytes());
+        for value in [1_000i16, 20_000, -300, -32_767] {
+            body.extend_from_slice(&value.to_be_bytes());
+        }
+        body.extend_from_slice(&[7, 250]);
+        let message = Control {
+            a0: 7,
+            a1: 0,
+            a2: 0,
+            opcode: op::GAMEPAD_STATE,
+            body: &body,
+        };
+        let plugged = Instant::now();
+        inject.on_control(&message, &mut devices);
+        until(&mut devices, Duration::from_secs(5), |d| {
+            d.pads.iter().flatten().any(|pad| pad.ready)
+        });
+        let ready_ms = plugged.elapsed().as_secs_f64() * 1000.0;
+
+        let mut index = None;
+        until(&mut devices, Duration::from_secs(5), |_| {
+            index = connected().into_iter().find(|i| !before.contains(i));
+            index.is_some()
+        });
+        let index = index.unwrap();
+        let seen_ms = plugged.elapsed().as_secs_f64() * 1000.0;
+        let pad = state(index).unwrap().Gamepad;
+        assert_eq!(
+            pad.wButtons,
+            gamepad::bit::A | gamepad::bit::DPAD_LEFT,
+            "buttons"
+        );
+        assert_eq!(
+            (pad.sThumbLX, pad.sThumbLY, pad.sThumbRX, pad.sThumbRY),
+            (1_000, 20_000, -300, -32_767)
+        );
+        assert_eq!((pad.bLeftTrigger, pad.bRightTrigger), (7, 250));
+
+        let vibration = XINPUT_VIBRATION {
+            wLeftMotorSpeed: 0x8080,
+            wRightMotorSpeed: 0x4040,
+        };
+        // SAFETY: a live vibration for the call to read.
+        assert_eq!(unsafe { XInputSetState(index, &raw const vibration) }, 0);
+        let mut heard = None;
+        until(&mut devices, Duration::from_secs(2), |d| {
+            heard = d.rumble();
+            heard.is_some()
+        });
+        assert_eq!(
+            heard,
+            Some(Rumble {
+                pad: 7,
+                large: 0x80,
+                small: 0x40
+            })
+        );
+        let stop = XINPUT_VIBRATION::default();
+        // SAFETY: as above.
+        unsafe { XInputSetState(index, &raw const stop) };
+
+        inject.on_control(
+            &Control {
+                a0: 0,
+                a1: 0,
+                a2: 7,
+                opcode: op::GAMEPAD_UNPLUG,
+                body: &[],
+            },
+            &mut devices,
+        );
+        until(&mut devices, Duration::from_secs(5), |_| {
+            !connected().contains(&index)
+        });
+        println!("ready after {ready_ms:.0} ms, seen by a game after {seen_ms:.0} ms");
+    }
+
+    /// **A guest that leaves takes its pads with it**, whatever path it
+    /// leaves by: its devices go, and the bus closing unplugs what is left.
+    #[test]
+    #[ignore = "plugs a pad into the system's bus"]
+    fn a_guests_pads_go_with_its_devices() {
+        let before = connected();
+        let mut devices = Devices::create("bus-test").expect("devices");
+        let mut inject = Injector::new(Extents::alone(1920, 1080));
+        let body = [0u8; 15];
+        inject.on_control(
+            &Control {
+                a0: 3,
+                a1: 0,
+                a2: 0,
+                opcode: op::GAMEPAD_STATE,
+                body: &body,
+            },
+            &mut devices,
+        );
+        let mut index = None;
+        until(&mut devices, Duration::from_secs(5), |_| {
+            index = connected().into_iter().find(|i| !before.contains(i));
+            index.is_some()
+        });
+        let index = index.unwrap();
+        drop(devices);
+        let started = Instant::now();
+        while connected().contains(&index) {
+            assert!(started.elapsed() < Duration::from_secs(5), "the pad stayed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }

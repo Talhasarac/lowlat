@@ -179,6 +179,85 @@ pub fn trigger_from_axis(value: i16) -> i32 {
     (TRIGGER_RANGE * i32::from(value) / STICK_RANGE).clamp(0, TRIGGER_RANGE)
 }
 
+/// A pad's whole state as an Xbox 360 pad reports it, for a device that is
+/// handed whole reports: the buttons as [`bit`]s, the sticks with away from
+/// the player positive, the triggers as bytes.
+///
+/// **Folded back from the pad's events**, the inverse of the mapping above,
+/// so the expander stays the one place a peer's messages are read. Two things
+/// do not survive the trip: a vertical stick at the very end of its range
+/// comes back one short, since the signed range turned over is one short of
+/// itself, and a direction pad held both ways at once comes back centred,
+/// since the axis it went through cannot say both.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Report {
+    pub buttons: u16,
+    pub lx: i16,
+    pub ly: i16,
+    pub rx: i16,
+    pub ry: i16,
+    pub left_trigger: u8,
+    pub right_trigger: u8,
+}
+
+impl Report {
+    /// Take one batch of a pad's events into the report.
+    pub fn apply(&mut self, events: &[crate::event::Event]) {
+        for event in events {
+            match event.kind {
+                crate::event::EV_KEY => {
+                    let Some(bit) = KEYED_BITS
+                        .into_iter()
+                        .find(|&bit| key_for_bit(bit) == Some(event.code))
+                    else {
+                        continue;
+                    };
+                    if event.value == 0 {
+                        self.buttons &= !bit;
+                    } else {
+                        self.buttons |= bit;
+                    }
+                }
+                crate::event::EV_ABS => self.axis(event.code, event.value),
+                _ => {}
+            }
+        }
+    }
+
+    fn axis(&mut self, code: u16, value: i32) {
+        match code {
+            axis::X => self.lx = signed(value),
+            axis::Y => self.ly = signed(value.saturating_neg()),
+            axis::RX => self.rx = signed(value),
+            axis::RY => self.ry = signed(value.saturating_neg()),
+            axis::Z => self.left_trigger = u8::try_from(value.clamp(0, 255)).unwrap_or(0),
+            axis::RZ => self.right_trigger = u8::try_from(value.clamp(0, 255)).unwrap_or(0),
+            axis::HAT0X => {
+                self.buttons = direction(self.buttons, value, bit::DPAD_LEFT, bit::DPAD_RIGHT);
+            }
+            axis::HAT0Y => {
+                self.buttons = direction(self.buttons, value, bit::DPAD_UP, bit::DPAD_DOWN);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An axis value as a stick's sixteen bits, held to their range.
+fn signed(value: i32) -> i16 {
+    i16::try_from(value.clamp(i32::from(i16::MIN), i32::from(i16::MAX))).unwrap_or(0)
+}
+
+/// The direction pad's two bits on one axis, from the axis's value.
+fn direction(buttons: u16, value: i32, negative: u16, positive: u16) -> u16 {
+    let rest = buttons & !(negative | positive);
+    match value.signum() {
+        -1 => rest | negative,
+        1 => rest | positive,
+        _ => rest,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

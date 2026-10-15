@@ -1404,6 +1404,13 @@ impl Display {
         }
     }
 
+    /// Whether something holds the pointer's motion: never said here, as
+    /// nothing below the session reports the intent (docs/05-host.md section
+    /// 8.2).
+    pub fn relative(&self) -> bool {
+        false
+    }
+
     /// Whether anything is still plugged into the device being captured.
     ///
     /// **A controller that lost its connector keeps scanning out**, holding

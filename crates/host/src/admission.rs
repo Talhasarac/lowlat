@@ -2573,6 +2573,9 @@ fn drive<M: Media>(
         // nothing further, so there is no message to answer.
         if let Some(input) = input.as_mut() {
             input.sink.tick();
+            input
+                .injector
+                .set_relative(seat.as_ref().is_some_and(SeatHold::relative));
             follow_pointer(input, &args.floor, args.guest, now);
             // **What a local application asks a pad to do goes back to the
             // peer holding it.** Nothing on this machine can vibrate; the

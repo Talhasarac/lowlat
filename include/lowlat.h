@@ -256,7 +256,8 @@
 
 #define LOWLAT_PAD_DPAD_RIGHT 14
 
-/// Pad axes for `lowlat_client_send_pad_axis`. Sticks span the signed range;
+/// Pad axes for `lowlat_client_send_pad_axis`. Sticks span the signed range,
+/// pushed right or away from the player positive, as in `lowlat_pad_state`;
 /// triggers run from zero.
 #define LOWLAT_PAD_AXIS_LX 0
 
@@ -1687,7 +1688,9 @@ typedef struct lowlat_client_config {
     char relay_password[LOWLAT_RELAY_CREDENTIAL_MAX];
 } lowlat_client_config;
 
-/// A whole pad at one moment, for `lowlat_client_send_pad_state`.
+/// A whole pad at one moment, for `lowlat_client_send_pad_state`. Sticks
+/// span the signed range, pushed right or away from the player positive;
+/// triggers run from zero.
 typedef struct lowlat_pad_state {
     /// Set by the caller to `sizeof(lowlat_pad_state)`.
     uint32_t size;
@@ -3039,7 +3042,8 @@ lowlat_status lowlat_client_send_pad_button(lowlat_client *cl,
 /// @param[in] cl The handle from `lowlat_client_create`.
 /// @param[in] pad The pad.
 /// @param[in] axis One of `LOWLAT_PAD_AXIS_*`.
-/// @param[in] value The position: a stick over the signed range, a trigger from zero.
+/// @param[in] value The position: a stick over the signed range, away from the player
+/// positive as in a whole state, a trigger from zero.
 /// @returns `LOWLAT_OK`, or `LOWLAT_ERR_NOT_STARTED` with no session up.
 ///
 /// @attention `cl` came from `lowlat_client_create`.

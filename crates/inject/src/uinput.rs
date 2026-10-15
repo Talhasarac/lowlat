@@ -14,7 +14,7 @@ use crate::gamepad::{self, MAX_PADS};
 use crate::uhid::{self, HidPad};
 use crate::usage;
 use core::fmt::Write as _;
-use lowlat_core::pad::{INPUT_LEN, Inbound, Product};
+use lowlat_core::pad::{Inbound, Product};
 use std::os::fd::{AsRawFd as _, OwnedFd};
 
 /// Request numbers, as the kernel's own headers compute them.
@@ -829,101 +829,8 @@ struct HidSlot {
     refused: bool,
 }
 
+use crate::handback::Forwarding;
 pub use crate::handback::{Forward, Forwarded, PadWritten};
-
-/// The report pads of a guest whose application holds the devices.
-///
-/// **The same rules as a device of this host's own, without the device.** The
-/// product is fixed by the pad's first report; nothing is kept, because the
-/// application's device is what needs the feature reports and it is given
-/// them in the order they came; and the pad's end is told, on an unplug and
-/// on the guest's, which is what lets the application destroy its device on
-/// the same rule the host destroys its own.
-#[derive(Debug)]
-struct Forwarding {
-    to: Forward,
-    pads: [Option<(u32, Product)>; MAX_PADS],
-}
-
-impl Forwarding {
-    fn new(to: Forward) -> Self {
-        Self {
-            to,
-            pads: [const { None }; MAX_PADS],
-        }
-    }
-
-    fn report(&mut self, pad: u32, inbound: &Inbound<'_>) {
-        let (product, forwarded) = match *inbound {
-            Inbound::Input { product, report } => (
-                product,
-                Forwarded::Input {
-                    pad,
-                    product,
-                    report,
-                },
-            ),
-            Inbound::Feature {
-                product, report, ..
-            } => {
-                let mut bytes = [0u8; INPUT_LEN];
-                let len = report.len().min(bytes.len());
-                if let (Some(target), Some(source)) = (bytes.get_mut(..len), report.get(..len)) {
-                    target.copy_from_slice(source);
-                }
-                (
-                    product,
-                    Forwarded::Feature {
-                        pad,
-                        product,
-                        len,
-                        report: bytes,
-                    },
-                )
-            }
-            Inbound::TouchBlock => return,
-        };
-        match self.pads.iter().flatten().find(|(id, _)| *id == pad) {
-            // Fixed by the first report; one naming another product is not
-            // this pad's.
-            Some((_, fixed)) if *fixed != product => return,
-            Some(_) => {}
-            None => {
-                // The expander's cap is in front of this, so there is room.
-                let Some(slot) = self.pads.iter_mut().find(|slot| slot.is_none()) else {
-                    return;
-                };
-                *slot = Some((pad, product));
-            }
-        }
-        (self.to.0)(forwarded);
-    }
-
-    /// Whether the pad was one forwarded, and so one the application was
-    /// told about.
-    fn unplug(&mut self, pad: u32) -> bool {
-        let Some((_, product)) = self
-            .pads
-            .iter_mut()
-            .find(|slot| slot.is_some_and(|(id, _)| id == pad))
-            .and_then(Option::take)
-        else {
-            return false;
-        };
-        (self.to.0)(Forwarded::Unplugged { pad, product });
-        true
-    }
-}
-
-impl Drop for Forwarding {
-    /// **A guest's end ends its pads.** The devices of this host's own go
-    /// with their descriptors; the application is told, pad by pad.
-    fn drop(&mut self) {
-        for (pad, product) in self.pads.iter_mut().filter_map(Option::take) {
-            (self.to.0)(Forwarded::Unplugged { pad, product });
-        }
-    }
-}
 
 /// One pad's device, addressed by the identifier its peer gave it.
 #[derive(Debug)]
@@ -1566,114 +1473,6 @@ mod held_tests {
     }
 }
 
-#[cfg(test)]
-mod forwarding_tests {
-    use super::*;
-    use lowlat_core::pad::Feature;
-    use std::sync::{Arc, Mutex};
-
-    /// A forwarding whose every call is written down.
-    fn forwarding() -> (Forwarding, Arc<Mutex<Vec<Forwarded>>>) {
-        let told = Arc::new(Mutex::new(Vec::new()));
-        let into = Arc::clone(&told);
-        let forwarding = Forwarding::new(Forward(Box::new(move |forwarded| {
-            into.lock().unwrap().push(forwarded);
-        })));
-        (forwarding, told)
-    }
-
-    const DS5: &[u8; 64] = include_bytes!("../../core/tests/data/pad/ds5/input-idle.bin");
-    const DS4: &[u8; 64] = include_bytes!("../../core/tests/data/pad/ds4/input-idle.bin");
-    const CALIBRATION: &[u8] =
-        include_bytes!("../../core/tests/data/pad/ds5/feature-calibration.bin");
-
-    /// **The reports reach the application in the order they came**, the
-    /// feature report whole with its length, the input report whole; the
-    /// established peer's block reaches nobody; the product is fixed by the
-    /// first report, so one naming another is not this pad's.
-    #[test]
-    fn reports_are_forwarded_in_order_and_the_product_is_fixed() {
-        let (mut forwarding, told) = forwarding();
-        forwarding.report(
-            3,
-            &Inbound::Feature {
-                product: Product::DualSense,
-                feature: Feature::Calibration,
-                report: CALIBRATION,
-            },
-        );
-        forwarding.report(
-            3,
-            &Inbound::Input {
-                product: Product::DualSense,
-                report: *DS5,
-            },
-        );
-        forwarding.report(3, &Inbound::TouchBlock);
-        forwarding.report(
-            3,
-            &Inbound::Input {
-                product: Product::DualShock4,
-                report: *DS4,
-            },
-        );
-        let told = told.lock().unwrap();
-        assert_eq!(told.len(), 2, "{told:?}");
-        assert!(
-            matches!(
-                told[0],
-                Forwarded::Feature {
-                    pad: 3,
-                    product: Product::DualSense,
-                    len: 41,
-                    ref report
-                } if &report[..41] == CALIBRATION
-            ),
-            "{:?}",
-            told[0]
-        );
-        assert!(matches!(
-            told[1],
-            Forwarded::Input {
-                pad: 3,
-                product: Product::DualSense,
-                report
-            } if report == *DS5
-        ));
-    }
-
-    /// **The pad's end is told after its last report**, on an unplug and on
-    /// the guest's own end, once each; a pad never forwarded is nobody's to
-    /// tell about.
-    #[test]
-    fn a_pads_end_is_told_once_and_the_guests_end_tells_the_rest() {
-        let (mut forwarding, told) = forwarding();
-        for pad in [3, 4] {
-            forwarding.report(
-                pad,
-                &Inbound::Input {
-                    product: Product::DualShock4,
-                    report: *DS4,
-                },
-            );
-        }
-        assert!(forwarding.unplug(3));
-        assert!(!forwarding.unplug(3), "told twice");
-        assert!(!forwarding.unplug(9), "a pad never forwarded");
-        drop(forwarding);
-        let told = told.lock().unwrap();
-        let ends: Vec<u32> = told
-            .iter()
-            .filter_map(|f| match f {
-                Forwarded::Unplugged { pad, .. } => Some(*pad),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(ends, [3, 4]);
-        assert_eq!(told.len(), 4);
-    }
-}
-
 /// Tests that create real devices.
 ///
 /// **Excluded from the default suite.** They publish devices to the running
@@ -2013,7 +1812,8 @@ mod device_tests {
     }
 
     /// The absolute pointer reaches the far corner, which is the check that
-    /// the scaling and the inclusive extent agree.
+    /// the scaling and the inclusive extent agree: the centre of the last
+    /// pixel, which the input stack takes back to that pixel.
     #[test]
     #[ignore = "creates real input devices"]
     fn absolute_motion_reaches_the_far_corner() {
@@ -2031,7 +1831,11 @@ mod device_tests {
             .filter(|(kind, _, _)| *kind == 0x03)
             .map(|(_, code, value)| (code, value))
             .collect();
-        assert_eq!(absolute, vec![(ABS_X, ABS_RANGE), (ABS_Y, ABS_RANGE)]);
+        let centre = |pixel: i32, desktop: i32| (2 * pixel + 1) * (ABS_RANGE + 1) / (2 * desktop);
+        assert_eq!(
+            absolute,
+            vec![(ABS_X, centre(1919, 1920)), (ABS_Y, centre(1079, 1080))]
+        );
     }
 
     /// **Events produced before the device can deliver are held, not lost.**

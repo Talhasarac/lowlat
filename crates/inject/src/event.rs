@@ -12,30 +12,30 @@ use lowlat_core::control::{Control, op};
 use lowlat_core::pad::{self, Inbound};
 
 /// Event types, as the kernel numbers them.
-const EV_SYN: u16 = 0x00;
-const EV_KEY: u16 = 0x01;
-const EV_REL: u16 = 0x02;
-const EV_ABS: u16 = 0x03;
+pub(crate) const EV_SYN: u16 = 0x00;
+pub(crate) const EV_KEY: u16 = 0x01;
+pub(crate) const EV_REL: u16 = 0x02;
+pub(crate) const EV_ABS: u16 = 0x03;
 const EV_MSC: u16 = 0x04;
 
 const SYN_REPORT: u16 = 0;
 const MSC_SCAN: u16 = 4;
 
-const REL_X: u16 = 0x00;
-const REL_Y: u16 = 0x01;
+pub(crate) const REL_X: u16 = 0x00;
+pub(crate) const REL_Y: u16 = 0x01;
 const REL_HWHEEL: u16 = 0x06;
 const REL_WHEEL: u16 = 0x08;
-const REL_WHEEL_HI_RES: u16 = 0x0b;
-const REL_HWHEEL_HI_RES: u16 = 0x0c;
+pub(crate) const REL_WHEEL_HI_RES: u16 = 0x0b;
+pub(crate) const REL_HWHEEL_HI_RES: u16 = 0x0c;
 
-const ABS_X: u16 = 0x00;
-const ABS_Y: u16 = 0x01;
+pub(crate) const ABS_X: u16 = 0x00;
+pub(crate) const ABS_Y: u16 = 0x01;
 
-const BTN_LEFT: u16 = 0x110;
-const BTN_RIGHT: u16 = 0x111;
-const BTN_MIDDLE: u16 = 0x112;
-const BTN_SIDE: u16 = 0x113;
-const BTN_EXTRA: u16 = 0x114;
+pub(crate) const BTN_LEFT: u16 = 0x110;
+pub(crate) const BTN_RIGHT: u16 = 0x111;
+pub(crate) const BTN_MIDDLE: u16 = 0x112;
+pub(crate) const BTN_SIDE: u16 = 0x113;
+pub(crate) const BTN_EXTRA: u16 = 0x114;
 
 const KEY_CAPSLOCK: u16 = 58;
 const KEY_NUMLOCK: u16 = 69;
@@ -82,7 +82,7 @@ const BUTTONS: usize = 5;
 ///
 /// A mass release is chunked into as many of these as it needs, and each
 /// chunk ends at a report boundary, so a consumer never sees half a report.
-const SCRATCH: usize = 64;
+pub(crate) const SCRATCH: usize = 64;
 
 /// One kernel input event, without the timestamp the kernel fills in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +128,32 @@ pub trait Sink {
     /// an input report to write into it -- the first of which creates it.
     /// Nothing is expanded here; the report is the device's own.
     fn report(&mut self, _pad: u32, _inbound: &Inbound<'_>) {}
+
+    /// Whether a pad's own report has anywhere to go: a device presented as
+    /// that product, or an application holding one.
+    ///
+    /// **A sink that says no never sees a report**, and the pad is made from
+    /// the whole states a peer sends beside its reports instead. Taken, the
+    /// first report would fix the pad as one that drops those states, and the
+    /// peer's controller would do nothing at all.
+    fn takes_reports(&self) -> bool {
+        true
+    }
+
+    /// The host's own lock state, where the platform can read it.
+    ///
+    /// **Nothing below a display server can**, which is the default; where it
+    /// is read, a lock is corrected towards the peer's from the first message.
+    fn host_locks(&self) -> Option<Locks> {
+        None
+    }
+}
+
+/// Which locks are on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Locks {
+    pub num: bool,
+    pub caps: bool,
 }
 
 /// What a guest is allowed to drive.
@@ -243,7 +269,7 @@ pub struct Injector {
     /// Which pointer moved last, so a click lands on the device the position
     /// came from.
     absolute: bool,
-    /// The last absolute position, kept only for the hidden-pointer case.
+    /// The last absolute position, kept only while the pointer is held.
     last_abs: Option<(i32, i32)>,
     /// The last absolute position injected, in the picture's own pixels.
     ///
@@ -252,13 +278,14 @@ pub struct Injector {
     /// it ended up. Nothing reports a pointer's hotspot, and the difference
     /// between this and where the display then drew the pointer is exactly it.
     commanded: Option<(i32, i32)>,
-    /// Whether the local pointer is hidden, which is a peer-independent
-    /// statement that motion is being used to aim rather than to point.
-    hidden: bool,
+    /// Whether an application on the host holds the pointer, which is a
+    /// peer-independent statement that motion is being used to aim rather
+    /// than to point (docs/05-host.md section 7).
+    relative: bool,
     /// What the peer last said its locks were. `None` until it says anything:
-    /// the first message sets the baseline and taps nothing, because a host
-    /// below the display server cannot read the state it would be correcting
-    /// towards and a guess is wrong half the time.
+    /// below a display server the first message sets the baseline and taps
+    /// nothing, because the state it would be correcting towards cannot be
+    /// read and a guess is wrong half the time.
     num_lock: Option<bool>,
     caps_lock: Option<bool>,
     /// Whether this guest currently has the pointer.
@@ -305,7 +332,7 @@ impl Injector {
             absolute: false,
             last_abs: None,
             commanded: None,
-            hidden: false,
+            relative: false,
             num_lock: None,
             caps_lock: None,
             floor: true,
@@ -377,17 +404,20 @@ impl Injector {
             .map(|pad| pad.id)
     }
 
-    /// Report whether the local pointer is hidden.
+    /// Report whether an application on the host holds the pointer.
     ///
-    /// Nothing calls this yet; the signal is a property of the captured
-    /// session and arrives with capture (docs/05-host.md section 8.2). The
-    /// conversion it drives is here because it owns the last-position state,
-    /// which every motion path has to maintain either way.
-    pub fn set_cursor_hidden(&mut self, hidden: bool) {
-        if !hidden {
+    /// **The intent, not the overlay** (docs/05-host.md section 8.1): the
+    /// pointer hidden by the system's show state, or a picture of one value,
+    /// read as motion arrives. A pointer that merely left the captured output
+    /// is not held, and converting its motion would lose it. The display
+    /// that has a source for the signal publishes it; the conversion is here
+    /// because it owns the last-position state, which every motion path has
+    /// to maintain either way.
+    pub fn set_relative(&mut self, relative: bool) {
+        if !relative {
             self.last_abs = None;
         }
-        self.hidden = hidden;
+        self.relative = relative;
     }
 
     /// What this guest has sent, by kind.
@@ -559,12 +589,13 @@ impl Injector {
 
     /// A pad's own report: to the sink for a pad that is, or becomes, a
     /// report pad. An established peer's ten-byte block names no product and
-    /// creates nothing; a report for a sixteen-button pad is dropped.
+    /// creates nothing; a report for a sixteen-button pad is dropped, and so
+    /// is every report a sink has nowhere to put.
     fn pad_report(&mut self, message: &Control<'_>, out: &mut impl Sink) {
         let Some(inbound) = pad::parse_report(message) else {
             return;
         };
-        if matches!(inbound, Inbound::TouchBlock) {
+        if matches!(inbound, Inbound::TouchBlock) || !out.takes_reports() {
             return;
         }
         let Some(index) = self.pad(message.a1, true, out) else {
@@ -655,12 +686,16 @@ impl Injector {
     }
 
     /// One axis of one pad.
+    ///
+    /// **The vertical axes point down here**, unlike the whole state's
+    /// (docs/01-protocol.md section 11.1), which is the axis's own direction,
+    /// so nothing is inverted.
     fn axis(&mut self, id: u32, which: u32, value: i16, out: &mut impl Sink) {
         let (code, scaled) = match which {
             0 => (gamepad::axis::X, gamepad::stick(value, false)),
-            1 => (gamepad::axis::Y, gamepad::stick(value, true)),
+            1 => (gamepad::axis::Y, gamepad::stick(value, false)),
             2 => (gamepad::axis::RX, gamepad::stick(value, false)),
-            3 => (gamepad::axis::RY, gamepad::stick(value, true)),
+            3 => (gamepad::axis::RY, gamepad::stick(value, false)),
             4 => (gamepad::axis::Z, gamepad::trigger_from_axis(value)),
             5 => (gamepad::axis::RZ, gamepad::trigger_from_axis(value)),
             _ => return,
@@ -739,6 +774,20 @@ impl Injector {
             traced(code, modifiers, pressed, 0, "no-key");
             return;
         };
+        let host = out.host_locks();
+        // **Where the host's locks can be read, a lock key is the peer's lock
+        // state, never a keystroke.** A peer whose platform reports a lock as
+        // a modifier sends the key down as the lock goes on and up as it goes
+        // off, so a key passed through toggles the host once every two
+        // presses; every peer's message carries the state, and the host is
+        // brought to it.
+        if host.is_some() && (key == KEY_CAPSLOCK || key == KEY_NUMLOCK) {
+            self.used = 0;
+            self.lock_sync(modifiers, key, host);
+            self.flush(Device::Keyboard, out);
+            traced(code, modifiers, pressed, key, "lock");
+            return;
+        }
         let Some(held) = self.keys.get_mut(usize::from(key)) else {
             traced(code, modifiers, pressed, key, "no-slot");
             return;
@@ -754,7 +803,7 @@ impl Injector {
         *held = pressed;
 
         self.used = 0;
-        self.lock_sync(modifiers, key);
+        self.lock_sync(modifiers, key, host);
         self.key_events(peer_code, key, pressed);
         self.flush(Device::Keyboard, out);
         traced(code, modifiers, pressed, key, "sent");
@@ -768,24 +817,34 @@ impl Injector {
     /// with a state this machine never applied, and from then on every letter
     /// it types is the wrong case.
     ///
-    /// Only a change is acted on, and never on the message carrying the lock
-    /// key itself: that key is being injected anyway and would toggle twice.
+    /// Only a change is acted on, and below a display server never on the
+    /// message carrying the lock key itself: that key is being injected
+    /// anyway and would toggle twice.
     ///
-    /// **The initial state cannot be repaired here.** Correcting towards the
-    /// local state means reading it, and there is nothing below the display
-    /// server that reports it for the seat. The nearest thing is the light on
-    /// a physical keyboard, which is exposed by the kernel and which the
-    /// display server does drive, but it presumes a physical keyboard exists
-    /// and is one keyboard's answer to a question about the seat. It is not
-    /// used, and the drift it would fix is one-time and self-correcting the
-    /// first time anybody presses the key.
-    fn lock_sync(&mut self, modifiers: u32, injected: u16) {
+    /// **Where the host's own state can be read, a change is corrected
+    /// towards it**: a lock is tapped only where the host's differs, so a lock
+    /// already where the peer has it is left alone. The peer's first message
+    /// counts for a lock it has on and not for one it has off, since a peer
+    /// with no such key reports it off and would turn the host's off. The
+    /// lock key's own message is the peer's state outright.
+    ///
+    /// **Below a display server the initial state cannot be repaired.**
+    /// Correcting towards the local state means reading it, and there is
+    /// nothing there that reports it for the seat. The nearest thing is the
+    /// light on a physical keyboard, which is exposed by the kernel and which
+    /// the display server does drive, but it presumes a physical keyboard
+    /// exists and is one keyboard's answer to a question about the seat. It is
+    /// not used, and the drift it would fix is one-time and self-correcting
+    /// the first time anybody presses the key.
+    fn lock_sync(&mut self, modifiers: u32, injected: u16, host: Option<Locks>) {
         let num = modifiers & MOD_NUM != 0;
-        if self.num_lock.replace(num) == Some(!num) && injected != KEY_NUMLOCK {
+        let was = self.num_lock.replace(num);
+        if lock_owed(was, num, host.map(|h| h.num), injected == KEY_NUMLOCK) {
             self.tap(USAGE_NUM_LOCK, KEY_NUMLOCK);
         }
         let caps = modifiers & MOD_CAPS != 0;
-        if self.caps_lock.replace(caps) == Some(!caps) && injected != KEY_CAPSLOCK {
+        let was = self.caps_lock.replace(caps);
+        if lock_owed(was, caps, host.map(|h| h.caps), injected == KEY_CAPSLOCK) {
             self.tap(USAGE_CAPS_LOCK, KEY_CAPSLOCK);
         }
     }
@@ -883,13 +942,13 @@ impl Injector {
             return;
         }
 
-        // **A hidden pointer means the position is being used to aim.** The
+        // **A held pointer means the position is being used to aim.** The
         // peer keeps sending absolute coordinates because it does not know
         // that, so the difference between them is the motion that was meant.
-        // The first sample after the pointer hides establishes where it is
+        // The first sample after the pointer is taken establishes where it is
         // and moves nothing; treating it as a delta from the origin throws
         // the aim across the screen.
-        if self.hidden {
+        if self.relative {
             let previous = self.last_abs.replace((x, y));
             let Some((px, py)) = previous else {
                 return;
@@ -1092,6 +1151,17 @@ fn traced(usage: u32, modifiers: u32, pressed: bool, key: u16, took: &str) {
     );
 }
 
+/// Whether a lock is tapped: `was` and `now` what the peer said of it at its
+/// last message and at this one, `host` the host's own state where that can
+/// be read, and `named` whether this message is the lock's own key.
+fn lock_owed(was: Option<bool>, now: bool, host: Option<bool>, named: bool) -> bool {
+    match host {
+        Some(host) if named => host != now,
+        Some(host) => was.map_or(now, |was| was != now) && host != now,
+        None => !named && was == Some(!now),
+    }
+}
+
 fn button_code(button: u32) -> Option<u16> {
     match button {
         1 => Some(BTN_LEFT),
@@ -1124,14 +1194,19 @@ fn detents(units: i32) -> i32 {
 /// the rectangle is the desktop and the two conversions cancel.
 ///
 /// **The extent is inclusive.** A peer reports the far edge as the width
-/// itself rather than one less, so dividing by the width is what puts that
-/// edge at the end of the axis.
+/// itself rather than one less, so that edge is the output's last pixel.
 ///
 /// **Clamping is what keeps a guest on the captured display.** A coordinate
 /// past the picture would otherwise place the pointer on the next output,
 /// where nothing here can see it: the pointer plane on this output empties,
 /// which is indistinguishable from an application hiding the pointer, and the
 /// peer is told to switch to relative motion.
+///
+/// **Aimed at the pixel's centre** (*2026-10-15*). The input stack takes the
+/// axis back to a pixel as `value * desktop / 65536`, truncated, on both
+/// platforms, so a value at a pixel's near edge lands on the one before it:
+/// measured, every position a pixel up and to the left, and an output's first
+/// column on the neighbouring output's last.
 fn scale(value: i32, extent: u32, origin: u32, within: u32, desktop: u32) -> i32 {
     let extent = i64::from(extent);
     let desktop = i64::from(desktop);
@@ -1139,13 +1214,15 @@ fn scale(value: i32, extent: u32, origin: u32, within: u32, desktop: u32) -> i32
         return 0;
     }
     let clamped = i64::from(value).clamp(0, extent);
-    let placed = i64::from(origin) + clamped * i64::from(within) / extent;
+    let pixel = (clamped * i64::from(within) / extent).clamp(0, (i64::from(within) - 1).max(0));
+    let placed = i64::from(origin) + pixel;
     #[allow(
         clippy::cast_possible_truncation,
         reason = "the quotient is clamped to the axis range, which is 65535"
     )]
     {
-        (placed * i64::from(ABS_RANGE) / desktop).clamp(0, i64::from(ABS_RANGE)) as i32
+        ((2 * placed + 1) * (i64::from(ABS_RANGE) + 1) / (2 * desktop))
+            .clamp(0, i64::from(ABS_RANGE)) as i32
     }
 }
 
@@ -1186,6 +1263,10 @@ mod tests {
         /// The pad reports handed on: the pad, and whether an input report
         /// (true) or a feature report.
         reports: Vec<(u32, bool)>,
+        /// The host's locks, for a sink that can read them.
+        locks: Option<Locks>,
+        /// A sink with nowhere to put a pad's own report.
+        refuses_reports: bool,
     }
 
     impl Sink for Recorder {
@@ -1200,6 +1281,14 @@ mod tests {
         fn report(&mut self, pad: u32, inbound: &Inbound<'_>) {
             self.reports
                 .push((pad, matches!(inbound, Inbound::Input { .. })));
+        }
+
+        fn takes_reports(&self) -> bool {
+            !self.refuses_reports
+        }
+
+        fn host_locks(&self) -> Option<Locks> {
+            self.locks
         }
     }
 
@@ -1364,10 +1453,12 @@ mod tests {
     #[test]
     fn a_key_pressed_under_one_name_releases_under_the_other() {
         let (mut inject, mut out) = (injector(), Recorder::default());
+        let menu = usage::key_code(101).unwrap();
+        assert_eq!(usage::key_code(118), Some(menu));
         inject.on_control(&key(101, true), &mut out);
         out.batches.clear();
         inject.on_control(&key(118, false), &mut out);
-        assert_eq!(out.keys_at(0), vec![127]);
+        assert_eq!(out.keys_at(0), vec![menu]);
 
         out.batches.clear();
         inject.release_all(&mut out);
@@ -1403,6 +1494,119 @@ mod tests {
         out.batches.clear();
         inject.on_control(&control(op::KEYBOARD, 57, MOD_CAPS, 1), &mut out);
         assert_eq!(out.keys_at(1), vec![KEY_CAPSLOCK]);
+    }
+
+    /// The tap is built from these, so they must be the table's own codes
+    /// for the two lock keys on whichever platform the table is.
+    #[test]
+    fn the_lock_keys_are_the_tables_own() {
+        assert_eq!(usage::key_code(USAGE_CAPS_LOCK), Some(KEY_CAPSLOCK));
+        assert_eq!(usage::key_code(USAGE_NUM_LOCK), Some(KEY_NUMLOCK));
+    }
+
+    /// **Where the host's locks can be read, a lock the peer has on at its
+    /// first message is applied** before the key; one already there is left
+    /// alone.
+    #[test]
+    fn a_lock_the_peer_has_on_at_first_is_applied() {
+        let mut out = Recorder {
+            locks: Some(Locks {
+                num: true,
+                caps: false,
+            }),
+            ..Recorder::default()
+        };
+        let mut inject = injector();
+        inject.on_control(&control(op::KEYBOARD, 4, MOD_CAPS | MOD_NUM, 1), &mut out);
+        assert_eq!(out.keys_at(1), vec![KEY_CAPSLOCK, 30]);
+        assert_eq!(out.keys_at(0), vec![KEY_CAPSLOCK]);
+    }
+
+    /// **A lock the peer reports off at its first message is left alone**: a
+    /// peer with no such key reports it off, and taking that at its word would
+    /// turn the host's lock off for every guest that has none.
+    #[test]
+    fn a_lock_the_peer_reports_off_at_first_is_left_alone() {
+        let mut out = Recorder {
+            locks: Some(Locks {
+                num: true,
+                caps: true,
+            }),
+            ..Recorder::default()
+        };
+        let mut inject = injector();
+        inject.on_control(&control(op::KEYBOARD, 4, 0, 1), &mut out);
+        assert_eq!(out.keys_at(1), vec![30]);
+    }
+
+    /// **Where the host's locks can be read, a lock key is the peer's lock
+    /// state, never a keystroke.** A peer that reports the lock as a modifier
+    /// sends the key down as the lock goes on and up as it goes off; passed
+    /// through, the host toggled once every two presses. Each message brings
+    /// the host to the state it reports, whichever way the peer sends it.
+    #[test]
+    fn a_lock_key_is_the_peers_state_where_the_host_reads_its_own() {
+        let locks = |caps| Some(Locks { num: false, caps });
+        let mut out = Recorder {
+            locks: locks(false),
+            ..Recorder::default()
+        };
+        let mut inject = injector();
+        // Down as the lock goes on, up as it goes off.
+        inject.on_control(&control(op::KEYBOARD, 57, MOD_CAPS, 1), &mut out);
+        assert_eq!(out.keys_at(1), vec![KEY_CAPSLOCK]);
+        assert_eq!(out.keys_at(0), vec![KEY_CAPSLOCK], "not a tap");
+        out.locks = locks(true);
+        out.batches.clear();
+        inject.on_control(&control(op::KEYBOARD, 57, 0, 0), &mut out);
+        assert_eq!(out.keys_at(1), vec![KEY_CAPSLOCK], "the lock going off");
+        assert_eq!(out.keys_at(0), vec![KEY_CAPSLOCK]);
+
+        // Pressed and released, the mask the new state: the press brings the
+        // host to it and the release finds it there.
+        out.locks = locks(false);
+        out.batches.clear();
+        inject.on_control(&control(op::KEYBOARD, 57, MOD_CAPS, 1), &mut out);
+        out.locks = locks(true);
+        inject.on_control(&control(op::KEYBOARD, 57, MOD_CAPS, 0), &mut out);
+        assert_eq!(out.keys_at(1), vec![KEY_CAPSLOCK], "toggled twice");
+
+        // Nothing of the key is held, so a guest leaving releases nothing.
+        out.batches.clear();
+        inject.release_all(&mut out);
+        assert!(out.keys_at(0).is_empty());
+    }
+
+    /// **A change the host already made is not made again.** The peer's
+    /// state changed since its last message, and the host's is already
+    /// there: toggling would undo it.
+    #[test]
+    fn a_change_the_host_already_has_is_not_tapped() {
+        let mut out = Recorder {
+            locks: Some(Locks {
+                num: false,
+                caps: false,
+            }),
+            ..Recorder::default()
+        };
+        let mut inject = injector();
+        inject.on_control(&control(op::KEYBOARD, 4, 0, 1), &mut out);
+        out.locks = Some(Locks {
+            num: false,
+            caps: true,
+        });
+        out.batches.clear();
+        inject.on_control(&control(op::KEYBOARD, 5, MOD_CAPS, 1), &mut out);
+        assert_eq!(out.keys_at(1), vec![48], "the lock was toggled again");
+
+        // And an unchanged peer state never taps, whatever the host says.
+        out.locks = Some(Locks {
+            num: true,
+            caps: false,
+        });
+        out.batches.clear();
+        inject.on_control(&control(op::KEYBOARD, 6, MOD_CAPS, 1), &mut out);
+        assert_eq!(out.keys_at(1), vec![46]);
     }
 
     /// **A modified keystroke leaves nothing behind**, which is the shape a
@@ -1456,8 +1660,15 @@ mod tests {
         out.batches.clear();
 
         assert!(inject.secure_attention(&mut out));
-        assert_eq!(out.keys_at(1), vec![29, 56, 111]);
-        assert_eq!(out.keys_at(0), vec![111, 56, 29]);
+        let chord: Vec<u16> = ATTENTION
+            .iter()
+            .map(|&u| usage::key_code(u).unwrap())
+            .collect();
+        assert_eq!(out.keys_at(1), chord);
+        assert_eq!(
+            out.keys_at(0),
+            chord.iter().rev().copied().collect::<Vec<_>>()
+        );
         assert_eq!(out.devices(), vec![Device::Keyboard]);
 
         out.batches.clear();
@@ -1496,24 +1707,37 @@ mod tests {
     }
 
     #[test]
-    fn absolute_motion_reaches_both_ends_of_the_axis() {
+    fn absolute_motion_reaches_both_ends_of_the_picture() {
         let (mut inject, mut out) = (injector(), Recorder::default());
         inject.on_control(&control(op::MOUSE_MOTION, 0, 0, 0), &mut out);
         inject.on_control(&control(op::MOUSE_MOTION, 0, 1920, 1080), &mut out);
         // Past the edge, which a peer does send.
         inject.on_control(&control(op::MOUSE_MOTION, 0, 4000, 4000), &mut out);
 
-        let values: Vec<i32> = out
-            .all()
-            .into_iter()
-            .filter(|e| e.kind == EV_ABS)
-            .map(|e| e.value)
-            .collect();
         assert_eq!(
-            values,
-            vec![0, 0, ABS_RANGE, ABS_RANGE, ABS_RANGE, ABS_RANGE]
+            landed(&out, 1920, 1080),
+            vec![(0, 0), (1919, 1079), (1919, 1079)]
         );
+        assert!(axes(&out).iter().all(|v| (0..=ABS_RANGE).contains(v)));
         assert!(out.devices().iter().all(|d| *d == Device::PointerAbsolute));
+    }
+
+    /// Where the input stack puts each absolute position emitted: it takes an
+    /// axis value back to a pixel as `value * desktop / 65536`, truncated
+    /// (measured on Windows; the Linux input library computes the same).
+    fn landed(out: &Recorder, desktop_width: u32, desktop_height: u32) -> Vec<(u32, u32)> {
+        let pixel = |value: i32, desktop: u32| {
+            u32::try_from(i64::from(value) * i64::from(desktop) / 65536).unwrap()
+        };
+        axes(out)
+            .chunks(2)
+            .map(|pair| {
+                (
+                    pixel(pair[0], desktop_width),
+                    pixel(pair[1], desktop_height),
+                )
+            })
+            .collect()
     }
 
     /// The picture placed in a desktop wider than it is.
@@ -1559,9 +1783,7 @@ mod tests {
         let (mut inject, mut out) = (beside_another(), Recorder::default());
         inject.on_control(&control(op::MOUSE_MOTION, 0, 2560, 1440), &mut out);
 
-        let far = i32::try_from(i64::from(ABS_RANGE) * 2560 / 4480).expect("within the axis");
-        assert_eq!(axes(&out), vec![far, ABS_RANGE]);
-        assert!(far < ABS_RANGE, "the picture is not the whole desktop");
+        assert_eq!(landed(&out, 4480, 1440), vec![(2559, 1439)]);
     }
 
     /// **A coordinate past the picture stays on the captured output.** Without
@@ -1574,8 +1796,7 @@ mod tests {
         let (mut inject, mut out) = (beside_another(), Recorder::default());
         inject.on_control(&control(op::MOUSE_MOTION, 0, 4000, 4000), &mut out);
 
-        let far = i32::try_from(i64::from(ABS_RANGE) * 2560 / 4480).expect("within the axis");
-        assert_eq!(axes(&out), vec![far, ABS_RANGE]);
+        assert_eq!(landed(&out, 4480, 1440), vec![(2559, 1439)]);
     }
 
     /// **An output that is not at the desktop's corner starts partway along
@@ -1600,8 +1821,8 @@ mod tests {
         inject.on_control(&control(op::MOUSE_MOTION, 0, 0, 0), &mut out);
         inject.on_control(&control(op::MOUSE_MOTION, 0, 2560, 0), &mut out);
 
-        let left = i32::try_from(i64::from(ABS_RANGE) * 1920 / 4480).expect("within the axis");
-        assert_eq!(axes(&out), vec![left, 0, ABS_RANGE, 0]);
+        // The output's own first column, never the neighbour's last.
+        assert_eq!(landed(&out, 4480, 1440), vec![(1920, 0), (4479, 0)]);
     }
 
     /// **A scaled output's rectangle is smaller than its picture**, and the
@@ -1626,21 +1847,22 @@ mod tests {
         let mut out = Recorder::default();
         inject.on_control(&control(op::MOUSE_MOTION, 0, 2560, 1440), &mut out);
 
-        assert_eq!(axes(&out), vec![ABS_RANGE / 2, ABS_RANGE]);
+        assert_eq!(landed(&out, 2560, 720), vec![(1279, 719)]);
     }
 
-    /// One output is the case every earlier run was made in, and it must not
-    /// move: the rectangle is the desktop and the two conversions cancel.
+    /// **Every pixel of one output lands on itself**: the rectangle is the
+    /// desktop and the two conversions cancel, and the axis is aimed at each
+    /// pixel's centre, so the input stack's truncation lands on it rather
+    /// than on the one before, which is where every position went until it
+    /// was measured.
     #[test]
-    fn one_output_maps_exactly_as_it_did() {
+    fn every_pixel_of_one_output_lands_on_itself() {
         let (mut inject, mut out) = (injector(), Recorder::default());
-        inject.on_control(&control(op::MOUSE_MOTION, 0, 960, 540), &mut out);
-        inject.on_control(&control(op::MOUSE_MOTION, 0, 1920, 1080), &mut out);
-
-        assert_eq!(
-            axes(&out),
-            vec![ABS_RANGE / 2, ABS_RANGE / 2, ABS_RANGE, ABS_RANGE]
-        );
+        for x in 0..1920 {
+            inject.on_control(&control(op::MOUSE_MOTION, 0, x, x % 1080), &mut out);
+        }
+        let expected: Vec<(u32, u32)> = (0..1920).map(|x| (x, x % 1080)).collect();
+        assert_eq!(landed(&out, 1920, 1080), expected);
     }
 
     /// **The side buttons are the relative pointer's, whichever pointer
@@ -1733,13 +1955,7 @@ mod tests {
         let mut inject = Injector::new(Extents::alone(1080, 1920));
         let mut out = Recorder::default();
         inject.on_control(&control(op::MOUSE_MOTION, 0, 1080, 1920), &mut out);
-        let values: Vec<i32> = out
-            .all()
-            .into_iter()
-            .filter(|e| e.kind == EV_ABS)
-            .map(|e| e.value)
-            .collect();
-        assert_eq!(values, vec![ABS_RANGE, ABS_RANGE]);
+        assert_eq!(landed(&out, 1080, 1920), vec![(1079, 1919)]);
     }
 
     #[test]
@@ -1789,7 +2005,7 @@ mod tests {
     #[test]
     fn the_second_streams_motion_unpacks_a_signed_vertical() {
         let (mut inject, mut out) = (injector(), Recorder::default());
-        inject.set_cursor_hidden(true);
+        inject.set_relative(true);
         // Prime, then move up and to the right.
         #[allow(
             clippy::cast_sign_loss,
@@ -1814,11 +2030,11 @@ mod tests {
         );
     }
 
-    /// A hidden pointer is aiming, so the first sample only says where it is.
+    /// A held pointer is aiming, so the first sample only says where it is.
     #[test]
-    fn a_hidden_pointer_primes_before_it_moves() {
+    fn a_held_pointer_primes_before_it_moves() {
         let (mut inject, mut out) = (injector(), Recorder::default());
-        inject.set_cursor_hidden(true);
+        inject.set_relative(true);
         inject.on_control(&control(op::MOUSE_MOTION, 0, 500, 500), &mut out);
         assert!(
             out.batches.is_empty(),
@@ -1838,11 +2054,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pointer_that_reappears_goes_back_to_absolute() {
+    fn a_pointer_let_go_goes_back_to_absolute() {
         let (mut inject, mut out) = (injector(), Recorder::default());
-        inject.set_cursor_hidden(true);
+        inject.set_relative(true);
         inject.on_control(&control(op::MOUSE_MOTION, 0, 500, 500), &mut out);
-        inject.set_cursor_hidden(false);
+        inject.set_relative(false);
         inject.on_control(&control(op::MOUSE_MOTION, 0, 510, 495), &mut out);
         assert_eq!(out.devices(), vec![Device::PointerAbsolute]);
     }
@@ -1889,13 +2105,16 @@ mod tests {
     fn a_release_of_everything_holdable_ends_every_chunk_at_a_report() {
         let (mut inject, mut out) = (injector(), Recorder::default());
         let mut held = 0;
+        let mut keys: Vec<u16> = Vec::new();
         for usage in 0..=u16::MAX {
-            if usage::key_code(usage).is_some() {
+            if let Some(code) = usage::key_code(usage) {
                 inject.on_control(&key(u32::from(usage), true), &mut out);
                 held += 1;
+                if !keys.contains(&code) {
+                    keys.push(code);
+                }
             }
         }
-        assert_eq!(held, 176);
         out.batches.clear();
 
         inject.release_all(&mut out);
@@ -1908,11 +2127,14 @@ mod tests {
                 "a chunk did not end at a report"
             );
         }
-        // **Twelve kernel keys have more than one name.** Holding all 176 of
-        // the peer's codes holds 162 keys, and a tracker keyed on the peer's
-        // code instead of the kernel's would report 176 and release some of
-        // them twice.
-        assert_eq!(out.keys_at(0).len(), 162);
+        // **Some keys have more than one name.** Holding every one of the
+        // peer's codes holds fewer keys than codes -- on Linux 162 for 176 --
+        // and a tracker keyed on the peer's code instead of the table's would
+        // report every code and release some keys twice.
+        assert!(keys.len() < held, "no key has two names any more");
+        assert_eq!(out.keys_at(0).len(), keys.len());
+        #[cfg(not(windows))]
+        assert_eq!((held, keys.len()), (176, 162));
     }
 
     fn pad_state_body(buttons: u16, lx: i16, ly: i16, rx: i16, ry: i16, lt: u8, rt: u8) -> Vec<u8> {
@@ -2026,6 +2248,129 @@ mod tests {
         let (mut inject, mut out) = (injector(), Recorder::default());
         inject.on_control(&control(op::GAMEPAD_AXIS, 4, i16::MAX as u32, 1), &mut out);
         assert_eq!(abs(&out), vec![(gamepad::axis::Z, 255)]);
+    }
+
+    /// **The per-axis message's vertical axes point down**, as the axis
+    /// itself does, so they pass through where the whole state's are
+    /// inverted: a stick pushed away from the player is negative in one and
+    /// positive in the other, and reaches the axis negative from both.
+    #[test]
+    fn the_per_axis_vertical_points_down_and_passes_through() {
+        let (mut inject, mut out) = (injector(), Recorder::default());
+        inject.on_control(&control(op::GAMEPAD_AXIS, 1, as_u32(-20_000), 1), &mut out);
+        inject.on_control(&control(op::GAMEPAD_AXIS, 3, 20_000, 1), &mut out);
+        inject.on_control(&control(op::GAMEPAD_AXIS, 1, i16::MIN as u32, 1), &mut out);
+        assert_eq!(
+            abs(&out),
+            vec![
+                (gamepad::axis::Y, -20_000),
+                (gamepad::axis::RY, 20_000),
+                (gamepad::axis::Y, -32_768),
+            ]
+        );
+
+        let mut whole = Recorder::default();
+        inject.on_control(
+            &state(1, &pad_state_body(0, 0, 20_000, 0, 0, 0, 0)),
+            &mut whole,
+        );
+        assert!(abs(&whole).contains(&(gamepad::axis::Y, -20_000)));
+    }
+
+    /// **A whole state folds back into the report it came from**, through the
+    /// events the expander made of it: a device handed whole reports is
+    /// handed what the peer sent, with away from the player still positive,
+    /// and the per-axis message lands the same way up.
+    #[test]
+    fn a_whole_state_folds_back_into_the_report_it_came_from() {
+        let (mut inject, mut out) = (injector(), Recorder::default());
+        let sent = gamepad::Report {
+            buttons: gamepad::bit::A
+                | gamepad::bit::Y
+                | gamepad::bit::LEFT_SHOULDER
+                | gamepad::bit::START
+                | gamepad::bit::GUIDE
+                | gamepad::bit::DPAD_UP
+                | gamepad::bit::DPAD_RIGHT,
+            lx: -12_345,
+            ly: 23_456,
+            rx: 32_767,
+            ry: -32_767,
+            left_trigger: 7,
+            right_trigger: 255,
+        };
+        let body = pad_state_body(
+            sent.buttons,
+            sent.lx,
+            sent.ly,
+            sent.rx,
+            sent.ry,
+            sent.left_trigger,
+            sent.right_trigger,
+        );
+        inject.on_control(&state(2, &body), &mut out);
+        let mut folded = gamepad::Report::default();
+        for (device, events) in &out.batches {
+            assert_eq!(*device, Device::Gamepad(2));
+            folded.apply(events);
+        }
+        assert_eq!(folded, sent);
+
+        out.batches.clear();
+        inject.on_control(&state(2, &pad_state_body(0, 0, 0, 0, 0, 0, 0)), &mut out);
+        for (_, events) in &out.batches {
+            folded.apply(events);
+        }
+        assert_eq!(folded, gamepad::Report::default());
+
+        // Pushed away from the player, which this message carries negative.
+        out.batches.clear();
+        inject.on_control(&control(op::GAMEPAD_AXIS, 1, as_u32(-20_000), 2), &mut out);
+        for (_, events) in &out.batches {
+            folded.apply(events);
+        }
+        assert_eq!(folded.ly, 20_000);
+
+        // The one value that does not come back: the far end, turned over.
+        out.batches.clear();
+        inject.on_control(
+            &state(2, &pad_state_body(0, 0, i16::MIN, 0, 0, 0, 0)),
+            &mut out,
+        );
+        for (_, events) in &out.batches {
+            folded.apply(events);
+        }
+        assert_eq!(folded.ly, -32_767);
+    }
+
+    /// **A sink with nowhere to put a pad's own report never sees one**, and
+    /// the pad is made from the whole states a peer sends beside its reports.
+    /// Taken, the report would fix the pad as one that drops those states.
+    #[test]
+    fn a_report_a_sink_cannot_take_leaves_the_pad_to_its_states() {
+        let mut out = Recorder {
+            refuses_reports: true,
+            ..Recorder::default()
+        };
+        let mut inject = injector();
+        let ds5: &[u8; 64] = include_bytes!("../../core/tests/data/pad/ds5/input-idle.bin");
+        inject.on_control(
+            &Control {
+                a0: 64,
+                a1: 3,
+                a2: 0x0CE6,
+                opcode: op::PAD_REPORT,
+                body: ds5,
+            },
+            &mut out,
+        );
+        assert!(out.reports.is_empty());
+        assert!(inject.pads.iter().all(Option::is_none), "a pad was taken");
+
+        let body = pad_state_body(gamepad::bit::A, 0, 0, 0, 0, 0, 0);
+        inject.on_control(&state(3, &body), &mut out);
+        assert_eq!(out.keys_at(1), vec![gamepad::key::SOUTH]);
+        assert!(out.devices().iter().all(|d| *d == Device::Gamepad(3)));
     }
 
     #[test]

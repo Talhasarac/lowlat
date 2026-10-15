@@ -525,6 +525,11 @@ pub(crate) struct Shared {
     /// Which way the session has turned the captured output, as the video
     /// header says it, stored beside the rectangle under the same discipline.
     place_rotation: AtomicU8,
+    /// Whether something on the host holds the pointer's motion, as the
+    /// display last looked: the bit as it turns, not as it is said, since a
+    /// guest converts absolute motion on it as the motion arrives
+    /// (docs/05-host.md section 7). Zero from a display with no source.
+    relative: AtomicU32,
     /// Where a guest last told the pointer to be, and how many times one has:
     /// the position in the low half and a count in the high.
     ///
@@ -1305,6 +1310,7 @@ impl Stream {
             place_rect: AtomicU64::new(0),
             place_desktop: AtomicU32::new(0),
             place_rotation: AtomicU8::new(0),
+            relative: AtomicU32::new(0),
             commanded: AtomicU64::new(0),
             cursor: CursorCell::default(),
             stopping: AtomicU32::new(0),
@@ -1695,6 +1701,15 @@ impl SeatHold {
     /// of nothing, and it is right whenever the picture is.
     pub fn rotation(&self) -> lowlat_core::video::Rotation {
         self.shared.rotation()
+    }
+
+    /// Whether something on the host holds the pointer's motion.
+    ///
+    /// **Read every pass, ahead of the input it applies to**: absolute motion
+    /// is converted to deltas while it holds, for a peer that goes on sending
+    /// positions (docs/05-host.md section 7).
+    pub fn relative(&self) -> bool {
+        self.shared.relative.load(Ordering::Relaxed) != 0
     }
 
     fn placed_rect(&self, rect: u64) -> Option<lowlat_inject::event::Place> {
@@ -3560,6 +3575,14 @@ fn encode_loop<E: Encoder + FromDevice>(
                     &mut presence,
                     now_ms,
                 );
+                // **Beside the pointer, and as it turns**: a guest converts
+                // absolute motion on this as motion arrives, and the settled
+                // message comes a window later.
+                if let Some(desktop) = display.as_deref() {
+                    shared
+                        .relative
+                        .store(u32::from(desktop.relative()), Ordering::Relaxed);
+                }
             }
 
             // **Before anything is encoded from it.** A frame taken at the
@@ -4626,6 +4649,7 @@ mod tests {
                 place_rect: AtomicU64::new(0),
                 place_desktop: AtomicU32::new(0),
                 place_rotation: AtomicU8::new(0),
+                relative: AtomicU32::new(0),
                 commanded: AtomicU64::new(0),
                 cursor: CursorCell::default(),
                 stopping: AtomicU32::new(0),
@@ -4702,6 +4726,7 @@ mod tests {
             place_rect: AtomicU64::new(0),
             place_desktop: AtomicU32::new(0),
             place_rotation: AtomicU8::new(0),
+            relative: AtomicU32::new(0),
             commanded: AtomicU64::new(0),
             cursor: CursorCell::default(),
             stopping: AtomicU32::new(0),
@@ -5037,6 +5062,7 @@ mod tests {
             place_rect: AtomicU64::new(0),
             place_desktop: AtomicU32::new(0),
             place_rotation: AtomicU8::new(0),
+            relative: AtomicU32::new(0),
             commanded: AtomicU64::new(0),
             cursor: CursorCell::default(),
             stopping: AtomicU32::new(0),
