@@ -728,7 +728,7 @@ once, here.
   input following the desktop there; and the attention chord refused and logged. Break and
   SysRq never reached the host from either client, so their forms are the generator's check
   alone.
-- [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
+- [x] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
   spell with no gap at the guest.
   *Reviewed 2026-10-15, before its build* (the decisions above): also the silent stream
   started once, flagged packets as silence, the host's own rounding to sixteen bits, the
@@ -739,6 +739,29 @@ once, here.
   own sixteen-bit conversion; the default switched between the machine's two outputs
   mid-session; a program in exclusive mode mid-session, the sound back after it lets go; and
   the local mute with a guest seated, put back when the last one leaves.
+  *Built and checked live 2026-10-15.* The capture is a platform module under the names
+  Linux's has, and the reassembly, the settings and the handle an owner holds are written once;
+  the system's sound interfaces are declared from the SDK's headers by a script and committed.
+  One thread waits on the loopback's own event, the system's word of a new default, and a stop:
+  the silent stream started once on the output, the loopback asked for floating point and
+  rounded to sixteen bits, a flagged packet taken as zeros of its length. A lost output is
+  opened again at once where it can be -- a named one that went away replaced by the default --
+  and otherwise the capture ends and is asked for again; the local mute is the output's own,
+  where it mutes in hardware; `lowlatd` refuses a sound server's socket on Windows with a line.
+  Checked on the development machine through the library's capture, nothing playing: three
+  seconds of quiet handed on 150 frames, and none with the silent stream left out or with
+  flagged packets skipped; a program playing zeros read back as exact silence, and every frame
+  of it loud through the system's own sixteen-bit conversion; a tone at -30 dBFS back at its
+  level in each channel; a program taking the output in exclusive mode ended the capture, which
+  opened again once it let go; the speakers silenced and put back; and the outputs listed by
+  the identity a capture publishes. **Live**, as the system account in the console session at
+  30 frames a second, from an established client on a Windows laptop: through quiet spells of
+  twenty seconds with nothing playing on the host, a packet every 20 ms and none dropped, and
+  a beep after each spell heard whole at the guest; the default switched between the machine's
+  two outputs and back six times while sound played, each followed within one or two packets,
+  the speakers' mute moved to the new output and put back on the old; and the speakers
+  silenced while a guest was seated and put back as it left, three times. A program in
+  exclusive mode was checked by the machine's own tests, not live.
 - [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
   Checked by a logoff mid-session and the guest reconnecting.
   *Added 2026-10-15, at W2.3's review:* the attention chord. The host asks the service, which
@@ -802,6 +825,9 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-15: W2.4 built and checked live: the loopback and its silent stream, the host's own
+  rounding, flagged packets as silence, the default followed and a lost output opened again at
+  once where it can be, the local mute only where the output mutes in hardware.
 - 2026-10-15: W2.4 reviewed before its build: the silent stream started once, a flagged packet
   counted as silence, the sound taken as floating point and rounded by the host, the default
   followed through the system's notifications, exclusive use a lost device, the local mute only

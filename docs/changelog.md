@@ -3,6 +3,36 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W2.4 built and checked live: sound on Windows
+
+### Added
+- **The desktop's sound on Windows** ([impl-plan-windows.md](impl-plan-windows.md) W2.4,
+  [05 §9](05-host.md)): a loopback of the default output, or a named one, read on the system's
+  own event, with a stream of silence started once on the same output so that a quiet room
+  keeps the device's clock. The system's sound interfaces are declared from the SDK's headers
+  by a script and committed.
+- The default output followed through the system's own device notifications; a lost output
+  opened again at once where it can be, a named one that went away replaced by the default.
+- The local mute on Windows, performed only where the output mutes itself.
+
+### Changed
+- The capture is a platform module under the names it had; the Linux loop moved unchanged.
+- A failure code the system writes as a result value reads in hex in the log.
+- `lowlatd` refuses `--audio-server` on Windows with a line.
+
+### Measured
+- On the development machine, through the library's capture with nothing playing: 150 frames
+  in three seconds of quiet, and none with the silent stream left out or with flagged packets
+  skipped; a program playing zeros read back as exact silence, and every frame loud through the
+  system's own sixteen-bit conversion; a tone at -30 dBFS back at 983 and 492, its two
+  channels' levels; a program in exclusive mode ending the capture, which opened again after
+  it.
+- Live, as the system account in the console session, from an established client on a Windows
+  laptop: a packet every 20 ms through twenty-second quiet spells, none dropped, and the beep
+  after each heard whole; six switches of the default output while sound played, each followed
+  within one or two packets; the speakers silenced while a guest was seated and put back as it
+  left.
+
 ## 2026-10-15 - W2.4 reviewed: the loopback's clock, silence that stays silent, the mute per control
 
 ### Decided

@@ -1211,7 +1211,10 @@ default and the log says so, which is where the Linux sound server leaves a stre
 **A program that takes the output in exclusive mode wins**: both of the host's streams are lost
 the moment it opens -- measured -- and stay lost after it lets go, so exclusive use is a device
 that went away, taken again a couple of seconds later; while the program holds the output there
-is no mix to hear.
+is no mix to hear. (*Built 2026-10-15*: a lost output is opened again at once where it can be,
+so a default that is unplugged is followed to the system's next without the wait; only an
+output that cannot be opened -- a program holds it, or nothing is there -- waits for the next
+ask.)
 
 ### §9.4 Silencing the speakers at the desk
 
