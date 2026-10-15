@@ -207,4 +207,7 @@ idd_calls! {
         (swapchain: IDDCX_SWAPCHAIN) -> HRESULT => MISSING_HR;
     fn idd_get_version = PFN_IDDCXGETVERSION [IddCxGetVersionTableIndex]
         (out: *mut IDARG_OUT_GETVERSION) -> NTSTATUS => MISSING;
+    fn idd_adapter_set_render_adapter =
+        PFN_IDDCXADAPTERSETRENDERADAPTER [IddCxAdapterSetRenderAdapterTableIndex]
+        (adapter: IDDCX_ADAPTER, args: *const IDARG_IN_ADAPTERSETRENDERADAPTER) => ();
 }

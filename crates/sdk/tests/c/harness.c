@@ -778,6 +778,65 @@ static int client_half(library lib, const char *(*status_string)(lowlat_status))
     return 0;
 }
 
+#if defined(LOWLAT_VDD)
+/* The third half: a handle on the display driver where one is installed, its
+ * calls answered and its deliberate panic contained; where none is, the open
+ * refused for exactly that. */
+static int vdd_half(library lib, const char *(*status_string)(lowlat_status))
+{
+    lowlat_status (*vdd_open)(lowlat_vdd **);
+    void (*vdd_close)(lowlat_vdd *);
+    lowlat_status (*vdd_list)(lowlat_vdd *, uint32_t *, uint32_t *);
+    lowlat_status (*vdd_get_monitor)(lowlat_vdd *, uint32_t, lowlat_vdd_monitor *);
+    lowlat_status (*vdd_debug_panic)(lowlat_vdd *);
+    RESOLVE(vdd_open, lib, "lowlat_vdd_open");
+    RESOLVE(vdd_close, lib, "lowlat_vdd_close");
+    RESOLVE(vdd_list, lib, "lowlat_vdd_list");
+    RESOLVE(vdd_get_monitor, lib, "lowlat_vdd_get_monitor");
+    RESOLVE(vdd_debug_panic, lib, "lowlat_vdd_debug_panic");
+
+    lowlat_vdd *vdd = NULL;
+    lowlat_status opened = vdd_open(&vdd);
+    if (opened == LOWLAT_ERR_VDD_ABSENT) {
+        printf("harness: vdd half, no driver here and the open says so\n");
+        return 0;
+    }
+    if (opened != LOWLAT_OK || vdd == NULL) {
+        fprintf(stderr, "harness: the display driver did not open: %d (%s)\n",
+                (int) opened, status_string(opened));
+        return 1;
+    }
+    uint32_t count = 0;
+    if (vdd_list(vdd, NULL, &count) != LOWLAT_OK || count > LOWLAT_VDD_SLOTS) {
+        fprintf(stderr, "harness: the displays did not list\n");
+        return 1;
+    }
+    lowlat_vdd_monitor monitor;
+    memset(&monitor, 0, sizeof monitor);
+    monitor.size = (uint32_t) sizeof monitor;
+    if (vdd_get_monitor(vdd, LOWLAT_VDD_SLOTS, &monitor) != LOWLAT_ERR_INVALID_ARGUMENT) {
+        fprintf(stderr, "harness: a slot past the last was not refused\n");
+        return 1;
+    }
+
+    lowlat_status contained = vdd_debug_panic(vdd);
+    if (contained != LOWLAT_ERR_INTERNAL) {
+        fprintf(stderr, "harness: a deliberate vdd panic returned %d, not %d\n",
+                (int) contained, (int) LOWLAT_ERR_INTERNAL);
+        return 1;
+    }
+    if (vdd_list(vdd, NULL, &count) != LOWLAT_ERR_POISONED) {
+        fprintf(stderr, "harness: a vdd call after a contained panic was not refused\n");
+        return 1;
+    }
+    vdd_close(vdd);
+
+    printf("harness: vdd half, %u displays listed, a panic returned %d (%s)\n",
+           (unsigned) count, (int) contained, status_string(contained));
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     unsigned log_lines = 0;
@@ -838,6 +897,14 @@ int main(int argc, char **argv)
             return failed;
         }
     }
+#if defined(LOWLAT_VDD)
+    if ((features() & LOWLAT_FEATURE_VDD) != 0) {
+        int failed = vdd_half(lib, status_string);
+        if (failed != 0) {
+            return failed;
+        }
+    }
+#endif
 
     if (log_lines == 0) {
         fprintf(stderr, "harness: a whole session produced no log lines\n");

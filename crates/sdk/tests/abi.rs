@@ -227,10 +227,11 @@ fn generate() -> String {
 /// reads as the two halves it is. Only the feature guards are touched; the
 /// `#pragma`, the C++ fences and the `noexcept` block go through untouched.
 fn merge_feature_guards(header: &str) -> String {
-    const GUARDS: [&str; 3] = [
+    const GUARDS: [&str; 4] = [
         "#if defined(LOWLAT_HOST)",
         "#if defined(LOWLAT_CLIENT)",
         "#if (defined(LOWLAT_HOST) || defined(LOWLAT_CLIENT))",
+        "#if (defined(LOWLAT_VDD) && defined(_WIN32))",
     ];
     let lines: Vec<&str> = header.lines().collect();
     let mut out: Vec<&str> = Vec::with_capacity(lines.len());

@@ -5,7 +5,8 @@
 use lowlat_common::{log_info, log_warn};
 use lowlat_vdd_proto::CONTROL_INTERFACE;
 use lowlat_vdd_proto::control::{
-    IOCTL_LIST, IOCTL_PLUG, IOCTL_UNPLUG, IOCTL_VERSION, Plug, Refused, Unplug, VERSION, Version,
+    IOCTL_LIST, IOCTL_PLUG, IOCTL_RELOAD, IOCTL_REPLUG, IOCTL_UNPLUG, IOCTL_VERSION, Plug, Refused,
+    Replug, Unplug, VERSION, Version,
 };
 use lowlat_vdd_proto::modes::{Mode, ModeList};
 
@@ -435,7 +436,7 @@ fn control(
                 Ok(plug) => plug,
                 Err(status) => return (status, 0),
             };
-            match monitor::plug(owner, plug.mode) {
+            match monitor::plug(owner, plug) {
                 Ok(plugged) => reply(request, |out| plugged.encode(out)),
                 Err(status) => (status, 0),
             }
@@ -445,12 +446,22 @@ fn control(
                 Ok(unplug) => unplug,
                 Err(status) => return (status, 0),
             };
-            let slot = usize::try_from(unplug.slot).unwrap_or(usize::MAX);
-            match monitor::unplug(owner, slot) {
+            match monitor::unplug(owner, usize::from(unplug.slot)) {
                 Ok(()) => (STATUS_SUCCESS, 0),
                 Err(status) => (status, 0),
             }
         }
+        IOCTL_REPLUG => {
+            let replug = match read(request, Replug::decode) {
+                Ok(replug) => replug,
+                Err(status) => return (status, 0),
+            };
+            match monitor::replug(owner, usize::from(replug.slot), replug.mode) {
+                Ok(plugged) => reply(request, |out| plugged.encode(out)),
+                Err(status) => (status, 0),
+            }
+        }
+        IOCTL_RELOAD => (monitor::reload(), 0),
         IOCTL_LIST => {
             let list = monitor::list(owner);
             reply(request, |out| list.encode(out))

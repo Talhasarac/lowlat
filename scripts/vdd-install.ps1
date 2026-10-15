@@ -30,6 +30,28 @@ if ($Remove) {
 }
 
 if (-not (Test-Path $inf)) { throw "no package at $inf; run scripts/package-vdd.sh first" }
+
+# The folder kept monitors come back from (docs/11-drivers.md section 1.4): the
+# system account and administrators in full, users to write -- so an
+# unelevated controller keeps a display -- and the driver's own account,
+# LocalService, to read. Nothing inherited from the program-data directory.
+# Left in place by -Remove, as a person's settings are.
+$folder = Join-Path $env:ProgramData 'lowlat\display'
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+$inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+foreach ($rule in @(
+        @('S-1-5-18', 'FullControl'),
+        @('S-1-5-32-544', 'FullControl'),
+        @('S-1-5-32-545', 'Modify'),
+        @('S-1-5-19', 'ReadAndExecute'))) {
+    $sid = New-Object System.Security.Principal.SecurityIdentifier($rule[0])
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $sid, $rule[1], $inherit, 'None', 'Allow')))
+}
+Set-Acl -Path $folder -AclObject $acl
+
 if (Present) {
     & $devcon update $inf $hwid
 } else {

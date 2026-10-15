@@ -38,11 +38,18 @@
 #define LOWLAT_CLIENT
 #endif
 
+/// The third half, the virtual displays, on Windows alone: declared there
+/// unless the application defines `LOWLAT_NO_VDD`, and reported by
+/// `lowlat_features()` as `LOWLAT_FEATURE_VDD`.
+#if !defined(LOWLAT_NO_VDD) && !defined(LOWLAT_VDD) && defined(_WIN32)
+#define LOWLAT_VDD
+#endif
+
 /// The major version, raised only when something already published changes.
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 25
+#define LOWLAT_ABI_MINOR 26
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -58,6 +65,10 @@
 /// not what it has: a codec library actually loaded is named with its
 /// licence by `lowlat_enum_decoders`.
 #define LOWLAT_FEATURE_GPL_LIBAVCODEC 4
+
+/// The virtual displays are in this build (minor 26): every `lowlat_vdd_*`
+/// entry point exists. Windows alone.
+#define LOWLAT_FEATURE_VDD 8
 
 #if (defined(LOWLAT_HOST) || defined(LOWLAT_CLIENT))
 /// How many reflexive servers a seam may be given, and how long each may be.
@@ -342,6 +353,30 @@
 #define LOWLAT_CLIENT_OVER 3
 #endif
 
+#if (defined(LOWLAT_VDD) && defined(_WIN32))
+/// A monitor bound to the handle that plugged it: unplugged when the handle
+/// is closed or its process ends.
+#define LOWLAT_VDD_BOUND 0
+
+/// A monitor kept until removed, owned by no handle.
+#define LOWLAT_VDD_KEPT 1
+
+/// No slot asked for: the first free one.
+#define LOWLAT_VDD_SLOT_ANY UINT32_MAX
+
+/// How many monitors the driver carries, each a slot from zero.
+#define LOWLAT_VDD_SLOTS 16
+
+/// Bytes in a display's name, its terminator included.
+#define LOWLAT_VDD_NAME_MAX 32
+
+/// The custom modes the settings hold.
+#define LOWLAT_VDD_MODES_MAX 16
+
+/// Bytes in an EDID the settings hold: one block or two.
+#define LOWLAT_VDD_EDID_MAX 256
+#endif
+
 /// A status code.
 ///
 /// **An enumeration for the names and a plain integer wherever one is
@@ -362,6 +397,7 @@
 ///   -300 to -399   encode
 ///   -400 to -499   transport
 ///   -500 to -599   decode
+///   -600 to -699   the virtual displays
 /// ```
 ///
 /// A value is assigned once and never reused, including for a condition that
@@ -432,6 +468,34 @@ typedef enum lowlat_status {
     /// a build reporting `LOWLAT_FEATURE_GPL_LIBAVCODEC` -- and was closed
     /// unused.
     LOWLAT_ERR_NO_DECODER_LICENCE = -504,
+    /// The display driver is not installed, or its device is not started.
+    LOWLAT_ERR_VDD_ABSENT = -600,
+    /// The display driver is another version than this library's; the two
+    /// ship together.
+    LOWLAT_ERR_VDD_VERSION = -601,
+    /// The display driver refused this account.
+    LOWLAT_ERR_VDD_DENIED = -602,
+    /// The display driver is still starting.
+    LOWLAT_ERR_VDD_STARTING = -603,
+    /// Every slot is taken.
+    LOWLAT_ERR_VDD_FULL = -604,
+    /// The slot asked for is taken.
+    LOWLAT_ERR_VDD_SLOT_TAKEN = -605,
+    /// The monitor is bound to another handle.
+    LOWLAT_ERR_VDD_NOT_OWNER = -606,
+    /// No monitor at that slot.
+    LOWLAT_ERR_VDD_NO_MONITOR = -607,
+    /// The monitor is being plugged again; ask again shortly.
+    LOWLAT_ERR_VDD_BUSY = -608,
+    /// The system's display configuration refused the change.
+    LOWLAT_ERR_VDD_DISPLAY_CONFIG = -609,
+    /// The monitor is plugged and the system did not finish within the
+    /// bound; asking for the monitor says where it stands.
+    LOWLAT_ERR_VDD_NOT_READY = -610,
+    /// The settings file could not be read or written.
+    LOWLAT_ERR_VDD_FILE = -611,
+    /// The display driver answered with an error of its own.
+    LOWLAT_ERR_VDD_IO = -612,
 } lowlat_status;
 
 #if (defined(LOWLAT_HOST) || defined(LOWLAT_CLIENT))
@@ -824,6 +888,14 @@ typedef struct lowlat_client lowlat_client;
 /// Opaque: the application holds a pointer it cannot look inside, so what is
 /// in here changes freely.
 typedef struct lowlat_host lowlat_host;
+#endif
+
+#if (defined(LOWLAT_VDD) && defined(_WIN32))
+/// One controller, as the application holds it. The monitors it plugs bound
+/// are its own.
+///
+/// Opaque: the application holds a pointer it cannot look inside.
+typedef struct lowlat_vdd lowlat_vdd;
 #endif
 
 /// Where log lines go.
@@ -2029,6 +2101,82 @@ typedef struct lowlat_fence {
     /// The value to wait for, as the kind says.
     uint64_t value;
 } lowlat_fence;
+#endif
+
+#if (defined(LOWLAT_VDD) && defined(_WIN32))
+/// What `lowlat_vdd_plug` is asked for.
+typedef struct lowlat_vdd_plug_info {
+    /// `sizeof(lowlat_vdd_plug_info)`, set by the caller.
+    uint32_t size;
+    /// `LOWLAT_VDD_BOUND` or `LOWLAT_VDD_KEPT`.
+    uint32_t lifetime;
+    /// A kept monitor the driver plugs again whenever it starts.
+    bool restore;
+    /// The slot, whose identity the system remembers the monitor's place
+    /// and mode by; `LOWLAT_VDD_SLOT_ANY` for the first free one.
+    uint32_t slot;
+    /// The mode it arrives at, first and preferred in its list.
+    uint32_t width;
+    uint32_t height;
+    uint32_t refresh_hz;
+} lowlat_vdd_plug_info;
+
+/// One monitor, as the driver and the system see it.
+typedef struct lowlat_vdd_monitor {
+    /// `sizeof(lowlat_vdd_monitor)`, set by the caller.
+    uint32_t size;
+    uint32_t slot;
+    /// Plugged through this handle and bound to it.
+    bool owned;
+    bool kept;
+    /// Kept, and plugged again whenever the driver starts.
+    bool restore;
+    /// Shown on the desktop.
+    bool active;
+    /// The mode now when shown, else the one the driver holds for it.
+    uint32_t width;
+    uint32_t height;
+    uint32_t refresh_hz;
+    /// Its top left on the desktop, when shown.
+    int32_t x;
+    int32_t y;
+    /// The system's name for the display when shown, `\\.\DISPLAYn`; empty
+    /// when not. UTF-8, terminated.
+    char name[LOWLAT_VDD_NAME_MAX];
+    /// The GPU the system renders it on, its LUID packed high part above low;
+    /// zero before its first picture.
+    uint64_t render_adapter;
+    /// Pictures the system has handed the driver.
+    uint64_t frames;
+} lowlat_vdd_monitor;
+
+/// A size and a whole refresh rate.
+typedef struct lowlat_vdd_mode {
+    uint32_t width;
+    uint32_t height;
+    uint32_t refresh_hz;
+} lowlat_vdd_mode;
+
+/// The settings every monitor shares, kept in a file the driver reads when it
+/// starts.
+typedef struct lowlat_vdd_settings {
+    /// `sizeof(lowlat_vdd_settings)`, set by the caller.
+    uint32_t size;
+    /// The GPU the monitors render on, by its maker's and its own number;
+    /// both zero for the system's high-performance GPU.
+    uint32_t gpu_vendor;
+    uint32_t gpu_device;
+    /// The pointer drawn into the pictures rather than reported beside them.
+    bool pointer_drawn;
+    /// Custom modes every monitor plugged after lists.
+    uint32_t mode_count;
+    lowlat_vdd_mode modes[LOWLAT_VDD_MODES_MAX];
+    /// A real monitor's EDID for every slot, one block or two; zero bytes for
+    /// the driver's own. A different EDID makes each slot a new monitor to
+    /// the system.
+    uint32_t edid_len;
+    uint8_t edid[LOWLAT_VDD_EDID_MAX];
+} lowlat_vdd_settings;
 #endif
 
 #ifdef __cplusplus
@@ -3395,6 +3543,121 @@ lowlat_status lowlat_client_poll_events(lowlat_client *cl,
 ///
 /// @attention `cl` came from `lowlat_client_create`.
 lowlat_status lowlat_client_debug_panic(lowlat_client *cl) LOWLAT_NOEXCEPT;
+#endif
+
+#if (defined(LOWLAT_VDD) && defined(_WIN32))
+/// Open the display driver.
+///
+/// @param[out] out The new handle; the monitors it plugs bound are its own.
+/// @returns `LOWLAT_ERR_VDD_ABSENT` when the driver is not installed or not
+/// started, `LOWLAT_ERR_VDD_VERSION` when it is another version than this
+/// library's, `LOWLAT_ERR_VDD_DENIED` when it refuses this account.
+///
+/// @attention `out` points at writable storage for one pointer.
+lowlat_status lowlat_vdd_open(lowlat_vdd **out) LOWLAT_NOEXCEPT;
+
+/// Close a handle, unplugging every monitor bound to it.
+///
+/// **Works on a poisoned handle.**
+///
+/// @param[in] vdd The handle, not used again. Null does nothing.
+///
+/// @attention `vdd` came from `lowlat_vdd_open` and is not used again.
+void lowlat_vdd_close(lowlat_vdd *vdd) LOWLAT_NOEXCEPT;
+
+/// Plug a monitor and wait, within a few seconds, until the system shows it
+/// at its mode.
+///
+/// @param[in] vdd The handle.
+/// @param[in] plug What to plug.
+/// @param[out] out The monitor as plugged; may be null.
+/// @returns `LOWLAT_ERR_VDD_FULL` when every slot is taken,
+/// `LOWLAT_ERR_VDD_SLOT_TAKEN` when the slot asked for is, and
+/// `LOWLAT_ERR_VDD_NOT_READY` when the monitor is plugged and the system has
+/// not finished within the bound -- `lowlat_vdd_get_monitor` then says where
+/// it stands.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `plug` points at a filled
+/// `lowlat_vdd_plug_info`; `out` is null or points at a `lowlat_vdd_monitor` whose
+/// `size` is set.
+lowlat_status lowlat_vdd_plug(lowlat_vdd *vdd,
+                              const lowlat_vdd_plug_info *plug,
+                              lowlat_vdd_monitor *out) LOWLAT_NOEXCEPT;
+
+/// Unplug a monitor this handle plugged, or a kept one, and wait until it has
+/// gone.
+///
+/// @returns `LOWLAT_ERR_VDD_NOT_OWNER` for a monitor bound to another handle.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`.
+lowlat_status lowlat_vdd_unplug(lowlat_vdd *vdd,
+                                uint32_t slot) LOWLAT_NOEXCEPT;
+
+/// Put a monitor this handle plugged, or a kept one, at a mode and wait until
+/// it is current: through the system's display configuration when the monitor
+/// lists the mode, by plugging it again with the mode added when it does not.
+///
+/// @param[out] out The monitor at its new mode; may be null.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `out` is null or points at a
+/// `lowlat_vdd_monitor` whose `size` is set.
+lowlat_status lowlat_vdd_set_mode(lowlat_vdd *vdd,
+                                  uint32_t slot,
+                                  uint32_t width,
+                                  uint32_t height,
+                                  uint32_t refresh_hz,
+                                  lowlat_vdd_monitor *out) LOWLAT_NOEXCEPT;
+
+/// The slots in use, by any handle. Pass a null `slots` to learn the count.
+///
+/// @param[out] slots Room for `*count` slot numbers.
+/// @param[in,out] count The room going in, the slots in use coming out.
+/// @returns `LOWLAT_ERR_TOO_SMALL` with the count written when the room is
+/// short.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `count` points at a `uint32_t`;
+/// `slots` is null or has room for `*count` of them.
+lowlat_status lowlat_vdd_list(lowlat_vdd *vdd,
+                              uint32_t *slots,
+                              uint32_t *count) LOWLAT_NOEXCEPT;
+
+/// The monitor at a slot.
+///
+/// @returns `LOWLAT_ERR_VDD_NO_MONITOR` for an empty slot.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `out` points at a `lowlat_vdd_monitor`
+/// whose `size` is set.
+lowlat_status lowlat_vdd_get_monitor(lowlat_vdd *vdd,
+                                     uint32_t slot,
+                                     lowlat_vdd_monitor *out) LOWLAT_NOEXCEPT;
+
+/// The settings every monitor shares, from the driver's file.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `out` points at a
+/// `lowlat_vdd_settings` whose `size` is set.
+lowlat_status lowlat_vdd_get_settings(lowlat_vdd *vdd,
+                                      lowlat_vdd_settings *out) LOWLAT_NOEXCEPT;
+
+/// Change the settings every monitor shares. The GPU applies at once, the
+/// pointer at each monitor's next swapchain, the custom modes and the EDID to
+/// the monitors plugged after.
+///
+/// @returns `LOWLAT_ERR_INVALID_ARGUMENT` for a mode no monitor may be, more
+/// modes than fit, or an EDID whose blocks do not check.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`; `settings` points at a filled
+/// `lowlat_vdd_settings`.
+lowlat_status lowlat_vdd_set_settings(lowlat_vdd *vdd,
+                                      const lowlat_vdd_settings *settings) LOWLAT_NOEXCEPT;
+
+/// Panic on purpose and prove the boundary contains it: the third half's twin
+/// of `lowlat_debug_panic`. Not for applications.
+///
+/// @returns `LOWLAT_ERR_INTERNAL`; every later call on `vdd` answers
+/// `LOWLAT_ERR_POISONED`, and closing it still works.
+///
+/// @attention `vdd` came from `lowlat_vdd_open`.
+lowlat_status lowlat_vdd_debug_panic(lowlat_vdd *vdd) LOWLAT_NOEXCEPT;
 #endif
 
 #ifdef __cplusplus

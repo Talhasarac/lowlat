@@ -134,14 +134,14 @@ bindgen "$(cygpath -m "$work")/status.h" \
     --default-macro-constant-type signed \
     --raw-line "// Windows SDK $version." \
     --allowlist-var 'STATUS_(SUCCESS|UNSUCCESSFUL|INVALID_PARAMETER|BUFFER_TOO_SMALL|INSUFFICIENT_RESOURCES)' \
-    --allowlist-var 'STATUS_(INVALID_DEVICE_REQUEST|ACCESS_DENIED|NOT_SUPPORTED|NO_SUCH_DEVICE|INVALID_DEVICE_STATE)' \
+    --allowlist-var 'STATUS_(INVALID_DEVICE_REQUEST|ACCESS_DENIED|NOT_SUPPORTED|NO_SUCH_DEVICE|INVALID_DEVICE_STATE|DEVICE_BUSY)' \
     --allowlist-var 'STATUS_GRAPHICS_(INDIRECT_DISPLAY_ABANDON_SWAPCHAIN|INDIRECT_DISPLAY_DEVICE_STOPPED|PATH_NOT_IN_TOPOLOGY)' \
     --allowlist-var 'E_PENDING|DXGI_ERROR_ACCESS_LOST' \
     -o "$out/status.rs" \
     -- --target=x86_64-pc-windows-msvc -I "$sdk/um" -I "$sdk/shared" -I "$sdk/ucrt"
 
 count="$(grep -c '^pub const' "$out/status.rs")"
-[ "$count" = 15 ] || { echo "$count status values, expected 15; the headers changed" >&2; exit 1; }
+[ "$count" = 16 ] || { echo "$count status values, expected 16; the headers changed" >&2; exit 1; }
 
 rustfmt --edition 2024 "$out/umdf.rs" "$out/status.rs"
 echo "  $(wc -l < "$out/umdf.rs") lines, $count status values"

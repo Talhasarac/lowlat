@@ -45,6 +45,13 @@ after_includes = """
 #endif
 #if !defined(LOWLAT_NO_CLIENT) && !defined(LOWLAT_CLIENT)
 #define LOWLAT_CLIENT
+#endif
+
+/// The third half, the virtual displays, on Windows alone: declared there
+/// unless the application defines `LOWLAT_NO_VDD`, and reported by
+/// `lowlat_features()` as `LOWLAT_FEATURE_VDD`.
+#if !defined(LOWLAT_NO_VDD) && !defined(LOWLAT_VDD) && defined(_WIN32)
+#define LOWLAT_VDD
 #endif"""
 line_length = 88
 tab_width = 4
@@ -68,6 +75,8 @@ parse_deps = false
 [defines]
 "feature = host" = "LOWLAT_HOST"
 "feature = client" = "LOWLAT_CLIENT"
+"feature = vdd" = "LOWLAT_VDD"
+"windows" = "_WIN32"
 
 [export]
 prefix = ""

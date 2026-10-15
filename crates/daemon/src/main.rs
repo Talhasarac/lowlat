@@ -9,6 +9,7 @@
 //!
 //!   KESSEL_SESSION=... [KESSEL_WS_SERVER=...] lowlatd [--name NAME] [--port N]
 //!   lowlatd session
+//!   lowlatd display list|add|hold|remove|mode|modes|gpu|pointer|edid ...
 
 // The service is written once; what the session's side of it is, is the
 // platform's (docs/impl-plan-windows.md). The channel, the bus, the seat and
@@ -18,6 +19,7 @@ mod app;
 mod channel;
 #[cfg(target_os = "linux")]
 mod dbus;
+mod display;
 #[cfg(target_os = "linux")]
 mod seat;
 mod service;

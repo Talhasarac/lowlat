@@ -145,12 +145,15 @@ enum Program {
     Session,
     /// The tray, which connects outward, shows the host and acts on it.
     Tray,
+    /// The virtual displays from a shell: a command that runs and ends.
+    Display,
 }
 
 /// The words that select the session-side roles, in first position and
 /// nowhere else.
 const SESSION_ROLE: &str = "session";
 const TRAY_ROLE: &str = "tray";
+const DISPLAY_ROLE: &str = "display";
 
 /// The program this invocation is, from the arguments after the name it was
 /// run under.
@@ -164,6 +167,7 @@ fn program_of<'a>(args: impl IntoIterator<Item = &'a str>) -> Program {
     match args.into_iter().next() {
         Some(SESSION_ROLE) => Program::Session,
         Some(TRAY_ROLE) => Program::Tray,
+        Some(DISPLAY_ROLE) => Program::Display,
         _ => Program::Service,
     }
 }
@@ -399,6 +403,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match program {
         Program::Session => session_side::session(),
         Program::Tray => session_side::tray(),
+        Program::Display => crate::display::main(args.get(1..).unwrap_or(&[])),
         Program::Service => {}
     }
     // **The host's waits are milliseconds, and Windows rounds each one up to
@@ -1140,6 +1145,8 @@ mod role_tests {
         assert_eq!(program_of(["session", "--verbose"]), Program::Session);
         assert_eq!(program_of(["tray"]), Program::Tray);
         assert_eq!(program_of(["tray", "--verbose"]), Program::Tray);
+        assert_eq!(program_of(["display", "list"]), Program::Display);
+        assert_eq!(program_of(["list", "display"]), Program::Service);
         assert_eq!(program_of(["--tray"]), Program::Service);
         assert_eq!(program_of(["--verbose", "tray"]), Program::Service);
         assert_eq!(program_of(["session", "tray"]), Program::Session);

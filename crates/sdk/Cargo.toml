@@ -16,7 +16,7 @@ name = "lowlat"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["host", "client"]
+default = ["host", "client", "vdd"]
 # The host half: capture, encode, delivery and input, and every
 # `lowlat_host_*` entry point. Off, none of the Linux display stack is compiled.
 host = [
@@ -36,6 +36,10 @@ client = [
     "dep:lowlat-portmap",
     "dep:zeroize",
 ]
+# The third half: the host's own virtual displays, through the display
+# driver's controller, and every `lowlat_vdd_*` entry point. Windows alone; on
+# any other platform the feature builds nothing.
+vdd = ["dep:lowlat-vdd-ctl"]
 # The client's software decoder takes a GPL build of the machine's codec
 # library as well as an LGPL one. The default build never does: a build with
 # this on is its maker's combination, and the GPL's terms apply to it.
@@ -54,6 +58,7 @@ lowlat-crypto = { workspace = true, optional = true }
 lowlat-audio = { workspace = true, optional = true }
 lowlat-encode = { workspace = true, optional = true }
 lowlat-inject = { workspace = true, optional = true }
+lowlat-vdd-ctl = { workspace = true, optional = true }
 # Clears the copy of a relay's credential the boundary takes from the
 # caller's configuration. Already in the graph beneath the credentials crate.
 zeroize = { version = "1", optional = true }

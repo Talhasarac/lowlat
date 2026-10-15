@@ -36,6 +36,10 @@ serde_json.workspace = true
 # dependency.
 libc.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# `lowlatd display`: the virtual displays through the driver's controller.
+lowlat-vdd-ctl.workspace = true
+
 [lints]
 workspace = true
 

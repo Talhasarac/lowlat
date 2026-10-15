@@ -1,5 +1,6 @@
 //! What the display driver and its controller share: the control interface's
-//! requests and replies, the monitors' identity and their modes
+//! requests and replies, the monitors' identity and their modes, and the file
+//! kept monitors come back from
 //! ([docs/11-drivers.md](../../../docs/11-drivers.md)).
 //!
 //! **No platform code and no allocation.** The driver is a library loaded into
@@ -33,6 +34,7 @@ extern crate std;
 pub mod control;
 pub mod edid;
 pub mod modes;
+pub mod settings;
 
 /// How many monitors the adapter carries, each a slot (docs/11-drivers.md
 /// section 1.3).

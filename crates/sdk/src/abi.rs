@@ -26,6 +26,11 @@ pub mod client;
 #[cfg(feature = "client")]
 pub use client::*;
 
+#[cfg(all(feature = "vdd", windows))]
+pub mod vdd;
+#[cfg(all(feature = "vdd", windows))]
+pub use vdd::*;
+
 /// A status code.
 ///
 /// **An enumeration for the names and a plain integer wherever one is
@@ -46,6 +51,7 @@ pub use client::*;
 ///   -300 to -399   encode
 ///   -400 to -499   transport
 ///   -500 to -599   decode
+///   -600 to -699   the virtual displays
 /// ```
 ///
 /// A value is assigned once and never reused, including for a condition that
@@ -130,12 +136,41 @@ pub enum lowlat_status {
     /// a build reporting `LOWLAT_FEATURE_GPL_LIBAVCODEC` -- and was closed
     /// unused.
     LOWLAT_ERR_NO_DECODER_LICENCE = -504,
+
+    /// The display driver is not installed, or its device is not started.
+    LOWLAT_ERR_VDD_ABSENT = -600,
+    /// The display driver is another version than this library's; the two
+    /// ship together.
+    LOWLAT_ERR_VDD_VERSION = -601,
+    /// The display driver refused this account.
+    LOWLAT_ERR_VDD_DENIED = -602,
+    /// The display driver is still starting.
+    LOWLAT_ERR_VDD_STARTING = -603,
+    /// Every slot is taken.
+    LOWLAT_ERR_VDD_FULL = -604,
+    /// The slot asked for is taken.
+    LOWLAT_ERR_VDD_SLOT_TAKEN = -605,
+    /// The monitor is bound to another handle.
+    LOWLAT_ERR_VDD_NOT_OWNER = -606,
+    /// No monitor at that slot.
+    LOWLAT_ERR_VDD_NO_MONITOR = -607,
+    /// The monitor is being plugged again; ask again shortly.
+    LOWLAT_ERR_VDD_BUSY = -608,
+    /// The system's display configuration refused the change.
+    LOWLAT_ERR_VDD_DISPLAY_CONFIG = -609,
+    /// The monitor is plugged and the system did not finish within the
+    /// bound; asking for the monitor says where it stands.
+    LOWLAT_ERR_VDD_NOT_READY = -610,
+    /// The settings file could not be read or written.
+    LOWLAT_ERR_VDD_FILE = -611,
+    /// The display driver answered with an error of its own.
+    LOWLAT_ERR_VDD_IO = -612,
 }
 
 /// The major version, raised only when something already published changes.
 pub const LOWLAT_ABI_MAJOR: u32 = 0;
 /// The minor version, raised when surface is appended.
-pub const LOWLAT_ABI_MINOR: u32 = 25;
+pub const LOWLAT_ABI_MINOR: u32 = 26;
 
 /// Major and minor, packed.
 ///
@@ -160,6 +195,9 @@ pub const LOWLAT_FEATURE_CLIENT: u32 = 2;
 /// not what it has: a codec library actually loaded is named with its
 /// licence by `lowlat_enum_decoders`.
 pub const LOWLAT_FEATURE_GPL_LIBAVCODEC: u32 = 4;
+/// The virtual displays are in this build (minor 26): every `lowlat_vdd_*`
+/// entry point exists. Windows alone.
+pub const LOWLAT_FEATURE_VDD: u32 = 8;
 
 /// Which halves this build of the library carries, and what else was
 /// decided when it was built.
@@ -183,6 +221,9 @@ pub extern "C" fn lowlat_features() -> u32 {
     if cfg!(feature = "gpl-libavcodec") {
         bits |= LOWLAT_FEATURE_GPL_LIBAVCODEC;
     }
+    if cfg!(all(feature = "vdd", windows)) {
+        bits |= LOWLAT_FEATURE_VDD;
+    }
     bits
 }
 
@@ -190,7 +231,7 @@ pub extern "C" fn lowlat_features() -> u32 {
 ///
 /// A table rather than a match, because the value arriving is an integer and
 /// not necessarily one of these.
-const DESCRIPTIONS: [(lowlat_status, &CStr); 25] = [
+const DESCRIPTIONS: [(lowlat_status, &CStr); 38] = [
     (LOWLAT_OK, c"ok"),
     (LOWLAT_TIMEOUT, c"no event within the timeout"),
     (
@@ -255,6 +296,46 @@ const DESCRIPTIONS: [(lowlat_status, &CStr); 25] = [
         LOWLAT_ERR_NO_DECODER_LICENCE,
         c"a codec library was found and is not one this library may load",
     ),
+    (
+        LOWLAT_ERR_VDD_ABSENT,
+        c"the display driver is not installed or not started",
+    ),
+    (
+        LOWLAT_ERR_VDD_VERSION,
+        c"the display driver is another version than this library's",
+    ),
+    (
+        LOWLAT_ERR_VDD_DENIED,
+        c"the display driver refused this account",
+    ),
+    (
+        LOWLAT_ERR_VDD_STARTING,
+        c"the display driver is still starting",
+    ),
+    (LOWLAT_ERR_VDD_FULL, c"every display slot is taken"),
+    (
+        LOWLAT_ERR_VDD_SLOT_TAKEN,
+        c"the display slot asked for is taken",
+    ),
+    (
+        LOWLAT_ERR_VDD_NOT_OWNER,
+        c"the display is bound to another handle",
+    ),
+    (LOWLAT_ERR_VDD_NO_MONITOR, c"no display at that slot"),
+    (LOWLAT_ERR_VDD_BUSY, c"the display is being plugged again"),
+    (
+        LOWLAT_ERR_VDD_DISPLAY_CONFIG,
+        c"the system's display configuration refused the change",
+    ),
+    (
+        LOWLAT_ERR_VDD_NOT_READY,
+        c"the display is plugged and the system has not finished",
+    ),
+    (
+        LOWLAT_ERR_VDD_FILE,
+        c"the display settings file could not be read or written",
+    ),
+    (LOWLAT_ERR_VDD_IO, c"the display driver answered an error"),
 ];
 
 /// Describe a status.
@@ -453,7 +534,14 @@ mod tests {
             cfg!(feature = "gpl-libavcodec")
         );
         assert_eq!(
-            bits & !(LOWLAT_FEATURE_HOST | LOWLAT_FEATURE_CLIENT | LOWLAT_FEATURE_GPL_LIBAVCODEC),
+            bits & LOWLAT_FEATURE_VDD != 0,
+            cfg!(all(feature = "vdd", windows))
+        );
+        assert_eq!(
+            bits & !(LOWLAT_FEATURE_HOST
+                | LOWLAT_FEATURE_CLIENT
+                | LOWLAT_FEATURE_GPL_LIBAVCODEC
+                | LOWLAT_FEATURE_VDD),
             0,
             "a bit no feature names"
         );

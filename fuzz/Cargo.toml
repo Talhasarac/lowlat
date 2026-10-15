@@ -27,6 +27,8 @@ lowlat-client = { path = "../crates/client" }
 # The gateway's replies: anything on the local network can answer a search or
 # hold the gateway's address, so everything read back is parsed here first.
 lowlat-portmap = { path = "../crates/portmap" }
+# The display driver's settings file: any user writes it, the driver reads it.
+lowlat-vdd-proto = { path = "../crates/vdd-proto" }
 
 [[bin]]
 name = "envelope"
@@ -170,6 +172,13 @@ bench = false
 [[bin]]
 name = "portmap_route"
 path = "fuzz_targets/portmap_route.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vdd_settings"
+path = "fuzz_targets/vdd_settings.rs"
 test = false
 doc = false
 bench = false

@@ -19,6 +19,7 @@ use lowlat_common::{log_debug, log_info, log_warn};
 use lowlat_drivers::d3d11::{Com, D3d11, Luid, query};
 use lowlat_drivers::ffi::d3d11::{ID3D11Device, ID3D11DeviceContext, IUnknown};
 use lowlat_drivers::ffi::d3d11_guids::IID_IDXGIDevice;
+use lowlat_vdd_proto::settings::Pointer;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
@@ -185,7 +186,12 @@ impl Run {
             );
         } else {
             self.stats.assigned.store(true, Ordering::Relaxed);
-            let mut cursor = Cursor::setup(self.monitor, slot);
+            // The hardware cursor, unless the file asks for the pointer in
+            // the pictures -- where the system draws it when none is set up.
+            let mut cursor = match monitor::pointer() {
+                Pointer::Hardware => Cursor::setup(self.monitor, slot),
+                Pointer::Drawn => None,
+            };
             self.frames(cursor.as_mut());
             self.stats.assigned.store(false, Ordering::Relaxed);
         }

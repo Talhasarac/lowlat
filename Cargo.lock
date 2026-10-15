@@ -940,6 +940,7 @@ dependencies = [
  "lowlat-inject",
  "lowlat-net",
  "lowlat-portmap",
+ "lowlat-vdd-ctl",
  "zeroize",
 ]
 
@@ -968,6 +969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lowlat-vdd-ctl"
+version = "0.0.0"
+dependencies = [
+ "lowlat-common",
+ "lowlat-drivers",
+ "lowlat-vdd-proto",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lowlat-vdd-proto"
 version = "0.0.0"
 
@@ -981,6 +992,7 @@ dependencies = [
  "lowlat-common",
  "lowlat-host",
  "lowlat-kessel",
+ "lowlat-vdd-ctl",
  "serde_json",
  "tokio",
 ]
