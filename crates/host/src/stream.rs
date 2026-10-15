@@ -2834,6 +2834,196 @@ mod pace_tests {
     }
 }
 
+/// How far either side of a refresh a deadline is placed.
+///
+/// **A composition lands within a fraction of a millisecond of its refresh**,
+/// 0.2 to 0.4 ms after it on the development machine, so half a millisecond
+/// keeps a deadline on the side of the refresh it is meant for without a
+/// latency figure seeing it.
+const SLOT_MARGIN_MS: f64 = 0.5;
+
+/// The frame clock against a display that says when it composed each picture
+/// (docs/05-host.md section 2).
+///
+/// **The rate and the phase are kept apart.** The rate is a grid advanced by
+/// one interval per picture taken, so a stream keeps its rate exactly whatever
+/// the refresh: ninety a second on a 120 Hz display alternates one refresh and
+/// two. The phase is the display's, because a composition lands only on a
+/// refresh, counted from the last one taken. Each deadline is the refresh
+/// nearest the grid: just before it when no refresh lies between it and the
+/// last picture, so its composition is taken as it lands, and just after it
+/// when refreshes between are skipped, so its own composition supersedes one
+/// left pending from a skipped refresh.
+///
+/// **A grid anchored once and kept is what this replaces.** A composition
+/// landing between a tick and the next deadline waited for that deadline: up
+/// to an interval on every frame of content whose phase fell that way, and on
+/// about half of all desktop updates.
+#[derive(Debug, Default)]
+struct Slots {
+    /// Where the rate puts the next picture, on the loop's clock.
+    grid_ms: Option<f64>,
+}
+
+impl Slots {
+    /// The deadline after a tick that took the picture composed at
+    /// `composed_ms`.
+    ///
+    /// **A picture composed more than half a refresh after its grid point ends
+    /// a stall**, and the grid starts again from it: nothing was composed for
+    /// the grid to keep. One composed before its grid point -- left pending
+    /// from a skipped refresh -- keeps the grid, which is what stops it
+    /// bringing the next picture a refresh early.
+    fn after_picture(&mut self, composed_ms: f64, interval_ms: f64, refresh_ms: f64) -> f64 {
+        let grid = match self.grid_ms {
+            Some(grid) if composed_ms <= grid + refresh_ms / 2.0 => grid,
+            _ => composed_ms,
+        } + interval_ms;
+        self.grid_ms = Some(grid);
+        let steps = ((grid - composed_ms) / refresh_ms).round();
+        let slot = composed_ms + steps * refresh_ms;
+        if steps > 1.0 {
+            slot + SLOT_MARGIN_MS
+        } else {
+            slot - SLOT_MARGIN_MS
+        }
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::{SLOT_MARGIN_MS, Slots};
+
+    const REFRESH: f64 = 1000.0 / 120.0;
+    const EXACT: f64 = 1e-6;
+
+    /// A stream of `interval` against a display that composes on the
+    /// refreshes `composes` names, from zero: at each deadline the picture
+    /// taken is the newest composition at or before it, or else the first
+    /// after it, caught as it lands. Each picture's deadline and composition.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        reason = "refresh counts of a few thousand"
+    )]
+    fn stream(interval: f64, pictures: usize, composes: impl Fn(i64) -> bool) -> Vec<(f64, f64)> {
+        let mut slots = Slots::default();
+        let mut taken = Vec::with_capacity(pictures);
+        let (mut deadline, mut last) = (0.0f64, -1i64);
+        while taken.len() < pictures {
+            let reached = (deadline / REFRESH).floor() as i64;
+            let pending = (last + 1..=reached).rev().find(|&k| composes(k));
+            let k = pending.unwrap_or_else(|| {
+                (reached.max(last) + 1..)
+                    .find(|&k| composes(k))
+                    .expect("a composition")
+            });
+            let composed = k as f64 * REFRESH;
+            taken.push((deadline, composed));
+            last = k;
+            deadline = slots.after_picture(composed, interval, REFRESH);
+        }
+        taken
+    }
+
+    #[allow(clippy::cast_precision_loss, reason = "a few hundred pictures")]
+    fn mean_gap(taken: &[(f64, f64)]) -> f64 {
+        (taken[taken.len() - 1].0 - taken[0].0) / (taken.len() - 1) as f64
+    }
+
+    /// **At the display's own rate every composition is taken as it lands**:
+    /// the deadline falls just before the refresh it lands on, never just
+    /// after one, which is where a composition waits an interval.
+    #[test]
+    fn at_the_displays_rate_every_composition_is_taken_as_it_lands() {
+        let taken = stream(REFRESH, 240, |_| true);
+        for (i, pair) in taken.windows(2).enumerate() {
+            let ((_, before), (deadline, composed)) = (pair[0], pair[1]);
+            assert!(
+                (composed - before - REFRESH).abs() < EXACT,
+                "picture {i}: the next refresh's"
+            );
+            assert!(
+                deadline < composed && composed - deadline <= SLOT_MARGIN_MS + EXACT,
+                "picture {i}: deadline {deadline:.3} not just before {composed:.3}"
+            );
+        }
+    }
+
+    /// At half the refresh the deadline falls just after every other refresh,
+    /// so its own composition is taken, a margin old, and never the one before
+    /// it left pending.
+    #[test]
+    fn at_half_the_refresh_every_other_composition_is_taken() {
+        let taken = stream(2.0 * REFRESH, 240, |_| true);
+        for (i, pair) in taken.windows(2).enumerate() {
+            let ((_, before), (deadline, composed)) = (pair[0], pair[1]);
+            assert!((composed - before - 2.0 * REFRESH).abs() < EXACT);
+            assert!(
+                (deadline - composed - SLOT_MARGIN_MS).abs() < EXACT,
+                "picture {i}: composed {composed:.3}, taken at {deadline:.3}"
+            );
+        }
+    }
+
+    /// **A composition left from a skipped refresh does not move the rate.**
+    /// Content that leaves the grid's refresh empty hands the loop the one
+    /// before it, a refresh stale; taken as where the next picture is counted
+    /// from, it brought that picture a refresh early, and the stream ran fast.
+    #[test]
+    fn a_composition_left_from_a_skipped_refresh_keeps_the_rate() {
+        let interval = 2.0 * REFRESH;
+        let taken = stream(interval, 600, |k| k % 4 != 2);
+        assert!(
+            taken
+                .iter()
+                .any(|&(deadline, composed)| deadline - composed > REFRESH / 2.0),
+            "the content leaves compositions pending from skipped refreshes"
+        );
+        let shortest = taken
+            .windows(2)
+            .map(|pair| pair[1].0 - pair[0].0)
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            shortest > interval - REFRESH / 2.0,
+            "a picture a refresh early: gap {shortest:.3} ms"
+        );
+        assert!((mean_gap(&taken) - interval).abs() < 0.01 * interval);
+    }
+
+    /// **A rate that is no whole number of refreshes keeps its rate and its
+    /// refreshes both**: ninety on 120 alternates one refresh and two, each
+    /// picture taken within the margin of its deadline -- before the refresh
+    /// for one, after it for two.
+    #[test]
+    fn ninety_on_a_120_display_keeps_its_rate_on_the_refreshes() {
+        let interval = 1000.0 / 90.0;
+        let taken = stream(interval, 900, |_| true);
+        for (i, &(deadline, composed)) in taken.iter().enumerate() {
+            assert!(
+                (deadline - composed).abs() <= SLOT_MARGIN_MS + EXACT,
+                "picture {i}: composed {composed:.3}, deadline {deadline:.3}"
+            );
+        }
+        assert!((mean_gap(&taken) - interval).abs() < 0.01 * interval);
+    }
+
+    /// **A stall starts the grid again on the picture that ends it**: the next
+    /// deadline is an interval after that picture, not a refresh counted back
+    /// toward where the grid stood before the desktop went still.
+    #[test]
+    fn a_stall_starts_the_grid_again_on_the_picture_that_ends_it() {
+        let mut slots = Slots::default();
+        slots.after_picture(0.0, REFRESH, REFRESH);
+        let resumed = 120.0 * REFRESH;
+        let next = slots.after_picture(resumed, REFRESH, REFRESH);
+        assert!(
+            (next - (resumed + REFRESH - SLOT_MARGIN_MS)).abs() < EXACT,
+            "deadline {next:.3} after a picture composed at {resumed:.3}"
+        );
+    }
+}
+
 /// Handing over a picture that is already on the device.
 ///
 /// **Host-local and deliberately narrow.** One backend can take a frame this
@@ -2979,6 +3169,8 @@ fn encode_loop<E: Encoder + FromDevice>(
     // one is requested per tick and never doubled.
     let mut vblank_seen = true;
     let mut vblank_armed = false;
+    // The frame clock's grid, where the display says when it composed.
+    let mut slots = Slots::default();
     // **When the vblanks arrive, and what they promise.** The arrival time is
     // how the poke below is scheduled: the next event is one observed period
     // after the last one, and the poke lands a moment before it. Nothing
@@ -3308,6 +3500,7 @@ fn encode_loop<E: Encoder + FromDevice>(
                     Ok(None) => Some(crate::display::Acquired {
                         at: began,
                         changed: false,
+                        composed_before_ms: None,
                     }),
                     Err(error) => {
                         lowlat_common::log_warn!(
@@ -3316,6 +3509,7 @@ fn encode_loop<E: Encoder + FromDevice>(
                         Some(crate::display::Acquired {
                             at: began,
                             changed: false,
+                            composed_before_ms: None,
                         })
                     }
                 },
@@ -3325,6 +3519,22 @@ fn encode_loop<E: Encoder + FromDevice>(
                 convert_began,
                 lowlat_common::clock::Time::now(),
             ));
+            // **Where the display says when it composed, the next deadline is
+            // on its refresh** ([`Slots`]). A tick that took nothing new waits
+            // again at once, so a composition is taken as it lands rather than
+            // at a deadline an interval on. A display out of reach answers its
+            // wait at once, so for it the clock's own deadline stands, which
+            // is what paces asking for it again.
+            if let Some(refresh_ms) = display.as_deref().and_then(Display::refresh_ms) {
+                match ready.and_then(|got| got.composed_before_ms.map(|before| (got.at, before))) {
+                    Some((at, before_ms)) => {
+                        let composed_ms = lowlat_common::clock::diff_ms(started, at) - before_ms;
+                        next_frame_ms = slots.after_picture(composed_ms, interval_ms, refresh_ms);
+                    }
+                    None if !held => next_frame_ms = lowlat_common::clock::elapsed_ms(started),
+                    None => {}
+                }
+            }
             // **Where the picture stops and the pointer starts.** The two
             // were one figure and the pointer is not the small half of it.
             let picture_at = lowlat_common::clock::Time::now();
@@ -3664,11 +3874,19 @@ fn encode_loop<E: Encoder + FromDevice>(
             // next present is expected; the conversion that follows the
             // event then runs warm. A poke that arrives too late is a
             // wasted few microseconds and corrects itself on the next event.
+            //
+            // **A picture in flight is polled for whatever the poke's
+            // schedule.** The wait waiting for the poke held a finished
+            // picture uncollected for up to a refresh: every picture submitted
+            // by a tick that found nothing new, once the tick began waiting
+            // again at once ([`Slots`]).
             let timeout = if next_poke_ms.is_finite() && now_ms >= next_poke_ms {
                 if let Err(error) = desktop.poke() {
                     lowlat_common::log_warn!("stream: the device poke failed, {error}");
                 }
                 next_poke_ms = f64::INFINITY;
+                1
+            } else if waiting {
                 1
             } else if next_poke_ms.is_finite() {
                 #[allow(
@@ -3679,8 +3897,6 @@ fn encode_loop<E: Encoder + FromDevice>(
                 {
                     ((next_poke_ms - now_ms).ceil() as i32).clamp(1, 20)
                 }
-            } else if waiting {
-                1
             } else {
                 20
             };

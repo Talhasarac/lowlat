@@ -76,4 +76,7 @@ pub struct Acquired {
     /// caller may skip everything downstream of it; nothing is skipped here,
     /// because the conversion is what produced the answer.
     pub changed: bool,
+    /// How long before `at` the system composed the picture, where the
+    /// display says: what the loop places its next deadline against.
+    pub composed_before_ms: Option<f64>,
 }

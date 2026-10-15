@@ -1326,7 +1326,11 @@ impl Display {
         // gives the same answer.
         let changed = self.digest != Some(digest);
         self.digest = Some(digest);
-        Ok(Some(Acquired { at, changed }))
+        Ok(Some(Acquired {
+            at,
+            changed,
+            composed_before_ms: None,
+        }))
     }
 
     /// Make sure this buffer is imported, and say which import it is.
@@ -1422,6 +1426,12 @@ impl Display {
         self.card
             .arm_vblank(self.crtc_index)
             .map_err(Error::Capture)
+    }
+
+    /// Nothing: a picture here does not say when it was composed, so the
+    /// loop keeps its own phase.
+    pub fn refresh_ms(&self) -> Option<f64> {
+        None
     }
 
     /// Wait up to `timeout_ms` for the present an arm asked about.

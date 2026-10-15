@@ -268,6 +268,8 @@ struct Kept {
     presented: i64,
     /// When the duplication handed it over.
     at: Time,
+    /// How long before `at` it was presented.
+    age_ms: f64,
 }
 
 /// The pointer's three bits and when they are said (docs/05-host.md section
@@ -935,6 +937,7 @@ impl Display {
         self.flight = Some(Acquired {
             at: kept.at,
             changed: true,
+            composed_before_ms: Some(kept.age_ms),
         });
         Ok(kept.at)
     }
@@ -951,13 +954,13 @@ impl Display {
                 Self::note_pointer(&mut self.watch, source, &frame);
                 match frame.image {
                     Some(image) => {
-                        self.timing
-                            .handed
-                            .record(duplication::age_ms(frame.presented));
+                        let age_ms = duplication::age_ms(frame.presented);
+                        self.timing.handed.record(age_ms);
                         Ok(Looked::Image(Kept {
                             image,
                             presented: frame.presented,
                             at: Time::now(),
+                            age_ms,
                         }))
                     }
                     None => {
@@ -1038,6 +1041,12 @@ impl Display {
     /// Nothing to arm: the duplication's wait is the present.
     pub fn arm_vblank(&self) -> Result<(), Error> {
         Ok(())
+    }
+
+    /// The refresh the desktop is composed on, which every picture here says
+    /// when it was composed against: the loop places its deadlines on it.
+    pub fn refresh_ms(&self) -> Option<f64> {
+        Some(self.period_ms)
     }
 
     /// Wait up to `timeout_ms` for a present past the frame's deadline, which
