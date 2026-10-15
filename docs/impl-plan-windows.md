@@ -3,7 +3,8 @@
 **Status:** planned 2026-09-26. Phase W0, the platform seams, is closed; the client's phase
 (W1) was planned at its interview the same day, and the host's (W2) at its own on 2026-10-14,
 the day the host's own virtual display (W3) was added with its frame hand-off decided; W3 was
-planned at its own interview on 2026-10-15.
+planned at its own interview on 2026-10-15, and its first step, the driver and its package,
+built the same day.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -456,7 +457,10 @@ once, here.
   duplicated. Its output sits on an adapter of its own, which renders nothing and is refused as
   an encoder's device, and the GPU that renders it is another adapter; so the stream refuses
   every such output, another vendor's virtual display and the host's own alike. W3.2 delivers
-  it.
+  it. *Corrected again 2026-10-15, at W3.0's build:* the system lists a virtual display's
+  output under the GPU that renders it, as that GPU's own -- seen with the host's own display --
+  not on an adapter of its own, so the premise above does not hold for it. Whether the stream
+  as built takes such an output is W3.2's first check.
 - **NVENC alone, on the capture's D3D11 device.** The encoder keeps its register-once submit and
   poll and binds its device through D3D11 rather than CUDA. AMD's and Intel's encoders are
   deferred: on the development machine only the NVIDIA card drives a display, so either would
@@ -904,12 +908,40 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
 
 ### Steps
 
-- [ ] **W3.0 the driver and its package**: the crate and its generated declarations; the
+- [x] **W3.0 the driver and its package**: the crate and its generated declarations; the
   adapter, its monitors with a fixed identity, their modes and the hardware cursor; a frame loop
   that finishes every frame; the setup information, the package and its test signature; install
-  and uninstall. Checked by a monitor plugged by hand arriving and composing, listed on an
-  adapter of its own with the render GPU named, and the package installing silently with no
-  test mode.
+  and uninstall. Checked by a monitor plugged by hand arriving and composing, listed with the
+  render GPU named, and the package installing silently with no test mode. *Amended at the
+  build:* the system lists the output under the GPU that renders it, not on an adapter of its
+  own as first written.
+  *Built and checked live 2026-10-15.* Two crates: `lowlat-vdd-proto` holds what the driver and
+  its controller share -- the control interface's requests and replies, each slot's identity
+  and EDID, the modes -- with no platform code, tested on every platform; `lowlat-vdd` is the
+  driver, a Windows library the system's user-mode driver host loads. The frameworks'
+  declarations are generated from the pinned driver kit's headers by a script and committed;
+  scripts restore the kit, make and trust the development certificate, package and sign the
+  driver, and install and remove it. The control interface answers the version, a plug, an
+  unplug and the list of slots, a monitor plugged through it bound to its handle; the driver's
+  log goes to the debugger stream. Two things the build found. **A mode that asks for display
+  bandwidth is never made active** when the adapter declares no budget, since the system keeps
+  the active modes' sum within the adapter's: the first build's monitor arrived and never
+  composed, and the target modes now ask for none. **The system makes a plugged monitor active
+  by itself only in a set of monitors it has not seen**; a set it remembers it arranges as
+  remembered, which left the first build's monitor dark ever after. So a monitor is made active
+  by adding its path to the active ones through the system's display configuration, never saved
+  -- W3.1's controller does so, and this step's check did by hand. Checked on the development
+  machine, Windows 10 22H2 with the display class at 1.5: the package installing and updating
+  silently with no test mode; a monitor plugged by an unelevated program in under a fifth of a
+  millisecond, the system making a monitor of its EDID; made active in 164 ms, its mode
+  committed, its swapchain on the RTX 5060 the system named and its pictures counted, at
+  1920x1080 at 60 and at 2560x1440 at 120; a second slot's monitor, a set the system had not
+  seen, extended by the system itself in 15 ms; the output listed under the render GPU; the
+  first one to three swapchains after a mode is set taken back at once -- unassigned before the
+  device is set, or lost at the first acquire -- and another assigned within about a quarter of
+  a second, each ended and deleted without a wait; and the monitor unplugged by a request, by
+  its handle's close and by its process killed mid-hold, each in under 10 ms. The protocol's
+  checks were each broken once and seen to fail, and CI fetches the kit and builds the driver.
 - [ ] **W3.1 the controller**: the control interface, bound and kept monitors, plug, unplug, a
   mode set through the display configuration or by replug, the list; the slots, the custom
   modes and the file kept monitors come back from; the library's third half and `lowlatd
@@ -958,6 +990,12 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-15: W3.0 built and checked live: the driver and its protocol crate, the generated
+  declarations, the kit restored by a script, the package test-signed and installed silently;
+  a mode asks for no display bandwidth; a plugged monitor made active through the display
+  configuration, unsaved, since the system leaves a set it remembers as it was; the output
+  listed under the GPU that renders it, correcting W2's correction; the first swapchains after
+  a mode is set taken back while it settles.
 - 2026-10-15: W3 planned at its interview: the monitor lives with the host, plugged when a
   stream finds nothing lit and the configuration allows it, or when named; the driver in Rust in
   this workspace, its channel's layout and handshake written once and model-checked; a

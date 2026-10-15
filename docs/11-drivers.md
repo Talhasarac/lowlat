@@ -1,8 +1,8 @@
 # 11 - Drivers
 
-**Status:** planned 2026-10-15, at W3's interview; nothing is built. Built by
-[impl-plan-windows.md](impl-plan-windows.md) W3, where the decisions and their reasons are
-recorded; this document is the design they add up to.
+**Status:** planned 2026-10-15, at W3's interview; the display's driver and its package built
+the same day (W3.0), the rest planned. Built by [impl-plan-windows.md](impl-plan-windows.md) W3,
+where the decisions and their reasons are recorded; this document is the design they add up to.
 
 On Windows the host carries drivers of its own where the system offers no interface for what a
 host needs: a display, for a machine with no monitor and for pictures the host reads without the
@@ -29,6 +29,8 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
   path (measured with and without).
 - The floor is Windows 10 1903, the first release whose display class lets a driver name the GPU
   to render on.
+- Its log goes to the debugger stream: the driver's host process has no console and no file it
+  may write.
 
 ### §1.2 Two interfaces
 
@@ -92,6 +94,12 @@ at run time instead (§1.7).
   is not done.
 - The adapter asks the system for the smallest mode that holds the desktop, without which a
   monitor is sometimes refused.
+- **A mode asks for no display bandwidth.** The adapter declares no budget, and the system keeps
+  the active modes' sum within it, so a mode asking for any is never made active.
+- **A plugged monitor is made active by the controller**, by adding its path to the active ones
+  through the display configuration, never saved. The system extends the desktop onto a monitor
+  by itself only in a set of monitors it has not seen; a set it remembers it arranges as
+  remembered, which can leave the monitor dark.
 
 ### §1.6 Pictures
 
@@ -131,6 +139,8 @@ driver converts into targets of its own, then copies, by measurement.
 - The adapter names the GPU to render on before a monitor arrives: the host's encoder's GPU for
   the host's display, the file's for kept ones. The system may choose another, and each
   swapchain says which it got; the host builds on that one.
+- **The system lists the monitor's output under the GPU that renders it**, as that GPU's own
+  output, not under the display adapter.
 - **The pointer is a hardware cursor**, alpha and full XOR up to 256 a side -- the largest the
   wire carries -- so the pictures carry no pointer, and the host reads the shape, the hotspot and
   the visibility from the driver, the position and the show state as for any display
@@ -140,10 +150,16 @@ driver converts into targets of its own, then copies, by measurement.
 ### §1.8 Lifecycle
 
 - A swapchain comes with a device on the GPU it renders on; the driver sets the device first and
-  does the rest after. A device that fails abandons the swapchain, which the system assigns again;
-  any other failure there ends the driver. The swapchain is deleted on every exit of its worker.
-- An unassignment tears the worker down outside any lock the callbacks share, and a replacement
-  monitor is never created inside the old one's unassignment.
+  does the rest after. A device that cannot be made abandons the swapchain; a swapchain that
+  refuses its device, or is lost, ends its worker; either way the system assigns another. The
+  swapchain is deleted on every exit of its worker.
+- **The system takes back the first one to three swapchains after a mode is set** -- unassigned
+  before the device is set, or lost at the first acquire -- and assigns another within about a
+  quarter of a second; each ends and is deleted at once.
+- An unassignment takes the worker from its monitor under the lock the callbacks share and waits,
+  outside it, for the worker to delete its swapchain; an assignment first ends a worker still
+  there, so a deletion that calls the unassignment back would find nothing. A replacement monitor is
+  never created inside the old one's unassignment.
 - A display switched off takes the monitor's path out of the topology; the host keeps the display
   awake while it captures.
 - An update of the driver: the host closes its handle when the driver asks to be removed, and
@@ -165,6 +181,12 @@ pads.
 
 ## §3 Verification status
 
-Planned 2026-10-15; nothing is built. W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is
-the first check, and its comparison decides whether the host reads pictures as §1.6 describes or
-through the system's duplication of this display.
+Planned 2026-10-15. **The driver and its package are built and checked live** (W3.0,
+2026-10-15): installed silently with no test mode; a bound monitor plugged by an unelevated
+program, made active and composing on the GPU the system named, at 1920x1080 at 60 and 2560x1440
+at 120; unplugged by a request and by its handle's end, a killed process's included. Its control
+interface answers the version, a plug, an unplug and the list; setting a mode, kept monitors and
+the file (§1.4), the pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
+W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
+comparison decides whether the host reads pictures as §1.6 describes or through the system's
+duplication of this display.

@@ -80,6 +80,11 @@ lowlat-client    client orchestration: the receive path, the frame queue, the
 lowlat-sdk       the C ABI cdylib and its header; the host and the client are
                  its two halves, each a feature
 lowlat-kessel    signaling client; async permitted; the SDK does not link it
+lowlat-vdd-proto what the display driver and its controller share: the control
+                 interface's requests and replies, each monitor's identity, the
+                 modes; no platform code, no allocation
+lowlat-vdd       the host's own display driver on Windows: a library the
+                 system's driver host loads; nothing in the workspace links it
 lowlatd          system service; the session helper and the tray are the same
                  binary in its second and third roles, over a Unix socket
 ```

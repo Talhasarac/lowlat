@@ -3,6 +3,42 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W3.0: the display driver and its package
+
+### Built
+- `lowlat-vdd-proto`: what the display driver and its controller share -- the control
+  interface's version, plug, unplug and list, each slot's identity and EDID, the modes -- with no
+  platform code, tested on every platform ([11-drivers.md](11-drivers.md)).
+- `lowlat-vdd`: the driver, a Windows library the system's user-mode driver host loads: an
+  indirect display adapter of sixteen slots, a monitor bound to the handle that plugged it, each
+  swapchain's pictures finished at once, the hardware cursor set up, the log on the debugger
+  stream.
+- The frameworks' declarations generated from the driver kit's headers and committed
+  (`scripts/gen-vdd-bindings.sh`); the kit restored by `scripts/fetch-wdk.py`, pinned by its
+  digest; the package stamped, catalogued and signed by `scripts/package-vdd.sh`, the development
+  certificate made and trusted by `scripts/vdd-test-cert.ps1`, the driver installed and removed
+  by `scripts/vdd-install.ps1`. CI's Windows job fetches the kit and builds the driver.
+
+### Checked
+- On the development machine, Windows 10 22H2: the test-signed package installing silently with
+  no test mode; a monitor plugged by an unelevated program, made active, and composing on the
+  GPU the system named at 1920x1080 at 60 and 2560x1440 at 120; unplugged by a request, by its
+  handle's close and by its process killed.
+
+### Found
+- A mode that asks for display bandwidth is never made active when the adapter declares no
+  budget; the target modes ask for none.
+- The system extends the desktop onto a plugged monitor by itself only in a set of monitors it
+  has not seen; a set it remembers stays as it was. The controller makes a monitor active through
+  the display configuration, never saved.
+- The first swapchains after a mode is set are taken back at once while it settles; the driver
+  ends each without a wait.
+
+### Corrected
+- W3's review said a virtual display's output sits on an adapter of its own, which the stream
+  refuses; the system lists it under the GPU that renders it. Whether W2's stream takes such an
+  output as built is W3.2's first check.
+
 ## 2026-10-15 - W3 planned: the host's own virtual display
 
 ### Decided
