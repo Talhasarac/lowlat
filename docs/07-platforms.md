@@ -872,6 +872,11 @@ After Gate B. The differences are contained:
   has.)
 - A guest's microphone becomes a capture device only through a signed kernel-mode driver, which
   this host does not ship and does not need to write ([§7.1](#71-the-guest-microphone-as-a-device)).
+- Sound through a loopback of the default output, which delivers nothing while nothing plays,
+  so the host keeps a silent stream open on the same output, and follows the default through the
+  system's own device notifications (*added 2026-10-15*, [05 §9](05-host.md),
+  [impl-plan-windows.md](impl-plan-windows.md) W2.4). Unlike Linux, the system can capture
+  everything but one program; that is deferred (W2.6).
 
 None of this reaches the protocol core, the IO shell's logic, or the public API.
 

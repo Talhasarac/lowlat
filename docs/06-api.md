@@ -1125,7 +1125,11 @@ identity is a sound device's; the bound stands.)
 the monitor of an output, not the output**, because that is the device a host reads: it carries
 what the speakers are playing. The name beside it is what a person calls the speakers, which is
 what an application shows them. A machine with no sound server answers with none rather than
-failing, which is the same thing an application does with the answer.
+failing, which is the same thing an application does with the answer. (*Amended 2026-10-15*: on
+Windows the identity is the output itself, the system's own identifier for it, because the
+system reads an output back through a loopback of that output rather than through a device of
+its own; the name is still the one a person sees, and the identifier fits the bound with room
+to spare.)
 
 `lowlat_get_encoders` arrives when there is a choice worth reporting: the encoder follows the
 display, so today the answer is a consequence rather than a menu. Adding a function is additive;

@@ -3,6 +3,41 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W2.4 reviewed: the loopback's clock, silence that stays silent, the mute per control
+
+### Decided
+- **The silent stream that keeps the loopback running is started once and never fed**
+  ([impl-plan-windows.md](impl-plan-windows.md) W2, [05 §9.1](05-host.md)); the packets it
+  then yields come flagged as silent and count as silence of their length, never skipped.
+- **The host asks the loopback for floating point and rounds to sixteen bits itself**, so a
+  program playing digital silence reads as silence ([05 §9.1](05-host.md)).
+- The default followed through the system's device notifications, a named output that goes away
+  replaced by the default, and a program in exclusive mode a lost device, taken again
+  ([05 §9.3](05-host.md)).
+- **The local mute only where the output mutes in hardware** ([05 §9.4](05-host.md)).
+- Leaving one program out of the sound deferred to a step of its own, W2.6.
+
+### Corrected
+- [05 §9.5](05-host.md): no per-application exclusion holds on Linux only; Windows has the call.
+- [05 §9.3](05-host.md): a sound device that never opened is asked for again every ten seconds,
+  not never, since the sound server may arrive with a login after the first guest.
+
+### Measured
+- On the development machine, against a loopback of the speakers: a silent stream filled once
+  and never fed kept it delivering a 10 ms packet every 10 ms for ten seconds, each flagged
+  silent; stopped, 390 ms more and then nothing.
+- A program playing zeros read back with 81 percent of the samples non-zero in floating point
+  (at most 1.4e-9) and 23 percent one step off zero through the system's own sixteen-bit
+  conversion; rounded by the host, exact zeros.
+- A mix driven to about 1.6 of full scale read back at 0.9855: the system limits it before the
+  loopback.
+- With a quiet tone: the digital output's volume, applied by the system's engine, reached the
+  loopback (-3.4 dB at 0.8, -24 at 0.2) and its mute, applied by the device, did not; neither
+  the speakers' volume nor their mute, both the device's, did. The system's report named all
+  four controls right.
+- A program opening an output in exclusive mode succeeded past the host's two streams and ended
+  both for good.
+
 ## 2026-10-15 - W2.3 built and checked live: input on Windows
 
 ### Added

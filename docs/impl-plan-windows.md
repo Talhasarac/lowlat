@@ -548,6 +548,26 @@ once, here.
   clock ([05 §9.1](05-host.md)). The default is followed as it changes and a device that went
   away is taken again a couple of seconds later ([05 §9.3](05-host.md)); a guest's microphone
   stays the application's, as on Linux.
+  *Amended 2026-10-15, at W2.4's review:* the silent stream is started once with a buffer of
+  silence and never fed -- that alone kept the loopback delivering, measured -- and the
+  loopback's packets then come flagged as silent, so a flagged packet counts as silence of its
+  length rather than being skipped, or the clock it buys is lost again. **The host asks for
+  floating point and rounds to sixteen bits itself.** A program playing digital silence reaches
+  the loopback as a floor far below hearing, which the system's own conversion to sixteen bits
+  dithers into the lowest bit -- a quarter of the samples, measured -- so silence, which a host
+  recognises only as exact zeros ([05 §9.1](05-host.md)), would never read as silent; and the
+  system limits the mix below full scale before the loopback, so the rounding never clips real
+  sound (measured with a mix driven past it). The default followed is the output the system's
+  sound settings name as the default device, through the system's own device notifications; a
+  named output that goes away is replaced by the default, as the Linux sound server moves a
+  stream; and a program that takes the output in exclusive mode wins -- both of the host's
+  streams are lost the moment it opens, measured -- which is a device that went away, taken
+  again once it lets go ([05 §9.3](05-host.md)). **The local mute is performed only where the
+  output mutes in hardware**: the loopback hears what the system's engine applies and nothing
+  the device applies, per control, and the system reports which -- measured both ways on the
+  development machine ([05 §9.4](05-host.md)). **Leaving one program out of the sound is
+  deferred** to W2.6: the system can capture everything but one program, and that is a feature
+  of its own ([05 §9.5](05-host.md)).
 - **The service.** Two roles of the daemon: the service, under the service manager as the
   system account in session 0, which only starts and watches the host; and the host above. No
   session role, since the host is in the session, and no tray in W2. The service starts the
@@ -710,11 +730,27 @@ once, here.
   alone.
 - [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
   spell with no gap at the guest.
+  *Reviewed 2026-10-15, before its build* (the decisions above): also the silent stream
+  started once, flagged packets as silence, the host's own rounding to sixteen bits, the
+  default followed through the system's notifications, exclusive use taken again, and the local
+  mute only where the output mutes in hardware. Checked as well on the development machine: a
+  quiet spell delivering a frame every 20 ms, the same check failing with the silent stream
+  left out; a program playing silence read back as exact silence, failing through the system's
+  own sixteen-bit conversion; the default switched between the machine's two outputs
+  mid-session; a program in exclusive mode mid-session, the sound back after it lets go; and
+  the local mute with a guest seated, put back when the last one leaves.
 - [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
   Checked by a logoff mid-session and the guest reconnecting.
   *Added 2026-10-15, at W2.3's review:* the attention chord. The host asks the service, which
   makes the system's call for the secure screen, since the system takes it from a service alone;
   `lowlatd install` lets services make it and `uninstall` puts back the setting it found.
+- [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
+  gate*): the system's capture of everything but one program's process tree, for a voice
+  program whose sound would otherwise reach the guests it is talking to. Its setting through
+  the configuration and the library, the system version it needs, its asynchronous activation
+  and how it keeps a clock in a quiet room are its own review. Until then a person sends that
+  program to another output in the system's per-application settings, or mutes it
+  ([05 §9.5](05-host.md)).
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -766,6 +802,10 @@ frame in one session, at 60, 120 and 240 Hz.
 
 ## Change log
 
+- 2026-10-15: W2.4 reviewed before its build: the silent stream started once, a flagged packet
+  counted as silence, the sound taken as floating point and rounded by the host, the default
+  followed through the system's notifications, exclusive use a lost device, the local mute only
+  where the output mutes in hardware; leaving one program out of the sound deferred to W2.6.
 - 2026-10-15: W2.3 built and checked live: the generated key translation, the batch input call
   following the input desktop, the locks from the host's state with a lock key as the peer's
   state, the bus's pads with their readiness and rumble, opcode 5 pointing down on both

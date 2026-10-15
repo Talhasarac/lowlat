@@ -1146,6 +1146,16 @@ returns, which is audible at the start of the first word. **So the policy belong
 are sent, per guest**, and not in the encoder: the encoder says whether a frame is silent and the
 sender decides what that is worth to the guest in front of it.
 
+**On Windows the zeros have to be made, and both halves were measured** (*added 2026-10-15*,
+[impl-plan-windows.md](impl-plan-windows.md) W2.4). The silent stream that keeps the loopback
+running is started once and never fed, and the packets the loopback then delivers come flagged
+as silent: a flagged packet counts as zeros of its length, never skipped, or the clock is lost
+again. And a program that plays digital silence does not reach the loopback as zeros -- the
+system's engine adds a floor some 177 dB down, and its own conversion to sixteen bits dithers
+that into the lowest bit -- so the host asks for floating point and rounds to sixteen bits
+itself, and silence is exact zeros again, which is what this policy recognises. The engine
+limits the mix below full scale before the loopback, so the rounding never clips real sound.
+
 ### §9.2 Losing a packet, and never leaving a hole
 
 The audio channel is reliable and ordered like every other, so **a packet cannot be dropped once
@@ -1185,9 +1195,23 @@ delivering is therefore asked on the same pass that decides whether the room wan
 rather than assumed from having opened it once. A device that was held and stopped is taken
 again a couple of seconds later, and the session is silent for exactly that long.
 
-**A device that never opened is not asked for again.** That is a machine with no sound server,
-which is answered once when the first guest arrives; retrying it costs a connection attempt that
-blocks the loop trying to encode, on a question whose answer does not change.
+**A device that never opened is asked for again, but rarely.** It may be a machine with no sound
+server, or one whose sound server is not up yet: a service that starts at boot meets its first
+guest before any session exists, and the sound server arrives with the login, minutes later.
+Each ask is a connection attempt that blocks the loop trying to encode, so a device that was
+never held is asked for every ten seconds rather than every couple. *Corrected 2026-10-15: this
+said a device that never opened is not asked for again; a guest seated before the login showed
+that the answer changes.*
+
+**On Windows the system says when the default changes** (*added 2026-10-15*,
+[impl-plan-windows.md](impl-plan-windows.md) W2.4): the host follows the output the system's
+sound settings name as the default device through the system's own device notifications, and
+reopens on it as on a requested switch. A named output that goes away is replaced by the
+default and the log says so, which is where the Linux sound server leaves a stream it moved.
+**A program that takes the output in exclusive mode wins**: both of the host's streams are lost
+the moment it opens -- measured -- and stay lost after it lets go, so exclusive use is a device
+that went away, taken again a couple of seconds later; while the program holds the output there
+is no mix to hear.
 
 ### §9.4 Silencing the speakers at the desk
 
@@ -1229,6 +1253,15 @@ The tap is ahead of that too, so turning the speakers down does not turn a guest
 them up cannot clip one. Nothing in this path reads it. On a device whose volume the server
 applies, the opposite is true and it is the device's doing rather than this host's: see above.
 
+**Windows reports the property, per control** (*added 2026-10-15*,
+[impl-plan-windows.md](impl-plan-windows.md) W2.4). Its loopback hears what the system's engine
+applies and nothing the device applies itself, and the system says for each output whether its
+mute and its volume are the device's. Measured on one machine both ways: an output whose mute is
+the device's and whose volume is the engine's -- the loopback unchanged by the mute and scaled
+by the volume -- and one whose mute and volume are both the device's, unchanged by either. So
+the local mute is performed only on an output that mutes itself and refused with a line
+otherwise, exactly as above, and the volume half stands as written.
+
 ### §9.5 What this host does not do
 
 **No per-application exclusion.** An established host on another platform can capture everything
@@ -1238,6 +1271,12 @@ own output and re-linking as programs come and go -- a mechanism with a lifetime
 failures are silent and whose symptom is somebody hearing themselves. **A person mutes the
 application instead**, which is a control they already have and which works whatever sound server
 is running.
+*Corrected 2026-10-15, at W2.4's review:* "here" is Linux. Windows has the call -- a capture of
+everything but one program's process tree -- so there the exclusion is a feature to build rather
+than a mechanism to imitate, and it is deferred to a step of its own
+([impl-plan-windows.md](impl-plan-windows.md) W2.6). Until then, on either platform, a person can
+also send that program to an output the host does not capture, which keeps it audible to them:
+the system's per-application output setting on Windows, the sound server's own on Linux.
 
 **No echo cancellation of the guest's own sound**, which the section below is about instead.
 
