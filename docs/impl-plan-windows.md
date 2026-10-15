@@ -905,6 +905,25 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
 - **Desktop duplication of any virtual display** (W2's gap, corrected above): the device is made
   on the GPU that renders the output -- for the host's own display the one the driver reports,
   and for another vendor's whichever the encoder accepts, measured first.
+- **A kept monitor's arrangement is saved in the system's own store** (*added 2026-10-15, at
+  W3.1's review*). A kept monitor is arranged like any monitor -- the system's own extend of a
+  set it has not seen saves it, a person's settings save it, and the controller's activation and
+  modes for it are saved too -- so it comes back after a reboot at its mode and place by the
+  system's own restore, which on a replug also overrules the mode the plug asked for. **Except
+  an arrangement in which only virtual displays would be active**, applied unsaved: a saved one
+  that only the virtual display can satisfy holds a later boot waiting for its driver. A bound
+  monitor's -- the host's display, an application's -- is never saved, as above.
+- **The controller's calls wait for the system, within a bound** (*added at W3.1's review*): a
+  plug until the monitor is active at its mode, a mode until it is current, an unplug until the
+  monitor has gone; about three seconds, past which a status of its own says the monitor is
+  plugged and the system has not finished. Calls on one handle take turns. The library's other
+  calls never wait so long ([06 §8](06-api.md)); this half's are its stated exception.
+- **One GPU for every monitor: the file's, else the high-performance one** (*added at W3.1's
+  review*). The display class takes one render GPU for the whole adapter and re-creates every
+  swapchain when it changes, so the file names one by vendor and device; with none, or one not
+  in the machine, the driver names the first hardware GPU in the system's high-performance order,
+  at its start and before any monitor. The host never names one: it builds on the GPU each
+  swapchain reports, the encoder following the display.
 
 ### Steps
 
@@ -948,6 +967,31 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   display`. Checked by an unelevated program driving a bound monitor of its own beside another
   handle's, refused the other's, and killed with no monitor left behind; and by a kept monitor
   made unelevated coming back after a reboot at its slot, mode and position.
+  *Reviewed 2026-10-15, before its build* (the last three decisions above, added at it): also
+  the monitors reported as DisplayPort, as their EDID says; a replug that keeps its slot from
+  departure to arrival; the file in a folder of its own, read as hostile.
+  *Built 2026-10-15, and checked live but for the reboot.* The driver's protocol at version 2:
+  a plug carries the lifetime, whether a kept monitor comes back, and the slot it asks for; a
+  replug adds a mode to one monitor; a reload rereads the file. Kept monitors belong to no
+  handle. The file (`%ProgramData%\lowlat\display\displays.conf`) is read at the driver's start
+  and on a reload -- the GPU, the pointer, the custom modes, a dumped EDID and the kept monitors
+  that come back -- and written by the controller under a lock, replaced whole; the installer
+  makes its folder, writable by users and readable by the driver's own account. The controller
+  is `lowlat-vdd-ctl`: it plugs and waits for the system, makes the monitor active itself when
+  the system has not within 400 ms, reads the mode back and sets the one asked for when a saved
+  arrangement overruled it, saves as the decisions above say, and sets a listed mode through the
+  display configuration and an unlisted one by a replug. The library's third half drives it
+  (minor 26, Windows alone, [06 §3c](06-api.md)), and so does `lowlatd display`. Checked on the
+  development machine: from an unelevated shell, a kept monitor plugged in 612 ms -- a set the
+  system remembered dark, made active by the controller and saved -- set to a listed mode in
+  99 ms and to an unlisted one by a replug in 170 ms, and removed in 197 ms; a bound monitor
+  held by one program, its remove and its mode refused to another, and unplugged in 7 ms when
+  its holder was killed; a kept monitor marked to come back plugged by the driver 7 ms after its
+  device restarted, before any request, and shown by the system at its saved mode and place; the
+  GPU, the pointer, the custom modes and the EDID changed through the file, and refused where
+  wrong; the third half driven through the C interface for both lifetimes, its deliberate panic
+  contained; the protocol's checks each broken once and seen to fail, 45 of them. **Owed: the
+  reboot**, a kept monitor back at its slot, mode and place.
 - [ ] **W3.2 the host's display, and desktop duplication of any virtual display**: the setting,
   the name, the live mode, the owner's size at join, `lowlatd`'s relay; the device on the GPU
   that renders an indirect output. Checked by the host streaming its own display through desktop
@@ -990,6 +1034,12 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-15: W3.1 reviewed and built, checked live but for the reboot: a kept monitor's
+  arrangement saved in the system's store unless only virtual displays would be active, a
+  bound one's never; the controller's calls waiting for the system within a bound; one GPU
+  for every monitor, the file's or the high-performance one, never the host's; the monitors
+  reported as DisplayPort; the file, its folder and its reader; the controller crate, the
+  library's third half (minor 26) and `lowlatd display`.
 - 2026-10-15: W3.0 built and checked live: the driver and its protocol crate, the generated
   declarations, the kit restored by a script, the package test-signed and installed silently;
   a mode asks for no display bandwidth; a plugged monitor made active through the display

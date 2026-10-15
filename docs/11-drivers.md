@@ -1,7 +1,7 @@
 # 11 - Drivers
 
 **Status:** planned 2026-10-15, at W3's interview; the display's driver and its package built
-the same day (W3.0), the rest planned. Built by [impl-plan-windows.md](impl-plan-windows.md) W3,
+the same day (W3.0), and its controller (W3.1); the rest planned. Built by [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
 On Windows the host carries drivers of its own where the system offers no interface for what a
@@ -36,7 +36,7 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
 
 | Interface | Who opens it | What it carries |
 |---|---|---|
-| control | any interactive user, administrators, the system account | plug, unplug, set a mode, the mode list, the monitors, the version |
+| control | any interactive user, administrators, the system account | a plug, bound or kept, at a slot asked for or any; an unplug; a replug with a mode; the list; a reload of the file; the version |
 | frames | the system account alone | the section, the buffers and the fences of §1.6 |
 
 **The frame interface is a screen-capture channel**, refused at open to any caller but the system
@@ -61,32 +61,39 @@ only a stream of pings as somebody still wanting them, and silence then removes 
 any stall of the pinging thread -- a debugger, a resume from sleep, a starved thread -- takes a
 display away mid-session. Ownership by handle removes a monitor exactly when its owner goes.
 
-**Each monitor is a slot**, 0 to 15. Its identity -- its container and the serial in its EDID --
-derives from the slot and never changes, so the system keeps each display's resolution, position
-and scale across a replug and a reboot. The EDID is generated once per slot, or is a real
-monitor's dumped EDID given in the file (§1.4), its serial patched per slot.
+**Each monitor is a slot**, 0 to 15, which a plug may ask for. Its identity -- its container and
+the serial in its EDID -- derives from the slot and never changes, so the system keeps each
+display's resolution, position and scale across a replug and a reboot. The EDID is generated once
+per slot, or is a real monitor's dumped EDID given in the file (§1.4), its serial patched per
+slot. **Each monitor is reported as a DisplayPort monitor**, as its EDID says.
 
 ### §1.4 What persists
 
-One file, in a folder of its own under the host's program-data directory, holds what outlives
-the driver: the kept monitors marked to come back, each at its slot and mode; the custom modes
-(§1.5); the GPU kept monitors render on; whether the pointer is drawn into the pictures; and an
-optional EDID. **The driver reads it when the adapter starts, before any request, and never
-writes it** -- a user-mode driver has no right to -- and the controller writes it. The folder
-lets users write, so an unelevated program persists a display, and lets the driver's own account
-read, granted by name; the host's configuration beside it stays readable by the system account
-and administrators alone ([07 §10](07-platforms.md)). The GPU is named by vendor and device,
-since an adapter's identifier changes across boots; the host names the GPU for its own display
-at run time instead (§1.7).
+One file, `%ProgramData%\lowlat\display\displays.conf`, in a folder of its own, holds what
+outlives the driver, a setting a line: the GPU the monitors render on (`gpu`), whether the
+pointer is drawn into the pictures (`pointer`), the custom modes (`mode`, §1.5), the kept
+monitors marked to come back, each at its slot and mode (`monitor`), and an optional EDID
+(`edid`). **The driver reads it when the adapter starts, before any request, and again when a
+controller asks; it never writes it** -- a user-mode driver has no right to -- and the
+controller writes it, under a lock any user's controller takes, replacing it whole. **Any user
+may write it, so the driver reads it as hostile**: every line bounded, a line it cannot read
+skipped and counted, a word it does not know skipped quietly so an older driver reads a newer
+file, nothing in it able to stop the driver starting. The folder, made by the installer, lets
+users change it, so an unelevated program keeps a display, and lets the driver's own account
+read it; the host's configuration beside it stays readable by the system account and
+administrators alone ([07 §10](07-platforms.md)). The GPU is named by vendor and device, since
+an adapter's identifier changes across boots (§1.7).
 
 ### §1.5 Modes
 
 - **A monitor's modes are fixed when it arrives**: a built-in list of common sizes at common
   rates, the custom modes, and the mode the plug asks for, kept within about ninety entries -- a
   monitor with around a hundred has been seen not to arrive. The preferred one is the plug's.
-- **A listed mode is set through the system's display configuration and never saved to the
-  system's database of arrangements**: a saved arrangement that only a virtual display can
-  satisfy holds a later boot waiting for the driver.
+- **A listed mode is set through the system's display configuration.** A kept monitor's is saved
+  in the system's database of arrangements, as any monitor's is, so it comes back after a reboot
+  where it was; a bound monitor's never is. **An arrangement in which only virtual displays would
+  be active is never saved**: one that only a virtual display can satisfy holds a later boot
+  waiting for the driver.
 - **A mode not listed is a replug of that monitor alone**, with the mode added first, then set
   once the replacement is ready. Requests during a replug are coalesced into one more, and a
   replug waits until the old monitor's swapchain is torn down. Such a mode is not kept; a custom
@@ -96,10 +103,11 @@ at run time instead (§1.7).
   monitor is sometimes refused.
 - **A mode asks for no display bandwidth.** The adapter declares no budget, and the system keeps
   the active modes' sum within it, so a mode asking for any is never made active.
-- **A plugged monitor is made active by the controller**, by adding its path to the active ones
-  through the display configuration, never saved. The system extends the desktop onto a monitor
-  by itself only in a set of monitors it has not seen; a set it remembers it arranges as
-  remembered, which can leave the monitor dark.
+- **A plugged monitor is made active by the controller when the system does not.** The system
+  extends a set of monitors it has not seen and restores a set it saved, at once; a set it
+  remembers with nothing saved it leaves dark. The controller then adds the monitor's path to
+  the active ones, saved as a mode is. **A saved arrangement overrules the mode a plug asks
+  for**, so the controller reads the mode back and sets the one asked for.
 
 ### §1.6 Pictures
 
@@ -136,9 +144,11 @@ driver converts into targets of its own, then copies, by measurement.
 
 ### §1.7 The GPU, and the pointer
 
-- The adapter names the GPU to render on before a monitor arrives: the host's encoder's GPU for
-  the host's display, the file's for kept ones. The system may choose another, and each
-  swapchain says which it got; the host builds on that one.
+- **One GPU for every monitor**, since the display class takes one for the whole adapter and
+  re-creates every swapchain when it changes: the file's, by vendor and device, else the first
+  hardware GPU in the system's high-performance order, named by the driver at its start before
+  any monitor arrives. The system may choose another, and each swapchain says which it got; the
+  host builds on that one and never names a GPU itself.
 - **The system lists the monitor's output under the GPU that renders it**, as that GPU's own
   output, not under the display adapter.
 - **The pointer is a hardware cursor**, alpha and full XOR up to 256 a side -- the largest the
@@ -166,11 +176,20 @@ driver converts into targets of its own, then copies, by measurement.
   opens it again when the driver is back.
 - A GPU reset reassigns every swapchain; no monitor departs during one.
 
-### §1.9 For people
+### §1.9 The controller, and people
 
-`lowlatd display` lists, adds, removes and re-modes monitors and their modes through the same
-controller, so a person with no program of their own manages displays from a shell. A tray is
-later.
+The controller is the driver's control interface from user mode, behind the library's third half
+([06 §3c](06-api.md)), the host's display and `lowlatd display`. **Every call waits for the
+system, within about three seconds**: a plug until the monitor is active at its mode, a mode
+until it is current, an unplug until the monitor has gone; past the bound a status of its own
+says the monitor is plugged and the system has not finished. Calls on one handle take turns.
+
+`lowlatd display` drives the same controller, so a person with no program of their own manages
+displays from a shell: `list`; `add WxH[@Hz] [--restore] [--slot N]`; `hold WxH[@Hz] [--slot
+N] [--for SECONDS]`, a bound monitor for as long as the command runs; `remove SLOT`; `mode SLOT
+WxH[@Hz]`; and the file's settings, `modes [add|remove WxH@Hz]`, `gpu [auto|VVVV:DDDD]`,
+`pointer [hardware|drawn]` and `edid [FILE|none]`. A display a person adds is kept, since a
+command's process ends with it. A tray is later.
 
 ## §2 Input
 
@@ -184,9 +203,12 @@ pads.
 Planned 2026-10-15. **The driver and its package are built and checked live** (W3.0,
 2026-10-15): installed silently with no test mode; a bound monitor plugged by an unelevated
 program, made active and composing on the GPU the system named, at 1920x1080 at 60 and 2560x1440
-at 120; unplugged by a request and by its handle's end, a killed process's included. Its control
-interface answers the version, a plug, an unplug and the list; setting a mode, kept monitors and
-the file (§1.4), the pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
+at 120; unplugged by a request and by its handle's end, a killed process's included. **The controller is
+built and checked live** (W3.1, 2026-10-15): kept and bound monitors from an unelevated shell
+and through the C interface, a mode set listed and unlisted, a bound monitor refused to another
+program and gone with its holder, a kept one back at its saved mode and place after the driver
+restarted, the file's settings changed; a kept monitor back after a reboot is owed. The
+pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

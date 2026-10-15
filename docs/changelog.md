@@ -3,6 +3,40 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W3.1: the controller
+
+### Decided
+- A kept monitor's arrangement is saved in the system's own store, as any monitor's is, so it
+  comes back after a reboot where it was -- unless only virtual displays would be active; a
+  bound monitor's never is ([impl-plan-windows.md](impl-plan-windows.md) W3).
+- The controller's calls wait for the system, within about three seconds: the third half's
+  stated exception to [06 §8](06-api.md).
+- One GPU for every monitor: the file's, by vendor and device, else the first hardware GPU in
+  the system's high-performance order; the host never names one.
+
+### Built
+- The driver's protocol at version 2: a plug's lifetime, restore and slot; a replug that adds a
+  mode to one monitor and keeps its slot throughout; a reload of the file. Kept monitors belong
+  to no handle. Monitors are reported as DisplayPort, as their EDID says.
+- The file, `%ProgramData%\lowlat\display\displays.conf`: read by the driver at its start and on
+  a reload as hostile input, written by the controller under a lock and replaced whole; the
+  installer makes its folder, writable by users and readable by the driver's account.
+- `lowlat-vdd-ctl`, the controller: it plugs and waits for the system, makes a monitor active
+  itself when the system does not, reads the mode back and corrects one a saved arrangement
+  overruled, and sets a listed mode through the display configuration and an unlisted one by a
+  replug.
+- The library's third half on Windows (minor 26): `lowlat_vdd_*`, `LOWLAT_FEATURE_VDD`, statuses
+  -600 to -612 ([06 §3c](06-api.md)); the C harness drives it and its deliberate panic.
+- `lowlatd display`: list, add, hold, remove, mode, and the file's modes, GPU, pointer and EDID
+  ([11 §1.9](11-drivers.md)).
+- A fuzz target for the file's reader.
+
+### Checked
+- On the development machine, from an unelevated shell and through the C interface: kept and
+  bound monitors plugged, set to listed and unlisted modes, listed and removed; a bound monitor
+  refused to another program and gone 7 ms after its holder was killed; a kept monitor back at
+  its saved mode and place 7 ms after the driver restarted. A reboot is owed.
+
 ## 2026-10-15 - W3.0: the display driver and its package
 
 ### Built

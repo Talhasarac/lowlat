@@ -69,6 +69,11 @@ set by a library built with the `gpl-libavcodec` feature, whose software decoder
 build of the machine's codec library as well as an LGPL one ([§3b](#3b-client)). The header
 is one for every build, so the bit is the only way a loader learns what this one would load.
 
+**On Windows a third half, the virtual displays** (minor 26, [§3c](#3c-virtual-displays)): a
+`lowlat_vdd` is one handle on the host's own display driver, used by every `lowlat_vdd_*`
+call. The header declares it under `_WIN32` alone, `LOWLAT_NO_VDD` hides it, and
+`lowlat_features` reports it as `LOWLAT_FEATURE_VDD`.
+
 One handle owns one host session. `lowlat_host_destroy` stops hosting, disconnects every
 guest, joins every thread, and returns only when all of it has happened.
 
@@ -909,6 +914,56 @@ the application confines and hides its pointer on entry and warps it once on exi
 and unblocked, rumble, the guest list, stream ended with a reason, host mode, and the host's
 answer on the microphone (minor 25).
 
+## §3c Virtual displays
+
+```c
+lowlat_status lowlat_vdd_open(lowlat_vdd **out);
+void          lowlat_vdd_close(lowlat_vdd *vdd);
+lowlat_status lowlat_vdd_plug(lowlat_vdd *vdd, const lowlat_vdd_plug_info *plug,
+                              lowlat_vdd_monitor *out);
+lowlat_status lowlat_vdd_unplug(lowlat_vdd *vdd, uint32_t slot);
+lowlat_status lowlat_vdd_set_mode(lowlat_vdd *vdd, uint32_t slot, uint32_t width,
+                                  uint32_t height, uint32_t refresh_hz,
+                                  lowlat_vdd_monitor *out);
+lowlat_status lowlat_vdd_list(lowlat_vdd *vdd, uint32_t *slots, uint32_t *count);
+lowlat_status lowlat_vdd_get_monitor(lowlat_vdd *vdd, uint32_t slot, lowlat_vdd_monitor *out);
+lowlat_status lowlat_vdd_get_settings(lowlat_vdd *vdd, lowlat_vdd_settings *out);
+lowlat_status lowlat_vdd_set_settings(lowlat_vdd *vdd, const lowlat_vdd_settings *settings);
+lowlat_status lowlat_vdd_debug_panic(lowlat_vdd *vdd);
+```
+
+**The third half, on Windows alone (minor 26): the monitors of the host's own display driver**
+([11](11-drivers.md) §1), for any application to plug its own. The driver must be installed;
+without it the open answers `LOWLAT_ERR_VDD_ABSENT`, and a driver of another version
+`LOWLAT_ERR_VDD_VERSION`, since the two ship together.
+
+- **A monitor is bound or kept** (`LOWLAT_VDD_BOUND`, `LOWLAT_VDD_KEPT`). A bound one is its
+  handle's: only that handle unplugs or re-modes it, and the handle's close -- or its process's
+  end, however it ends -- unplugs it. A kept one belongs to no handle, any handle may re-mode or
+  unplug it, and `restore` brings it back whenever the driver starts. **Nothing keeps a monitor
+  alive by traffic.**
+- **A monitor is a slot**, 0 to 15, whose identity the system remembers its place and mode by; a
+  plug may ask for one, or take the first free with `LOWLAT_VDD_SLOT_ANY`.
+- **These calls wait for the system**, the one exception to [§8](#8-threading-and-reentrancy):
+  a plug returns once the monitor is active at its mode, a mode once it is current, an unplug
+  once the monitor has gone -- within about three seconds, past which `LOWLAT_ERR_VDD_NOT_READY`
+  says the monitor is plugged and the system has not finished, and `lowlat_vdd_get_monitor` says
+  where it stands. Calls on one handle take turns.
+- **A kept monitor's arrangement is saved in the system's own store**, as any monitor's is, so it
+  comes back after a reboot where it was -- unless only virtual displays would be active. A bound
+  monitor's never is.
+- **A mode the monitor does not list is set by plugging it again** with the mode added first:
+  the same slot and identity, a blink rather than a new display.
+- **The list is of slots**, two-call as [§6](#6-enumeration)'s, and `lowlat_vdd_get_monitor`
+  fills one size-led `lowlat_vdd_monitor` at a time, so the record can grow.
+- **The settings every monitor shares** live in the driver's file: the GPU, by vendor and
+  device, zero for the system's high-performance one; the pointer drawn into the pictures or
+  reported beside them; up to sixteen custom modes; a dumped EDID. `lowlat_vdd_set_settings`
+  applies the GPU at once, the pointer at each monitor's next swapchain, and the modes and the
+  EDID to the monitors plugged after.
+- The statuses are `LOWLAT_ERR_VDD_*`, -600 to -612. **No pictures cross this half**
+  ([§13](#13-what-is-deliberately-absent)).
+
 ## §4 Signaling seam
 
 The four calls from [04 §9](04-signaling.md). This is the entire contact surface between any
@@ -1202,6 +1257,9 @@ Signaling outcomes are typed rather than collapsed into a generic failure
   that carries a frame.
 - **The event queue is not behind that lock.** A poll that waits out its timeout must not stop
   every other call for the length of it.
+- **The third half's calls wait for the system's display configuration**
+  ([§3c](#3c-virtual-displays)), within about three seconds: the one place a call waits on
+  something other than a lock, and only on a `lowlat_vdd` handle.
 - **The SDK never calls into the application** except through the log callback. There is no
   reentrancy contract to violate.
 - **The SDK owns all its threads.** The application never provides one, and never runs our
@@ -1221,7 +1279,8 @@ undefined behavior, and this library loads into processes we do not control.
   ([AGENTS.md](../AGENTS.md) §17).
 - A deliberately panicking call is a named test at [Phase 8](impl-plan.md): for each half
   the object carries, `lowlat_debug_panic` on a host handle and `lowlat_client_debug_panic`
-  on a client handle (minor 18), run against the shipped object on Linux and on Windows.
+  on a client handle (minor 18), run against the shipped object on Linux and on Windows; and
+  `lowlat_vdd_debug_panic` on a display handle (minor 26), wherever the driver is installed.
 
 ## §10 Memory and strings
 
@@ -1398,6 +1457,11 @@ appended to `lowlat_client_status`. Nothing moves, and a caller built against an
 gets the fields it knows. The host's microphone answer, which reached the application as an
 application message until this minor, is read by the library and raised as the event instead.
 
+**Minor 26** (2026-10-15) is the third half, the virtual displays, on Windows
+([§3c](#3c-virtual-displays)): `lowlat_vdd` and its ten calls, `lowlat_vdd_plug_info`,
+`lowlat_vdd_monitor`, `lowlat_vdd_mode`, `lowlat_vdd_settings`, the `LOWLAT_VDD_*` constants,
+the statuses `LOWLAT_ERR_VDD_*` (-600 to -612) and `LOWLAT_FEATURE_VDD`. Nothing moves.
+
 **This surface is ours and carries no inherited compatibility.** It was designed here rather
 than adopted, so before the first major version a name that turns out to be wrong is corrected
 rather than kept: `LOWLAT_CG_LEVEL_LEGACY` became `LOWLAT_CG_LEVEL_AGGRESSIVE` because the
@@ -1498,4 +1562,5 @@ thing**: whose stated size the display takes. A guest's later request for a size
 application's to relay, as on any display, and here the application relays it into these
 settings. The virtual monitors an application plugs for itself go through the library's third
 half, the controller, each bound to the handle that plugged it or kept until removed
-([11 §1.3](11-drivers.md)); the host's display is bound to the host.
+([11 §1.3](11-drivers.md)); the host's display is bound to the host. *The third half was built
+at W3.1 (minor 26, [§3c](#3c-virtual-displays)).*
