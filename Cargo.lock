@@ -756,6 +756,7 @@ dependencies = [
  "lowlat-common",
  "lowlat-core",
  "rusty-opus",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

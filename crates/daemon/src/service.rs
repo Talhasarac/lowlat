@@ -231,7 +231,7 @@ fn report_microphone(heard: &lowlat_host::microphone::Receiver) {
 /// answer switching it off would have given.
 fn audio_config() -> lowlat_audio::Config {
     lowlat_audio::Config {
-        server: flag("--audio-server"),
+        server: sound_server(),
         wanted: std::sync::Arc::new(lowlat_audio::capture::Wanted::new(
             lowlat_audio::capture::Live {
                 device: flag("--audio-device"),
@@ -244,6 +244,20 @@ fn audio_config() -> lowlat_audio::Config {
             },
         )),
     }
+}
+
+/// The session's sound server's socket, which only Linux has: on Windows the
+/// system's sound service is the one there is, so a socket named there is
+/// refused with a line rather than carried.
+fn sound_server() -> Option<String> {
+    let named = flag("--audio-server");
+    if cfg!(windows) && named.is_some() {
+        lowlat_common::log_warn!(
+            "lowlatd: --audio-server names a Linux sound server, ignored on Windows"
+        );
+        return None;
+    }
+    named
 }
 
 fn read(path: &str) -> String {

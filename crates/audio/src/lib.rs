@@ -19,7 +19,38 @@
 pub mod capture;
 pub mod decode;
 pub mod encode;
+#[cfg(target_os = "linux")]
 mod pulse;
+
+/// The system's sound interfaces, generated from the SDK's headers by
+/// `scripts/gen-wasapi-bindings.sh` and committed. They follow C naming and
+/// declare more than is called, so the usual lints do not apply; named one by
+/// one, since a group allow loses to a lint the workspace sets explicitly.
+#[cfg(windows)]
+#[allow(
+    dead_code,
+    unused_imports,
+    unnecessary_transmutes,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    missing_debug_implementations,
+    unreachable_pub,
+    clippy::all,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::useless_transmute
+)]
+mod ffi {
+    pub(crate) mod wasapi;
+    pub(crate) mod wasapi_guids;
+}
+
+// The per-packet assertions count allocations on the thread that runs them.
+#[cfg(test)]
+#[global_allocator]
+static ALLOC: lowlat_common::alloc_counter::Counting = lowlat_common::alloc_counter::Counting;
 
 pub use capture::{Capture, Config, Live, Output, Wanted, outputs};
 pub use decode::Decoder;
@@ -79,11 +110,29 @@ impl core::fmt::Display for Error {
                 f.write_str("the sound client library is missing calls this needs")
             }
             Error::Refused(code) => {
-                write!(f, "the sound server refused the connection, code={code}")
+                write!(
+                    f,
+                    "the sound server refused the connection, code={}",
+                    Code(*code)
+                )
             }
-            Error::Read(code) => write!(f, "reading sound failed, code={code}"),
+            Error::Read(code) => write!(f, "reading sound failed, code={}", Code(*code)),
             Error::Encode => f.write_str("the codec refused a frame"),
             Error::NoSuchDevice => f.write_str("no such sound device"),
+        }
+    }
+}
+
+/// A failure code as the platform writes it: a negative one is a Windows
+/// result, read in hex; any other is a sound server's own number.
+struct Code(i32);
+
+impl core::fmt::Display for Code {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0 < 0 {
+            write!(f, "0x{:08x}", u32::from_ne_bytes(self.0.to_ne_bytes()))
+        } else {
+            write!(f, "{}", self.0)
         }
     }
 }
@@ -91,6 +140,21 @@ impl core::fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Windows result reads as the system writes it; a sound server's own
+    /// number as before.
+    #[test]
+    fn a_failure_code_reads_as_its_platform_writes_it() {
+        let windows = i32::from_ne_bytes(0x8889_0004_u32.to_ne_bytes());
+        assert_eq!(
+            Error::Read(windows).to_string(),
+            "reading sound failed, code=0x88890004"
+        );
+        assert_eq!(
+            Error::Refused(6).to_string(),
+            "the sound server refused the connection, code=6"
+        );
+    }
 
     /// The packet this host sends is 20 ms, and the arithmetic that follows
     /// from it is what every buffer here is sized by.
