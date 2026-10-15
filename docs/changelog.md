@@ -3,6 +3,18 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - The C# host on Windows
+
+### Checked
+- The C# host example (`examples/csharp`) builds unchanged on Windows against `lowlat.dll` and
+  drove the library's host half end to end: the boundary offline, then live as an ordinary user
+  with an established client on the LAN -- the desktop of either display, both codecs, sound
+  and input, and the client leaving cleanly.
+
+### Corrected
+- `examples/csharp/README.md`: the shared library is built from the SDK crate, not the host
+  crate, which produces none; the Windows lines added.
+
 ## 2026-10-15 - W2.4 built and checked live: sound on Windows
 
 ### Added

@@ -12,8 +12,12 @@ supplying all three looks like.
 
 ## Running it
 
+The shared library is the SDK crate's (`lowlat-sdk`, built as `liblowlat.so`
+on Linux and `lowlat.dll` on Windows); the program finds it on the loader's
+path.
+
 ```sh
-cargo build --release -p lowlat-host
+cargo build --release -p lowlat-sdk
 export LD_LIBRARY_PATH=$PWD/target/release
 
 # The boundary alone, with no service behind it. Synthesises an offer and
@@ -24,9 +28,23 @@ LOWLAT_OFFLINE=1 dotnet run --project examples/csharp
 LOWLAT_SESSION=<session id> dotnet run --project examples/csharp
 ```
 
-Capture needs the elevated capability, so `lowlat_can_host` answers
+On Windows, from PowerShell:
+
+```powershell
+cargo build --release -p lowlat-sdk
+$env:PATH = "$PWD\target\release;$env:PATH"
+$env:LOWLAT_OFFLINE = '1'; dotnet run --project examples/csharp
+Remove-Item Env:LOWLAT_OFFLINE
+$env:LOWLAT_SESSION = '<session id>'; dotnet run --project examples/csharp
+```
+
+On Linux, capture needs the elevated capability, so `lowlat_can_host` answers
 `LOWLAT_ERR_DISPLAY_UNREACHABLE` as an ordinary user. Run as root for a session
-that carries pictures; everything else works either way.
+that carries pictures; everything else works either way. On Windows an ordinary
+user hosts the desktop as it is; the lock screen and an elevation prompt are on
+desktops only the system account reaches, so a host that must stream them runs
+as the system account in the console session
+([impl-plan-windows.md](../../docs/impl-plan-windows.md) W2).
 
 ## What is where
 
