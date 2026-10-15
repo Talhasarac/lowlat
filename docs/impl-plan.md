@@ -882,6 +882,11 @@ errors, open the shared library, call the panicking entry, and walk the symbol t
   is a prerequisite rather than an improvement ([07 §2.1](07-platforms.md)).
 - [ ] **Rebuild the import when the scanout format changes**, without restarting the encoder or
   costing a keyframe. Not a rare event: see [07 §3.3](07-platforms.md).
+- [ ] **The deadline's phase from the vblank's own time** (*found 2026-10-14*). The frame clock
+  here is anchored once and kept, and the event armed after a tick fires before the next
+  deadline, so a tick reads whatever was flipped up to a refresh earlier. The rule Windows took
+  2026-10-15 ([05 §2](05-host.md)) needs the time the vblank event carries, which the event
+  drain reads past; measured on this platform against the grid before it is taken.
 - [x] **Absolute input placed within the captured output**, not spread over the whole desktop
   ([05 §7](05-host.md)). *The mapping is three steps -- clamp into the picture, convert into the
   captured output's rectangle, place that rectangle in the desktop -- and it collapses to what it

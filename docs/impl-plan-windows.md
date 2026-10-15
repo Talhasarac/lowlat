@@ -627,6 +627,13 @@ once, here.
   guests' preferences. A program taking the display in exclusive fullscreen at another mode,
   in the legacy model and in the flip model, is followed both ways: the stream rebuilds at its
   size and rate and back when it leaves.
+  *Followed up 2026-10-15:* **the frame clock's tail is gone.** The deadline takes its phase
+  from the compositions ([05 §2](05-host.md)) and a tick that found nothing waits again at once;
+  live at 120 a second, composition to handed over is p95 0.11-0.45 and p99 0.19-0.60 ms against
+  6.5-8.1 and 7.8-8.9 before, across sporadic updates and 60, 90 and 120 Hz content, the rate
+  exact and the processor time on a still desktop unchanged within what the system resolves.
+  A picture in flight is now polled for while the loop waits for the display, which the new
+  waiting needed: without it the encode a peer was shown on a still desktop read 9-10 ms.
 - [ ] **W2.3 input**: the usage translation, both pointers, the wheels, and the ViGEm pad with
   rumble. Checked by every key class on the host against what a USB keyboard gives, and a pad
   with rumble, from an established client.

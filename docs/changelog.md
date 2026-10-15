@@ -3,6 +3,36 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W2.2 followed up: the deadline takes its phase from the compositions
+
+### Changed
+- **On Windows the frame clock's deadline is the display's refresh** ([05 §2](05-host.md)):
+  each picture carries when the system composed it, and the next deadline is the refresh
+  nearest a grid that advances one interval per picture taken -- just before it, or just after
+  it where refreshes between are skipped. A tick that found nothing new waits again at once
+  instead of sleeping to the next deadline. The rate stays exact whatever its ratio to the
+  refresh. Linux keeps the clock's own phase until the vblank event's time is read
+  ([impl-plan.md](impl-plan.md) Phase 10).
+- **A picture in flight is polled for while the loop waits for the display**, a millisecond at
+  a time, on both platforms. That wait's timeout followed the device poke's schedule and held a
+  finished picture uncollected for up to a refresh, which the waiting above made common: a peer
+  was shown an encode of 9-10 ms on a still desktop.
+
+### Measured
+- Live, as the system account, to an established client, HEVC, the desktop of a second display
+  at 1920x1080 and 120 a second with a window presenting numbered frames on it: composition to
+  handed over p95 / p99 6.5-8.1 / 7.8-8.9 ms before, 0.11-0.45 / 0.19-0.60 after, across
+  sporadic updates and 60, 90 and 120 Hz content, with no packet asked for again. The encode a
+  peer is shown on a still desktop 3.8-4.7 ms before, 4.0-6.1 after (the poll's millisecond, on
+  the refining pictures only); with content moving 1.1-1.6. Processor time on a still desktop
+  with a guest seated 0.05-0.16 % of a core before and 0.16-0.21 % after, within what the
+  system's accounting resolves.
+- The pacing alone, replayed against the duplication with the same numbered frames, from a
+  frame's present to the first capture showing it, p95, the compositor's own ~8.7 ms included:
+  at 120 a second 24.4 -> 17.4 ms for 60 Hz content, 13.1 -> 6.9-7.7 for 90 Hz and 14.8-15.3 ->
+  9.9-10.6 for sporadic updates; at 60 a second 22.2-25.4 -> 18.0 for 120 Hz content; at 90 a
+  second 18.9-19.7 -> 17.8-17.9. The rate held exactly at all three.
+
 ## 2026-10-14 - W2.2 checked further: a lost device, a game's fullscreen
 
 ### Changed

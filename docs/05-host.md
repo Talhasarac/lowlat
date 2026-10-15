@@ -67,6 +67,21 @@ Rules:
   a still desktop still ticks once a refresh; and a frame that carries only the pointer is no
   present at all -- the pointer moves a thousand times a second, and ending the wait on it
   would make a composition a millisecond behind it wait a whole frame interval.
+  *Changed 2026-10-15:* **on Windows the deadline takes its phase from the compositions.** Each
+  picture says when the system composed it, and compositions land only on the display's
+  refreshes, so the next deadline is the refresh nearest a grid that advances one interval per
+  picture taken: just before that refresh when none lies between it and the last picture, so
+  its composition is taken as it lands, and just after it when refreshes between are skipped,
+  so it supersedes one left pending from a skipped refresh. The grid keeps the rate exact
+  whatever the refresh -- ninety a second on a 120 Hz display alternates one refresh and two --
+  and starts again on the picture that ends a stall. A wait that saw nothing composed is
+  followed by another at once, not by a sleep to the next deadline, and a picture still being
+  encoded is polled for every millisecond of it, so it is collected as it finishes rather than
+  when the wait ends; a desktop out of reach keeps the clock's own pace, which is what asks for
+  it again. Before, a deadline anchored once
+  and kept made a composition landing between a tick and the next deadline wait for it: up to
+  a refresh, on about half of all desktop updates and on every frame of content whose phase
+  fell that way. Linux keeps the clock's own phase until the vblank event's own time is read.
 - **The rate is read from the display, not only bounded by it.** The mode the lit controller is
   running carries how often it presents, so the frame clock is set from `min(asked, refresh)` and
   from the refresh alone when nothing was asked. Bounding without reading is not enough: the
