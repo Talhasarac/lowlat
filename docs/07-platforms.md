@@ -877,6 +877,18 @@ After Gate B. The differences are contained:
   system's own device notifications (*added 2026-10-15*, [05 §9](05-host.md),
   [impl-plan-windows.md](impl-plan-windows.md) W2.4). Unlike Linux, the system can capture
   everything but one program; that is deferred (W2.6).
+- A display driver of the host's own (*planned 2026-10-15*,
+  [impl-plan-windows.md](impl-plan-windows.md) W3): a user-mode indirect display driver, so a
+  test certificate the machine trusts loads it with no test mode, and a release is signed from
+  CI's build by a signing service for open-source projects. It is installed and removed with
+  the service, and needs Windows 10 1903. Its control interface admits any interactive user, a
+  monitor bound to the handle that plugged it or kept until removed; its frame interface admits
+  the system account alone and never reaches the library's boundary. Kept monitors come back at
+  start from a file in a folder of its own under the program-data directory, which users may
+  write and the driver's account may read, beside the host's configuration that only the system
+  account and administrators read. An arrangement of displays that only the virtual one can
+  satisfy is never saved, or a later boot waits on the driver. The design is
+  [11](11-drivers.md).
 
 None of this reaches the protocol core, the IO shell's logic, or the public API.
 
@@ -912,7 +924,7 @@ statically, so neither asks the machine for a redistributable.
 | pointer-hidden signal source | **closed as a question, open as work**: the session-side probe is required, not preferred, and the plane signal was measured to be a different state (§2.1) |
 | scanout format stability | **closed**: it changes several times a minute in ordinary use (§3.3) |
 | framebuffer export, classic module of the second vendor | open, not run here, off the path |
-| virtual display | open: the software virtual driver is absent from this kernel |
+| virtual display | open: the software virtual driver is absent from this kernel; on Windows the host's own driver is planned (W3) |
 | audio capture surface | **closed**: the session's sound server, reached over its own socket, no helper (§7) |
 | local channel authorisation | **deferred**: any local user may act, credentials are recorded, and the criterion is one comparison when it is wanted (§5.1) |
 

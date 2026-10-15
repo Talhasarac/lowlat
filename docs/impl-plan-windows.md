@@ -2,8 +2,8 @@
 
 **Status:** planned 2026-09-26. Phase W0, the platform seams, is closed; the client's phase
 (W1) was planned at its interview the same day, and the host's (W2) at its own on 2026-10-14,
-the day the host's own virtual display (W3) was added with its frame hand-off decided; the
-rest of W3 is planned at its own interview.
+the day the host's own virtual display (W3) was added with its frame hand-off decided; W3 was
+planned at its own interview on 2026-10-15.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -452,6 +452,11 @@ once, here.
 - **No application supplies frames** (*settled before the interview*). Desktop duplication is
   this phase's source, for a physical monitor and for a display another driver provides; W3's
   display is read by the same display module, so nothing crosses the library's boundary.
+  *Corrected 2026-10-15, at W3's review:* as built, a display another driver provides is not
+  duplicated. Its output sits on an adapter of its own, which renders nothing and is refused as
+  an encoder's device, and the GPU that renders it is another adapter; so the stream refuses
+  every such output, another vendor's virtual display and the host's own alike. W3.2 delivers
+  it.
 - **NVENC alone, on the capture's D3D11 device.** The encoder keeps its register-once submit and
   poll and binds its device through D3D11 rather than CUDA. AMD's and Intel's encoders are
   deferred: on the development machine only the NVIDIA card drives a display, so either would
@@ -791,13 +796,17 @@ the same LAN:
 - both CI jobs, and the Linux bar, since the shared pointer type and the usage translation
   change.
 
-## Phase W3 - The host's virtual display (to be planned)
+## Phase W3 - The host's virtual display
 
-**Added 2026-10-14.** A display driver of the host's own, for a host with no monitor: an
-indirect display whose composed desktop the host converts straight from the system's buffer.
-Behind a virtual display, desktop duplication costs two passes after composition -- the
-system's copy into its duplication image, then the conversion -- where this costs one, the
-conversion itself. W2's desktop duplication is what it is measured against.
+**Added 2026-10-14; planned 2026-10-15, interview of the same day.** A display driver of the
+host's own, for a host with no monitor: an indirect display whose composed desktop the host
+converts straight from the system's buffer, and a controller through which any application can
+plug virtual monitors of its own ([00 §D16](00-overview.md)). Behind a virtual display, desktop
+duplication costs two passes after composition -- the system's copy into its duplication image,
+then the conversion -- where this costs one, the conversion itself. W2's desktop duplication is
+what it is measured against, and an established host duplicates its own virtual display like
+any other output, so the direct frame is the whole of what this display adds over one. The
+decisions are recorded once, here; the design they add up to is [11](11-drivers.md).
 
 ### Decided when it was added
 
@@ -816,15 +825,148 @@ conversion itself. W2's desktop duplication is what it is measured against.
 - **The frames never cross the library's boundary**: the host's display module reads the
   driver, as it reads a scanout buffer on Linux, and [06 §13](06-api.md) stands.
 
-Open before it is planned: where the driver's sources live and their toolchain; signing; the
-Windows floor it sets (naming the swapchain's render adapter needs Windows 10 1903); the
-channel between the host and the driver; mode changes, which re-plug the monitor, and whether
-a guest's requested size and refresh become one; and the measurements that set the bound --
-composition to encoder input at p50, p95 and p99, desktop duplication against the direct
-frame in one session, at 60, 120 and 240 Hz.
+### Decisions taken at the interview
+
+- **The monitor lives with the host.** The host plugs its display when a stream finds no lit
+  output and the configuration allows it, or when the configuration names it, and keeps it for
+  as long as the host runs: the driver unplugs a monitor when the handle that plugged it closes,
+  so a host that ends, however it ends, leaves no display behind, and nothing has to keep one
+  alive. Not one per session: a machine with no monitor then has a display for its logon screen
+  and its launchers before anybody connects, a connection waits for no plug, and the desktop's
+  layout does not change with every guest. Allowing it is off in the library's defaults, since
+  it changes the machine, and on in `lowlatd`'s.
+- **The driver is Rust, in this workspace.** A user-mode display driver built from a
+  Windows-only crate here and shipped with `lowlatd`. The declarations of the user-mode driver
+  framework and of the indirect display class are generated once from the driver kit's headers
+  by a script, against an allowlist, and committed, as the other vendor interfaces are; the
+  calls through each framework's function table are written by hand behind their availability
+  checks. A callback never unwinds into the system's code: a panic ends the driver's host
+  process, which the system starts again. **The channel's shared layout and its claim and
+  release are written once, compiled into the driver and the host both, and model-checked**,
+  as every other handoff here is. The driver kit is a pinned package restored by a script, so
+  every machine and CI build against one version and nothing is installed.
+- **A controller, the library's third half** ([00 §D16](00-overview.md)). The control side of
+  the driver's channel is a module the host's display uses and a third half of the library
+  beside the host and the client, under their conventions ([06](06-api.md)): open, close, plug a
+  monitor with its modes and the preferred one, unplug, set a mode, list, and the driver's
+  version. **A monitor is bound to the handle that plugged it, or kept**
+  ([11 §1.3](11-drivers.md)): only its handle re-modes or unplugs a bound one, and the handle's
+  end unplugs it, so an application cannot disturb the host's display, nor the host an
+  application's; a kept one belongs to no handle, lives until removed, and may come back at start
+  from a file the controller writes and the driver only reads, in a folder users may write.
+  **Nothing keeps a monitor alive by traffic**: a ping that stalls with a debugger, a resume from
+  sleep or a starved thread would take a display away mid-session, where a handle's end is the
+  owner's own. Up to sixteen monitors, each a slot whose identity never changes, so the system
+  keeps each one's arrangement; the host plugs one, bound. `lowlatd display` drives the
+  controller from a shell. The control interface admits any interactive user -- plugging a
+  display asks no more than a person at the desk may do, and ownership keeps one user's monitors
+  from another's requests -- while **the frames are never in it** ([06 §13](06-api.md)): the
+  driver's frame interface admits the system account alone, checked when it is opened.
+- **The host's display is configured like an output.** Whether a stream may plug it is settled
+  at start; its name, `virtual`, and its size and refresh are live. Zero lets the host decide:
+  the size an owner states as it joins an empty room, within the largest picture that guest
+  accepts -- the owner's machine is not resized for a guest the owner let in -- else the size it
+  already has, 1920x1080 when first plugged. The refresh is the stream's frame-rate ceiling, 60
+  when that is zero: a display composing faster than the stream composes pictures nobody is
+  sent, and the refresh a client states is a fixed number rather than a reading of its screen.
+  A guest's later request for a size reaches it through the application, the last one winning
+  ([06 §14](06-api.md)); `lowlatd` relays the settings panel's. A turn of the host's display is
+  refused until its rotation has been checked. The last guest leaving changes nothing. A mode
+  the monitor lists is set through the system's display configuration, never saved to the
+  system's database of arrangements -- a saved arrangement that only the virtual display can
+  satisfy holds a later boot waiting for the driver -- and a mode it does not list is a replug
+  with that mode added first, since a monitor's modes are fixed when it arrives.
+- **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
+  once, with a fence of its device, and publishes their handles in a section the host maps; the
+  host takes the handles from the driver's process and keeps a view per buffer until the
+  swapchain is replaced. Per frame the driver acquires, notes the time, signals the fence,
+  publishes the buffer with its sequence and frame number, finishes the frame, then waits on
+  three things together -- the host's release reaching that sequence, the swapchain's end, and
+  the bound -- before it acquires again. The host claims a sequence before it reads; at the bound
+  the driver lets go of an unclaimed frame, which the host then skips, and of a claimed one too,
+  counting it. **The swapchain's end ends a hold at once**: a frame held across a monitor's
+  departure stalls the system's teardown until its watchdog ends the driver. The frame's time
+  is the driver's acquire, not the time the system says the frame should be shown, which lies
+  ahead of it. A buffer's reference is released at the next acquire. If the system's buffer
+  will not open in the host, or the hold costs more than it saves, the driver converts into
+  targets of its own, then copies, by measurement.
+- **Signing.** In development the driver and its catalogue are signed with a test certificate
+  the machine trusts: a user-mode driver needs neither test mode nor a signature from the
+  system's vendor. Releases are signed by a signing service for open-source projects, from CI's
+  build, so CI builds the driver. The library is never linked to demand the system vendor's own
+  signature at load.
+- **The floor**: the indirect display class at 1.4, the first that names the swapchain's render
+  adapter, so Windows 10 1903; the user-mode framework 2.25; later calls behind their
+  availability checks. The host's own floor stays 1703 for a physical display.
+- **Desktop duplication of any virtual display** (W2's gap, corrected above): the device is made
+  on the GPU that renders the output -- for the host's own display the one the driver reports,
+  and for another vendor's whichever the encoder accepts, measured first.
+
+### Steps
+
+- [ ] **W3.0 the driver and its package**: the crate and its generated declarations; the
+  adapter, its monitors with a fixed identity, their modes and the hardware cursor; a frame loop
+  that finishes every frame; the setup information, the package and its test signature; install
+  and uninstall. Checked by a monitor plugged by hand arriving and composing, listed on an
+  adapter of its own with the render GPU named, and the package installing silently with no
+  test mode.
+- [ ] **W3.1 the controller**: the control interface, bound and kept monitors, plug, unplug, a
+  mode set through the display configuration or by replug, the list; the slots, the custom
+  modes and the file kept monitors come back from; the library's third half and `lowlatd
+  display`. Checked by an unelevated program driving a bound monitor of its own beside another
+  handle's, refused the other's, and killed with no monitor left behind; and by a kept monitor
+  made unelevated coming back after a reboot at its slot, mode and position.
+- [ ] **W3.2 the host's display, and desktop duplication of any virtual display**: the setting,
+  the name, the live mode, the owner's size at join, `lowlatd`'s relay; the device on the GPU
+  that renders an indirect output. Checked by the host streaming its own display through desktop
+  duplication -- the baseline -- and two other vendors' virtual displays.
+- [ ] **W3.3 the direct frame**: the frame interface, the section, the shared buffers and
+  fences, the claim, the hold and its bound, a view per buffer, the frame's time; the Windows
+  display's second source. Checked by the gate's comparison, run offline first, and by each part
+  broken and seen to fail: no wait on the fence, no release, a claimed frame past the bound.
+- [ ] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
+  driver, position and show state as in W2. Checked by each kind of shape, one larger than the
+  wire's 256, and the visibility while the system draws the pointer itself.
+- [ ] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
+  driver restarted, the display asleep, the lock screen, the secure attention screen and an
+  elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
+  Checked by each once while streaming.
+
+**Gate:** after W2.5, on the development machine, with established clients on macOS and Android
+on the LAN and one on a Windows machine:
+
+- with no monitor: the machine booted with its monitors unplugged, the service's host plugging
+  its display, the logon screen streamed, a sign-in, the desktop at the owner's size;
+- ten minutes each of H.264 and HEVC at 120 a second, ten-bit and full chroma where the encoder
+  takes them;
+- once each mid-session: a size change from a client's settings, its blink recorded; the lock
+  screen, the secure attention screen and an elevation prompt; a logoff and the reconnect; the
+  GPU's driver restarted; the driver updated; the host killed and started again -- no watchdog,
+  no stop error, no blank beyond a swapchain's replacement;
+- the controller: an unelevated program plugs, re-modes and unplugs a monitor of its own beside
+  the host's, and is refused the host's and the frame interface; a kept monitor made through
+  `lowlatd display` comes back after a reboot where it was;
+- two other vendors' virtual displays streamed through desktop duplication, an established
+  host's own among them;
+- **the comparison decides the host's default**: in one session at 60, 120 and 240 Hz,
+  composition to encoder input at p50, p95 and p99 for desktop duplication of the host's display
+  and for the direct frame, with the hold's distribution and how often its bound fires; the
+  direct frame becomes the host's path only at or below the duplication at every rate and
+  percentile, else the duplication stays the path and the numbers are recorded;
+- the test-signed package installing silently with no test mode; CI building the driver; both
+  CI jobs and the Linux bar.
 
 ## Change log
 
+- 2026-10-15: W3 planned at its interview: the monitor lives with the host, plugged when a
+  stream finds nothing lit and the configuration allows it, or when named; the driver in Rust in
+  this workspace, its channel's layout and handshake written once and model-checked; a
+  controller as the library's third half, a monitor bound to its handle or kept and restored at
+  start, no keepalive, `lowlatd display` for people; the design in 11; the host's display
+  sized through the configuration from an owner's stated size and the stream's rate; test
+  signing in development and an open-source signing service for releases; the floor Windows 10
+  1903; desktop duplication of any virtual display, which W2 refused (its decision corrected);
+  the gate after W2.5, its comparison deciding the default path.
 - 2026-10-15: W2.4 built and checked live: the loopback and its silent stream, the host's own
   rounding, flagged packets as silence, the default followed and a lost output opened again at
   once where it can be, the local mute only where the output mutes in hardware.

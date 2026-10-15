@@ -1485,3 +1485,17 @@ mode of a display somebody else owns, and that one is nobody's here
 display runs at, not a target, and **zero asks for the display's own rate**: the display is
 read when the pipeline is built, so the number the application is told is one the stream can
 actually reach.
+
+*Planned 2026-10-15 ([impl-plan-windows.md](impl-plan-windows.md) W3, [00 §D16](00-overview.md)):
+the host's own display on Windows is that case, and its size reaches it through the
+configuration.* A setting fixed at start lets a stream that finds nothing lit plug it -- off by
+default, since it changes the machine -- and the live output name `virtual` asks for it. Its
+width, height and refresh are live, and zero lets the host decide: the size an owner states as
+it joins an empty room, within the largest picture that guest accepts, else the size the
+display already has; the refresh is the frame-rate cap, 60 when that is zero, so this display's
+own rate is the stream's rather than the other way round. **`owner` then decides a second
+thing**: whose stated size the display takes. A guest's later request for a size is the
+application's to relay, as on any display, and here the application relays it into these
+settings. The virtual monitors an application plugs for itself go through the library's third
+half, the controller, each bound to the handle that plugged it or kept until removed
+([11 §1.3](11-drivers.md)); the host's display is bound to the host.

@@ -3,6 +3,38 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-15 - W3 planned: the host's own virtual display
+
+### Decided
+- The host's display lives with the host: plugged when a stream finds nothing lit and the
+  configuration allows it -- off in the library's defaults, on in lowlatd's -- or when the
+  output `virtual` is asked for, and unplugged by the driver when the host ends, so nothing
+  keeps it alive ([impl-plan-windows.md](impl-plan-windows.md) W3).
+- The driver is Rust in this workspace: its framework declarations generated once and
+  committed, its callbacks never unwinding, and the channel's layout and handshake written once
+  for both sides and model-checked. The driver kit is a pinned package; nothing is installed.
+- A controller is the library's third half ([00 §D16](00-overview.md)): plug, unplug, set a
+  mode, list; a monitor bound to the handle that plugged it and unplugged by its end, or kept
+  until removed and restored at start from a file the driver only reads; nothing keeps a monitor
+  alive by traffic; up to sixteen monitors, each a slot whose identity never changes; the control
+  interface open to interactive users, the frame interface to the system account alone;
+  `lowlatd display` for people.
+- The drivers' design has a document of its own, [11-drivers.md](11-drivers.md): the display
+  now, the input device's place reserved.
+- The host's display is sized through the configuration ([06 §14](06-api.md)): the size an owner
+  states as it joins an empty room, the stream's frame-rate cap as its refresh; a guest's later
+  request relayed by the application, the last winning; a listed mode set without saving the
+  arrangement, an unlisted one by replug.
+- The frame contract made concrete: a hold ends at once with its swapchain, and a frame's time
+  is the driver's acquire. Test signing in development, an open-source signing service for
+  releases, from CI's build. The floor is Windows 10 1903.
+- The gate runs after W2.5 on a machine with no monitor, and its comparison with desktop
+  duplication decides the host's default path.
+
+### Corrected
+- W2's decision said desktop duplication serves a display another driver provides; as built it
+  refuses every such output, since the GPU that renders one is another adapter. W3 delivers it.
+
 ## 2026-10-15 - The C# host on Windows
 
 ### Checked
