@@ -908,10 +908,9 @@ Three things make it a host action rather than an ordinary keystroke:
 
 **On Windows the chord cannot be typed** (*2026-10-15*): the system raises its secure screen
 for the keys only from the keyboard, and for software only through its own call for it, which a
-machine's policy has to allow and which may answer a service alone. Whether a process like the
-host's may make the call is probed before it is built
-([impl-plan-windows.md](impl-plan-windows.md) W2.3); until it is, the request is refused and
-logged. The keyboard permission gates it there as here.
+machine's policy has to allow and which answers a service alone. So the host asks its service
+to make the call ([impl-plan-windows.md](impl-plan-windows.md) W2.5); until the service exists
+the request is refused and logged. The keyboard permission gates it there as here.
 
 There is no general "inject these keys" call behind this. Input comes from guests; this is the
 one chord a guest is unable to send for itself.

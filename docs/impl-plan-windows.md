@@ -539,7 +539,7 @@ once, here.
   vertical axes point down on the wire** ([01 §11.1](01-protocol.md)), opposite to the whole
   state's: the host reads them so on both platforms, and the client's per-axis call converts at
   the wire so its interface keeps the state's direction. The attention chord is the system's
-  own call for it, never typed keys ([05 §7.3](05-host.md)).
+  own call for it, made by the service, never typed keys ([05 §7.3](05-host.md)).
 - **Sound.** The loopback of the default render endpoint, event-driven, 48 kHz stereo asked and
   the system's engine converting, 20 ms a packet. **A loopback delivers nothing while nothing
   plays** -- measured on the development machine: no packet in three seconds, where a silent
@@ -656,20 +656,21 @@ once, here.
   with rumble, from an established client.
   *Reviewed 2026-10-15, before its build* (the decisions above): also the lock keys from the
   host's state, report pads played as the Xbox pad, opcode 5's direction on both platforms with
-  the client's per-axis call, and the attention chord. Checked as well by a keyboard hook and a
-  raw-input log on the host against the physical keyboard -- Pause, Break, SysRq, both Shifts,
-  the keypad either side of NumLock, media and volume keys, the context-menu key by both codes
-  -- by absolute positions swept across both displays, the second at 125 percent, against
-  where the pointer lands, and by typing on the lock screen. **Whether a process like the
-  host's may raise the attention screen is probed first**: the system may take the call from a
-  service alone, in which case it moves to W2.5 and the host refuses the chord until then.
+  the client's per-axis call, and the attention chord refused until the service makes it.
+  Checked as well by a keyboard hook and a raw-input log on the host against the physical
+  keyboard -- Pause, Break, SysRq, both Shifts, the keypad either side of NumLock, media and
+  volume keys, the context-menu key by both codes -- by absolute positions swept across both
+  displays, the second at 125 percent, against where the pointer lands, and by typing on the
+  lock screen. **The attention chord is the service's** (W2.5): the system takes its call for
+  the secure screen from a service alone, so until the service exists the host refuses the
+  chord and logs it.
 - [ ] **W2.4 sound**: the loopback and its silent stream. Checked by sound through a quiet
   spell with no gap at the guest.
 - [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
   Checked by a logoff mid-session and the guest reconnecting.
-  *Added 2026-10-15, at W2.3's review:* `lowlatd install` lets services raise the attention
-  screen and `uninstall` puts back the setting it found; where W2.3's probe shows only a service
-  may make the call, the host asks the service for it.
+  *Added 2026-10-15, at W2.3's review:* the attention chord. The host asks the service, which
+  makes the system's call for the secure screen, since the system takes it from a service alone;
+  `lowlatd install` lets services make it and `uninstall` puts back the setting it found.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -725,7 +726,7 @@ frame in one session, at 60, 120 and 240 Hz.
   own, with the peers' extra codes and the keys a scancode cannot carry; the power key unmapped;
   the locks from the host's state; report pads played as the Xbox pad without the application;
   opcode 5's vertical axes pointing down on the wire; the attention chord the system's own call,
-  probed first.
+  made by the service (W2.5).
 - 2026-10-14: W2.2 checked further: a lost device is a rebuild with the guest kept, and a name
   the system renumbered follows its monitor (amending the naming decision); exclusive
   fullscreen at another mode is followed in both presentation models.

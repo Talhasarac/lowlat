@@ -19,8 +19,8 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   reads them so on both platforms, and the client's per-axis call converts at the wire so its
   interface keeps the whole state's direction. Both at the build.
 - The attention chord on Windows is the system's own call for it, never typed keys
-  ([05 §7.3](05-host.md)); whether the host's kind of process may make it is probed first, and
-  otherwise it moves to the service (W2.5).
+  ([05 §7.3](05-host.md)), made by the service (W2.5), since the system takes it from a service
+  alone; until then the host refuses it.
 
 ### Corrected
 - [05 §7](05-host.md): absolute motion turns into deltas while an application holds the
