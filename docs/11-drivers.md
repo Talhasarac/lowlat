@@ -207,7 +207,7 @@ at 120; unplugged by a request and by its handle's end, a killed process's inclu
 built and checked live** (W3.1, 2026-10-15): kept and bound monitors from an unelevated shell
 and through the C interface, a mode set listed and unlisted, a bound monitor refused to another
 program and gone with its holder, a kept one back at its saved mode and place after the driver
-restarted, the file's settings changed; a kept monitor back after a reboot is owed. The
+restarted and again after a reboot, the file's settings changed. The
 pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's

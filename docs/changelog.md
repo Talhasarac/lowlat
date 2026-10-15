@@ -35,7 +35,7 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - On the development machine, from an unelevated shell and through the C interface: kept and
   bound monitors plugged, set to listed and unlisted modes, listed and removed; a bound monitor
   refused to another program and gone 7 ms after its holder was killed; a kept monitor back at
-  its saved mode and place 7 ms after the driver restarted. A reboot is owed.
+  its saved mode and place 7 ms after the driver restarted, and again after a reboot.
 
 ## 2026-10-15 - W3.0: the display driver and its package
 

@@ -961,7 +961,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   a second, each ended and deleted without a wait; and the monitor unplugged by a request, by
   its handle's close and by its process killed mid-hold, each in under 10 ms. The protocol's
   checks were each broken once and seen to fail, and CI fetches the kit and builds the driver.
-- [ ] **W3.1 the controller**: the control interface, bound and kept monitors, plug, unplug, a
+- [x] **W3.1 the controller**: the control interface, bound and kept monitors, plug, unplug, a
   mode set through the display configuration or by replug, the list; the slots, the custom
   modes and the file kept monitors come back from; the library's third half and `lowlatd
   display`. Checked by an unelevated program driving a bound monitor of its own beside another
@@ -970,7 +970,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   *Reviewed 2026-10-15, before its build* (the last three decisions above, added at it): also
   the monitors reported as DisplayPort, as their EDID says; a replug that keeps its slot from
   departure to arrival; the file in a folder of its own, read as hostile.
-  *Built 2026-10-15, and checked live but for the reboot.* The driver's protocol at version 2:
+  *Built and checked live 2026-10-15.* The driver's protocol at version 2:
   a plug carries the lifetime, whether a kept monitor comes back, and the slot it asks for; a
   replug adds a mode to one monitor; a reload rereads the file. Kept monitors belong to no
   handle. The file (`%ProgramData%\lowlat\display\displays.conf`) is read at the driver's start
@@ -990,8 +990,10 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   device restarted, before any request, and shown by the system at its saved mode and place; the
   GPU, the pointer, the custom modes and the EDID changed through the file, and refused where
   wrong; the third half driven through the C interface for both lifetimes, its deliberate panic
-  contained; the protocol's checks each broken once and seen to fail, 45 of them. **Owed: the
-  reboot**, a kept monitor back at its slot, mode and place.
+  contained; the protocol's checks each broken once and seen to fail, 45 of them. **And after a
+  reboot**, a kept monitor an unelevated shell made came back at its slot, mode and place:
+  plugged again by the driver from the file at its start, arranged by the system from its
+  store.
 - [ ] **W3.2 the host's display, and desktop duplication of any virtual display**: the setting,
   the name, the live mode, the owner's size at join, `lowlatd`'s relay; the device on the GPU
   that renders an indirect output. Checked by the host streaming its own display through desktop
@@ -1034,6 +1036,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-15: W3.1 checked after a reboot, a kept monitor back at its slot, mode and place;
+  ticked.
 - 2026-10-15: W3.1 reviewed and built, checked live but for the reboot: a kept monitor's
   arrangement saved in the system's store unless only virtual displays would be active, a
   bound one's never; the controller's calls waiting for the system within a bound; one GPU
