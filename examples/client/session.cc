@@ -41,9 +41,11 @@ static unsigned _row;
 static lowlat_client_video_config _video;
 static bool _handles;
 // Switching the streamed output: the host's outputs and its current
-// configuration, both asked for on the chord and acted on together.
+// configuration, both asked for on the chord and acted on together; the
+// host also sends both whenever its capture changes, which is no chord.
 static MTY_JSON *_outputs;
 static MTY_JSON *_host_config;
+static bool _switching;
 // Whether the session's rate was asked for: set by the present thread, which
 // asks, and cleared by the reconnect.
 static std::atomic_bool _asked;
@@ -138,6 +140,7 @@ void ask_outputs()
 {
 	MTY_JSONDestroy(&_outputs);
 	MTY_JSONDestroy(&_host_config);
+	_switching = true;
 	lowlat_client_send_user_data(_client, 10, "", 0);
 	lowlat_client_send_user_data(_client, 9, "", 0);
 }
@@ -146,8 +149,9 @@ void ask_outputs()
 // configuration sent back whole, because a host reads the element whole.
 static void cycle_output()
 {
-	if (_outputs == NULL || _host_config == NULL)
+	if (!_switching || _outputs == NULL || _host_config == NULL)
 		return;
+	_switching = false;
 	const MTY_JSON *video = MTY_JSONObjGetItem(_host_config, "video");
 	const MTY_JSON *first = video != NULL ? MTY_JSONArrayGetItem(video, 0) : NULL;
 	const char *current = first != NULL ? MTY_JSONStringPtr(MTY_JSONObjGetItem(first, "output")) : NULL;
