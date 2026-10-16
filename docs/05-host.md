@@ -120,6 +120,20 @@ Rules:
   conversion is queued the host checks that the driver has not acquired as many newer pictures as
   the swapchain has buffers, less one -- the system writes a buffer again only then -- and
   converts the latest instead when it has, counted.
+  *Corrected 2026-10-16, at W3.5's build:* **the refresh bounds the wait before the first
+  picture too.** Unbounded, a stream built while its display had no picture yet -- the host's own
+  display plugged again a moment before, after its driver was updated, or asleep -- found no
+  present in the start's probe, was paced by the clock alone, and spun there: a tick that took
+  nothing new is followed by another at once, which is right only where a wait paces the loop.
+  Measured on an update mid-stream, a report of 600 frames every 2 to 4 ms, the guest's pictures
+  falling from 18 a second to 6 and their latency from 1.5 ms to up to 9. And **a driver whose
+  process ended answers nothing**: its wait runs to the refresh, as a still desktop's does, until
+  the output's departure rebuilds the stream; answering at once spun the loop meanwhile.
+- **On Windows the lock screen and the secure attention screen are drawn on the primary display
+  alone** (*found 2026-10-16, at W3.5's checks*). A guest watching another display -- the host's
+  own beside a lit panel -- sees black while they are up, though the stream goes on, follows the
+  input onto them, and the guest's keys reach them; with the host's own display the only one, or
+  the primary, the guest sees them and unlocks the machine by typing.
 - **On Windows a display asleep is woken by input, not by the stream** (*added 2026-10-16, at
   W3.5's review*). A stream holds the display on while it lives, but a display that slept before
   a guest arrived stays asleep under that request and gives no pictures -- a virtual one loses

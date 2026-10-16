@@ -1263,7 +1263,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   pixels. Found: **a pointer over 256 is hidden on the duplication too** -- it keeps its last
   shape and reports the pointer not visible, the system drawing it (the review said otherwise,
   corrected in [05 §8.2](05-host.md)); that the picture then carries it was not read back.
-- [ ] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
+- [x] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
   driver restarted, the display asleep, the lock screen, the secure attention screen and an
   elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
   Checked by each once while streaming.
@@ -1302,7 +1302,52 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   the update and the GPU's restart again with the panels' cables out; the machine asleep with the
   host idle and its display plugged, and streaming after it wakes; both bars. The update's close
   broken leaves the device waiting for a reboot, so it is broken only at the user's word.
-
+  *Built 2026-10-16*, not ticked: the checks that need a person at the machine wait for one.
+  **The controller follows its driver**: a notification on its handle closes it as the driver is
+  asked to be removed, and a request answered that the driver's process ended closes it too --
+  that answer comes within 2 ms of the end, measured, with no notification before it. **The
+  host's own display follows**, plugged again on a new handle, also while the stream waits for a
+  display, which waits out an output under a GPU without the encoder. `wake_display` in the
+  library's host configuration and `lowlatd --wake-display`, off by default. **Found live: the
+  stream spun after its driver was updated** -- the wait for the direct frame had no bound before
+  its first picture and answered at once once the driver's process had ended, so a stream built
+  before the new driver's first picture was paced by the clock and ticked every few
+  microseconds; both waits now run to the refresh ([05 §2](05-host.md)). Checked on the
+  development machine, the host as the system account and the library's demo as the guest: the
+  host killed mid-stream, its display gone with it and plugged again by the next host 30 ms
+  after its start; the driver updated mid-stream twice, installed with no reboot owed and the
+  guest kept, about 0.9 s without pictures; the driver's process ended mid-stream, the display
+  plugged again 0.2 s after and the guest kept; the device restarted with a handle open and a
+  monitor bound to it, through in 87 ms where it was refused before; the GPU's driver restarted
+  mid-stream, the host's display read again on its GPU 3 s after the stream saw its device lost --
+  the demo, decoding on the same GPU, did not survive its own device's loss; the host's display
+  rendered on the integrated GPU on purpose and back, the stream waiting 6 s and going on, where
+  the build before ended the guest at once; **the display asleep**, its swapchain taken away
+  with the output still listed: with the setting off a guest arriving got nothing for 13 s until
+  one pointer move standing in for its first input, then pictures within a quarter second; with
+  it on, the stream woke the display as it started and the guest had pictures in its second
+  second, and watched 90 s with no input past the 60 s timeout with the display held on; each new
+  check broken once where it can be without a reboot; both bars. **Owed**: a guest on another
+  machine through the GPU's restart and on the lock screen, its unlock typed through it, and the
+  secure attention screen; the host's end, the update and the GPU's restart with the panels'
+  cables out; the machine asleep with the host idle. **No elevation prompt can be raised on the
+  development machine**: its administrators elevate with no prompt, so none reaches the secure
+  desktop.
+  *Checked with a person 2026-10-16*, an established client on a laptop over the LAN driving the
+  host's own display at the laptop's 2880x1800. The GPU's driver restarted with the panel lit:
+  the rebuild landed in the integrated GPU's listing, waited it out and went on in about 3 s, the
+  session kept. **The lock screen and the secure attention screen with the panel lit showed black
+  to the guest** -- the system draws them on the primary display alone, and the host's display
+  was a secondary; the stream followed the input onto them and back regardless ([05 §2](05-host.md)).
+  With both cables out, the host's display the only one: the host killed and started again, its
+  display plugged again by the next host and the guest connecting again; the driver updated, the
+  session kept; the GPU's driver restarted, the session kept through about two seconds without
+  pictures; the lock screen and the secure attention screen shown to the guest and unlocked by the
+  password typed through it; and **the machine put to sleep** by a person, woken to the lock screen
+  on the host's display, the stream reading it again on the GPU's new identity and the guest
+  connecting again -- its session had ended while the machine slept. A reset of the display stack
+  from the keyboard put the display's saved mode back, which the host put right in a tenth of a
+  second. The elevation prompt is left to a machine that raises one.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1335,6 +1380,15 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.5 checked with a person and ticked: a guest on a laptop through the GPU's
+  restart, the lock screen and the secure attention screen, with both panels' cables out the host's
+  end, the update and the GPU's restart, and the machine's sleep; the secure screens black on the
+  host's display while it is a secondary. No elevation prompt can be raised on the development
+  machine.
+- 2026-10-16: W3.5 built, not ticked: the controller follows its driver, the host's own display
+  follows it and the stream's wait plugs it again and waits out a display under a GPU without the
+  encoder; `wake_display`; the stream's spin after a driver update found live and fixed. Checked
+  with the demo as the guest; a guest on another machine, the cables and the machine's sleep owed.
 - 2026-10-16: W3.5 reviewed: the logoff and the remote desktop connection moved to W2.5; the
   controller closes its handle when its driver is asked to be removed or goes, for every user;
   the host's own display follows its driver, also while a stream waits for a display; a display

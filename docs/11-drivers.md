@@ -258,6 +258,14 @@ into targets of its own, by measurement.
   after answers that the driver is absent, and a new open is a new handle, so what was bound to
   the old one is never taken for the new one's. The host then opens one and plugs its display
   again, also while its stream waits for a display ([05 §2](05-host.md)).
+  *Built 2026-10-16:* the device restarted with a handle open and a monitor bound to it went
+  through in 87 ms -- before, refused, and the device left waiting for a reboot -- the handle
+  answering absent at once and a new one plugging again 178 ms after. A driver whose process
+  ended gives no notification first: the old handle's next request is answered that the driver's
+  process ended, within 2 ms, and closes it then. The host's own display was plugged again 139 ms
+  after a restart and 283 ms after the process's end; updated twice under a stream, the driver
+  was installed with no reboot owed and the guest kept, about 0.9 s without pictures, most of it
+  the stream's wait for its once-a-second look at its display.
 - A GPU reset reassigns every swapchain; no monitor departs during one.
   *Measured 2026-10-16, at W3.5's review:* **the GPU's driver restarted, the system assigned the
   next swapchain on the same GPU by itself**, under the GPU's new identity, 3.5 s after the last
@@ -265,6 +273,10 @@ into targets of its own, by measurement.
   -- with no new preference from the driver, so the driver names none. For about 1.5 s
   meanwhile the monitor's output was listed under the integrated GPU; the monitor stayed plugged
   and active, and its name stayed while the panels' changed.
+  *Checked 2026-10-16, at W3.5's build:* restarted under a stream, the host's display stayed
+  plugged and the stream read it straight from the driver again on the GPU about 3 s after it saw
+  its device lost. Rendered on the integrated GPU on purpose and back, the stream waited for it
+  and went on, where before it ended the guests at once.
 
 ### §1.9 The controller, and people
 
@@ -311,7 +323,11 @@ normal priority by measurement; the host's display streams it from W3.4. **The p
 the driver is built and checked** (W3.4, 2026-10-16): published beside the pictures and
 model-checked, each kind drawn as the duplication draws it, read on whatever desktop takes the
 input, the secure one included; the host's own display read straight from the driver as the
-system account, and duplicated as any other user.
+system account, and duplicated as any other user. **The lifecycle is built and checked**
+(W3.5, 2026-10-16): a controller's handle follows its driver away and an update goes through
+under a running host with no reboot owed; the host's own display comes back after its host,
+its driver or its GPU went, after the display slept and after the machine slept, beside a panel
+and as the machine's only display.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

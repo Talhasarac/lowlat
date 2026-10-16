@@ -3,6 +3,56 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.5 built and checked: lifecycle and no monitor
+
+### Added
+- **The controller follows its driver** ([11 §1.8](11-drivers.md)): it closes its handle when
+  the system asks for the device back or says it went, and when a request is answered that the
+  driver's process ended; every call after answers that the driver is absent
+  (`LOWLAT_ERR_VDD_ABSENT`, [06 §3c](06-api.md)).
+- **The host's own display follows its driver**: plugged again on a new handle once the driver
+  is back, also while a stream waits for a display.
+- **A display listed under a GPU without the encoder is waited for** within the wait for a
+  display, rather than refused at once ([05 §2](05-host.md)).
+- **`wake_display`** (minor 28, `lowlat_host_config`, its last reserved byte) and `lowlatd
+  --wake-display`: a stream wakes the display it captures as it starts with one pointer move of
+  no distance; off by default.
+- Hardware tests: a handle followed away from its driver, ended and restarted; the host's own
+  display followed through its driver's end and restart.
+
+### Fixed
+- **A stream on the host's own display spun after its driver was updated**: the wait for a
+  picture from the driver had no bound before the first picture, so a stream built before the
+  new driver's first picture found no present at its start and was paced by the clock, which
+  followed every tick that took nothing with another at once; and a driver whose process ended
+  answered every wait at once. Both waits now run to the refresh ([05 §2](05-host.md)).
+
+### Measured
+- The driver's device restarted with a handle open and a monitor bound to it: through in 87 ms,
+  the handle answering absent, a new one plugging again 178 ms after. Updated twice under a
+  stream: installed with no reboot owed, the guest kept, about 0.9 s without pictures.
+- The driver's process ended under a stream: back in 143 ms, the host's display plugged again
+  214 ms after, pictures 0.6 s after, the guest kept. The host killed and started again: its
+  display gone with it and plugged again by the new host 30 ms after its start.
+- A guest arriving at the host's display asleep: nothing for 13 s with `wake_display` off, until
+  one pointer move standing in for its first input brought pictures within a quarter second; with
+  it on, pictures in the guest's second second, and the display held on past its timeout while
+  the guest watched with no input.
+- The host's display rendered on the integrated GPU and back under a stream: waited for 6 s and
+  taken again, the guest kept, where the build before ended the guest at once.
+- With a person and an established client on a laptop: the GPU's driver restarted, its rebuild
+  landing in the integrated GPU's listing and waiting it out, the session kept; with both panels'
+  cables out, the host killed and started again, the driver updated and the GPU's driver
+  restarted, each survived; the lock screen and the secure attention screen unlocked through the
+  guest; the machine put to sleep and woken to the lock screen on the host's display.
+
+### Found
+- **The lock screen and the secure attention screen are drawn on the primary display alone**: a
+  guest watching the host's own display beside a lit panel sees black while they are up
+  ([05 §2](05-host.md)); as the only display, the guest sees them.
+- No elevation prompt can be raised on the development machine, whose administrators elevate
+  with no prompt.
+
 ## 2026-10-16 - W3.5 reviewed: lifecycle and no monitor
 
 ### Decided
