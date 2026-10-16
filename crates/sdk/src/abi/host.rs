@@ -128,8 +128,20 @@ pub struct lowlat_host_video_config {
     pub reserved: [u8; 3],
     /// Which output to capture, by an identity from the enumeration. **Empty
     /// means whichever this host would pick on its own**, which is the output
-    /// at the desktop's corner and then whatever is lit.
+    /// at the desktop's corner and then whatever is lit. `virtual` is the
+    /// host's own display, plugged when it is asked for (Windows alone).
     pub output: [c_char; LOWLAT_OUTPUT_MAX],
+    /// The host's own display's size, both or neither (minor 27). **Zero lets
+    /// the host decide**: the size an owner states as it joins an empty room,
+    /// within the largest picture that guest accepts, else the size the
+    /// display already has, 1920x1080 when first plugged. Otherwise 640x480
+    /// to 7680x4320, refused outside it rather than clamped.
+    pub virtual_width: u32,
+    pub virtual_height: u32,
+    /// The host's own display's refresh (minor 27). **Zero means the frame
+    /// rate's ceiling, `fps`**, so the display composes no picture the stream
+    /// would not take. Otherwise 24 to 480.
+    pub virtual_hz: u32,
 }
 
 /// How sound is configured.
@@ -255,7 +267,13 @@ pub struct lowlat_host_config {
     /// of its own; set to the application, the reports come out of
     /// [`lowlat_host_poll_pad_report`] instead. Settled when hosting starts.
     pub pad_sink: u8,
-    pub reserved2: [u8; 2],
+    /// Whether the host plugs a display of its own when nothing is lit, and
+    /// keeps it for as long as it runs (minor 27). Windows alone has one;
+    /// elsewhere this is accepted and nothing is plugged. **Default: off**,
+    /// since it changes the machine; `output` set to `virtual` plugs it
+    /// either way. Settled when hosting starts.
+    pub virtual_fallback: bool,
+    pub reserved2: [u8; 1],
     /// How many of `servers` are set. **Default: 0**, so a host consults
     /// nothing for its own address until an application names a server.
     pub server_count: u32,
@@ -301,7 +319,8 @@ pub extern "C" fn lowlat_host_config_default() -> lowlat_host_config {
         exclusive_hold_ms: 500,
         exclusive_pointer: false,
         pad_sink: lowlat_pad_sink::LOWLAT_PAD_SINK_DEVICE as u8,
-        reserved2: [0; 2],
+        virtual_fallback: false,
+        reserved2: [0; 1],
         server_count: 0,
         servers: [[0; LOWLAT_SERVER_MAX]; LOWLAT_SERVERS_MAX],
         video: lowlat_host_video_config {
@@ -313,6 +332,9 @@ pub extern "C" fn lowlat_host_config_default() -> lowlat_host_config {
             full_fps: false,
             reserved: [0; 3],
             output: [0; LOWLAT_OUTPUT_MAX],
+            virtual_width: 0,
+            virtual_height: 0,
+            virtual_hz: 0,
         },
         audio: lowlat_host_audio_config {
             size: u32::try_from(core::mem::size_of::<lowlat_host_audio_config>())
@@ -649,8 +671,8 @@ fn configured(cfg: &lowlat_host_config) -> Option<::lowlat_host::admission::Conf
     if u32::from(cfg.pad_sink) > lowlat_pad_sink::LOWLAT_PAD_SINK_APP as u32 {
         return None;
     }
-    let video = video_configured(&cfg.video)?;
-    let output = taken(&cfg.video.output)?;
+    let (video, own_display) = video_configured(&cfg.video)?;
+    let output = output_named(&cfg.video.output)?;
     let (sound_on, allow_raw, audio_kbps, audio_live) = audio_configured(&cfg.audio)?;
 
     Some(::lowlat_host::admission::Config {
@@ -712,13 +734,42 @@ fn configured(cfg: &lowlat_host_config) -> Option<::lowlat_host::admission::Conf
             full_fps: video.full_fps,
             quality,
             output: (!output.is_empty()).then(|| output.to_string()),
+            virtual_fallback: cfg.virtual_fallback,
+            own_display,
         }),
     })
 }
 
+/// The output a configuration names, read for its terminator. **`virtual` is
+/// refused where there is no display of the host's own**, at the call, since
+/// a stream asked for an output that never lights waits for ever rather than
+/// failing.
+fn output_named(field: &[c_char; LOWLAT_OUTPUT_MAX]) -> Option<&str> {
+    let output = taken(field)?;
+    if cfg!(not(windows)) && output.eq_ignore_ascii_case(::lowlat_host::display::VIRTUAL) {
+        return None;
+    }
+    Some(output)
+}
+
 /// Check the half that can also be set while a host runs.
-fn video_configured(cfg: &lowlat_host_video_config) -> Option<::lowlat_host::stream::LiveVideo> {
+fn video_configured(
+    cfg: &lowlat_host_video_config,
+) -> Option<(
+    ::lowlat_host::stream::LiveVideo,
+    ::lowlat_host::stream::OwnDisplay,
+)> {
     if (cfg.size as usize) < core::mem::size_of::<lowlat_host_video_config>() {
+        return None;
+    }
+    // **Both or neither, and within what a monitor of the display may be**:
+    // refused rather than clamped, so an application is never told yes and
+    // given another size.
+    let sized = match (cfg.virtual_width, cfg.virtual_height) {
+        (0, 0) => true,
+        (width, height) => (640..=7680).contains(&width) && (480..=4320).contains(&height),
+    };
+    if !sized || !(cfg.virtual_hz == 0 || (24..=480).contains(&cfg.virtual_hz)) {
         return None;
     }
     if cfg.fps == 0 {
@@ -733,12 +784,19 @@ fn video_configured(cfg: &lowlat_host_video_config) -> Option<::lowlat_host::str
     // Read for its terminator even where the value is not wanted here: a field
     // that was overrun is refused rather than half-read.
     taken(&cfg.output)?;
-    Some(::lowlat_host::stream::LiveVideo {
-        fps: cfg.fps,
-        bitrate_mbps: cfg.bitrate_mbps,
-        min_mbps: cfg.min_bitrate_mbps,
-        full_fps: cfg.full_fps,
-    })
+    Some((
+        ::lowlat_host::stream::LiveVideo {
+            fps: cfg.fps,
+            bitrate_mbps: cfg.bitrate_mbps,
+            min_mbps: cfg.min_bitrate_mbps,
+            full_fps: cfg.full_fps,
+        },
+        ::lowlat_host::stream::OwnDisplay {
+            width: cfg.virtual_width,
+            height: cfg.virtual_height,
+            refresh_hz: cfg.virtual_hz,
+        },
+    ))
 }
 
 /// Turn what an application wrote about sound into what the host takes.
@@ -1894,10 +1952,10 @@ pub unsafe extern "C" fn lowlat_host_set_video_config(
             let Some(cfg) = cfg.as_ref() else {
                 return LOWLAT_ERR_INVALID_ARGUMENT;
             };
-            let Some(video) = video_configured(cfg) else {
+            let Some((video, own_display)) = video_configured(cfg) else {
                 return LOWLAT_ERR_INVALID_ARGUMENT;
             };
-            let Ok(output) = taken(&cfg.output).ok_or(()) else {
+            let Ok(output) = output_named(&cfg.output).ok_or(()) else {
                 return LOWLAT_ERR_INVALID_ARGUMENT;
             };
             let held = handle.held();
@@ -1905,6 +1963,7 @@ pub unsafe extern "C" fn lowlat_host_set_video_config(
                 return LOWLAT_ERR_INVALID_ARGUMENT;
             };
             seam.set_video(video);
+            seam.set_own_display(own_display);
             seam.select_output((!output.is_empty()).then(|| output.to_string()));
             LOWLAT_OK
         })
@@ -2065,6 +2124,12 @@ pub unsafe extern "C" fn lowlat_host_get_video_config(
             slot.min_bitrate_mbps = video.min_mbps;
             slot.full_fps = video.full_fps;
             slot.reserved = [0; 3];
+            // **The request, as the sound device is**: the display's own size
+            // is the picture's, on the status.
+            let own_display = seam.own_display();
+            slot.virtual_width = own_display.width;
+            slot.virtual_height = own_display.height;
+            slot.virtual_hz = own_display.refresh_hz;
             // **What is being captured, not what was asked for.** A guest can
             // switch outputs and a display can move by itself; an application
             // told the request marks the wrong screen.
@@ -2771,6 +2836,9 @@ mod start_tests {
             full_fps: true,
             reserved: [0; 3],
             output: [0; LOWLAT_OUTPUT_MAX],
+            virtual_width: 0,
+            virtual_height: 0,
+            virtual_hz: 0,
         }
     }
 
@@ -2787,7 +2855,8 @@ mod start_tests {
             exclusive_hold_ms: 500,
             exclusive_pointer: false,
             pad_sink: 0,
-            reserved2: [0; 2],
+            virtual_fallback: false,
+            reserved2: [0; 1],
             server_count: 0,
             servers: [[0; LOWLAT_SERVER_MAX]; LOWLAT_SERVERS_MAX],
             video: video(),
@@ -2868,6 +2937,97 @@ mod start_tests {
         assert!(back.full_fps, "a permission set at start was dropped");
         assert_eq!(back.fps, 45);
         unsafe { lowlat_host_destroy(handle) };
+    }
+
+    /// **What the host's own display is asked to be is what reads back**, at
+    /// start and live, zero being the host deciding. Nothing here names the
+    /// display or allows it, so nothing is plugged on the machine running it.
+    #[test]
+    fn the_host_display_request_is_the_one_read_back() {
+        let handle = handle();
+        let mut cfg = config();
+        cfg.video.virtual_width = 2560;
+        cfg.video.virtual_height = 1440;
+        cfg.video.virtual_hz = 120;
+        assert_eq!(
+            unsafe { lowlat_host_start(handle, &raw const cfg) },
+            LOWLAT_OK
+        );
+        let mut back = video();
+        assert_eq!(
+            unsafe { lowlat_host_get_video_config(handle, &raw mut back) },
+            LOWLAT_OK
+        );
+        assert_eq!(
+            (back.virtual_width, back.virtual_height, back.virtual_hz),
+            (2560, 1440, 120),
+            "a request made at start was dropped"
+        );
+        let live = video();
+        assert_eq!(
+            unsafe { lowlat_host_set_video_config(handle, &raw const live) },
+            LOWLAT_OK
+        );
+        assert_eq!(
+            unsafe { lowlat_host_get_video_config(handle, &raw mut back) },
+            LOWLAT_OK
+        );
+        assert_eq!(
+            (back.virtual_width, back.virtual_height, back.virtual_hz),
+            (0, 0, 0),
+            "a live request was dropped"
+        );
+        unsafe { lowlat_host_destroy(handle) };
+    }
+
+    /// **A size is both or neither and within what a monitor may be, a
+    /// refresh within what a compositor keeps** -- refused, never clamped, so
+    /// an application is not told yes and given another display.
+    #[test]
+    fn a_host_display_request_no_monitor_could_be_is_refused() {
+        let asked = |width, height, refresh| {
+            let mut cfg = video();
+            cfg.virtual_width = width;
+            cfg.virtual_height = height;
+            cfg.virtual_hz = refresh;
+            video_configured(&cfg).is_some()
+        };
+        for (width, height, refresh) in [
+            (1920, 0, 0),
+            (0, 1080, 0),
+            (639, 480, 0),
+            (640, 479, 0),
+            (7681, 4320, 0),
+            (7680, 4321, 0),
+            (1920, 1080, 23),
+            (1920, 1080, 481),
+        ] {
+            assert!(
+                !asked(width, height, refresh),
+                "{width}x{height}@{refresh} was accepted"
+            );
+        }
+        for (width, height, refresh) in [
+            (0, 0, 0),
+            (640, 480, 24),
+            (7680, 4320, 480),
+            (3420, 2148, 0),
+        ] {
+            assert!(
+                asked(width, height, refresh),
+                "{width}x{height}@{refresh} was refused"
+            );
+        }
+    }
+
+    /// **`virtual` names a display only Windows has**, so elsewhere it is
+    /// refused at the call: a stream asked for an output that never lights
+    /// waits for ever rather than failing.
+    #[test]
+    fn virtual_is_refused_where_the_host_has_no_display_of_its_own() {
+        let mut cfg = config();
+        put(&mut cfg.video.output, "virtual");
+        assert_eq!(configured(&cfg).is_some(), cfg!(windows));
     }
 
     /// **A configuration nobody filled in is not a zeroed one.**

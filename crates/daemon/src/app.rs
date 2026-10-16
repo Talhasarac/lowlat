@@ -528,11 +528,18 @@ pub(crate) fn clipboard_to_guests(seam: &mut Admission, settings: &Settings, tex
 /// rather than through the boundary, and an application on the boundary should
 /// use the event.
 ///
-/// Answers what is being captured now, so the caller can hold it and call
-/// again.
-pub(crate) fn announce_capture(seam: &mut Admission, settings: &Settings, last: u32) -> u32 {
-    let captured = seam.captured();
-    if captured == last {
+/// Answers what is being captured now, and at what rate, so the caller can
+/// hold it and call again. **The rate is watched as well**: a display whose
+/// refresh changed under the stream settles another pace with nothing else
+/// changing, and a guest left with the old figure reports a rate nobody is
+/// producing.
+pub(crate) fn announce_capture(
+    seam: &mut Admission,
+    settings: &Settings,
+    last: (u32, u32),
+) -> (u32, u32) {
+    let now = (seam.captured(), seam.video().map_or(0, |video| video.fps));
+    if now == last {
         return last;
     }
     let listed = Display::outputs();
@@ -540,7 +547,7 @@ pub(crate) fn announce_capture(seam: &mut Admission, settings: &Settings, last: 
         seam.picture(),
         &listed,
         Display::preferred().as_deref(),
-        captured,
+        now.0,
         seam.rotation(),
         settings,
         seam.video(),
@@ -552,7 +559,7 @@ pub(crate) fn announce_capture(seam: &mut Admission, settings: &Settings, last: 
         seam.send_user_data(guest.number, id::OUTPUTS, outputs.as_bytes());
     }
     lowlat_common::log_info!("lowlatd: capture changed, told every guest: {config}");
-    captured
+    now
 }
 
 /// Tell every guest who is in the room.
@@ -900,7 +907,27 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
         (Some(false), _) => Some(lowlat_host::video::Rotation::None as u8),
         (Some(true), _) => None,
     };
-    if asked_size.is_some() || asked_rotation.is_some() {
+    // **The host's own display is this host's to size**, so a size asked of
+    // it goes into its setting, the last request winning, rather than to a
+    // session; a turn of it is refused until its rotation has been checked.
+    if video.output == lowlat_host::display::VIRTUAL {
+        if let Some((width, height)) = asked_size {
+            lowlat_common::log_info!(
+                "lowlatd: {who} asked for the host's own display at {width}x{height}"
+            );
+            seam.set_own_display(lowlat_host::stream::OwnDisplay {
+                width,
+                height,
+                ..seam.own_display()
+            });
+        }
+        if asked_rotation.is_some() {
+            lowlat_common::log_info!(
+                "lowlatd: {who} asked to turn the host's own display, refused: its turn is not \
+                 checked yet"
+            );
+        }
+    } else if asked_size.is_some() || asked_rotation.is_some() {
         let output = lowlat_host::display::captured(listed, seam.captured())
             .map(|output| output.connector.clone())
             .unwrap_or_default();
@@ -946,7 +973,15 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
         let asked_mbps = asked as f64;
         wanted.bitrate_mbps = asked_mbps;
     }
-    wanted.fps = asked_fps(first, running.fps, refresh_of(listed, &video.output));
+    // **The host's own display follows the rate rather than bounding it**: its
+    // refresh is put at what is asked, and the stream settles its pace once
+    // the display has followed.
+    let ceiling = if video.output == lowlat_host::display::VIRTUAL {
+        0
+    } else {
+        refresh_of(listed, &video.output)
+    };
+    wanted.fps = asked_fps(first, running.fps, ceiling);
     if let Some(asked) = first.get("fullFPS").and_then(serde_json::Value::as_bool) {
         wanted.full_fps = asked;
     }

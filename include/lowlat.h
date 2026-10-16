@@ -49,7 +49,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 26
+#define LOWLAT_ABI_MINOR 27
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -941,8 +941,20 @@ typedef struct lowlat_host_video_config {
     uint8_t reserved[3];
     /// Which output to capture, by an identity from the enumeration. **Empty
     /// means whichever this host would pick on its own**, which is the output
-    /// at the desktop's corner and then whatever is lit.
+    /// at the desktop's corner and then whatever is lit. `virtual` is the
+    /// host's own display, plugged when it is asked for (Windows alone).
     char output[LOWLAT_OUTPUT_MAX];
+    /// The host's own display's size, both or neither (minor 27). **Zero lets
+    /// the host decide**: the size an owner states as it joins an empty room,
+    /// within the largest picture that guest accepts, else the size the
+    /// display already has, 1920x1080 when first plugged. Otherwise 640x480
+    /// to 7680x4320, refused outside it rather than clamped.
+    uint32_t virtual_width;
+    uint32_t virtual_height;
+    /// The host's own display's refresh (minor 27). **Zero means the frame
+    /// rate's ceiling, `fps`**, so the display composes no picture the stream
+    /// would not take. Otherwise 24 to 480.
+    uint32_t virtual_hz;
 } lowlat_host_video_config;
 
 /// How sound is configured.
@@ -1046,7 +1058,13 @@ typedef struct lowlat_host_config {
     /// of its own; set to the application, the reports come out of
     /// `lowlat_host_poll_pad_report` instead. Settled when hosting starts.
     uint8_t pad_sink;
-    uint8_t reserved2[2];
+    /// Whether the host plugs a display of its own when nothing is lit, and
+    /// keeps it for as long as it runs (minor 27). Windows alone has one;
+    /// elsewhere this is accepted and nothing is plugged. **Default: off**,
+    /// since it changes the machine; `output` set to `virtual` plugs it
+    /// either way. Settled when hosting starts.
+    bool virtual_fallback;
+    uint8_t reserved2[1];
     /// How many of `servers` are set. **Default: 0**, so a host consults
     /// nothing for its own address until an application names a server.
     uint32_t server_count;

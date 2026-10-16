@@ -148,6 +148,11 @@ internal struct HostVideoConfig
     }
     [InlineArray(Sizes.Output)] public struct OutputName { private byte first; }
     public OutputName Output;
+    /// The host's own display's size and refresh, zero letting the host decide
+    /// (Windows alone; minor 27).
+    public uint VirtualWidth;
+    public uint VirtualHeight;
+    public uint VirtualHz;
 }
 
 [StructLayout(LayoutKind.Sequential)]

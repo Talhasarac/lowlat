@@ -8,9 +8,25 @@ use std::sync::mpsc;
 use lowlat_core::control::status;
 
 use super::{
-    Backend, Codec, Config, DISPLAY_WAIT, ENCODE_DEPTH, Exit, FromDevice, Join, Roster, Shared,
-    await_display, encode_loop, settle_pace, start_bps,
+    Backend, Codec, Config, DISPLAY_WAIT, Declared, ENCODE_DEPTH, Exit, FromDevice, Join, Roster,
+    Shared, await_display, encode_loop, settle_pace, start_bps,
 };
+
+/// The host's own display, which only Windows has: nothing to plug or hold.
+#[derive(Debug, Default)]
+pub(super) struct Own {}
+
+impl Own {
+    pub(super) fn idle(&mut self, _shared: &Shared, _config: &Config) {}
+
+    pub(super) fn prepare(
+        &mut self,
+        _shared: &Shared,
+        _config: &Config,
+        _joining: Option<Declared>,
+    ) {
+    }
+}
 
 /// Build the stream's device and encoder for `config` and run it until it
 /// exits: the encoder that shares the capture's device where that is asked
@@ -280,7 +296,7 @@ fn run_vulkan(
     let config = Config {
         width,
         height,
-        fps: settle_pace(shared, config.fps, refresh_hz),
+        fps: settle_pace(shared, shared.asked_fps(), refresh_hz),
         ..config
     };
 
@@ -469,7 +485,7 @@ fn run_open(
     let config = Config {
         width,
         height,
-        fps: settle_pace(shared, config.fps, refresh_hz),
+        fps: settle_pace(shared, shared.asked_fps(), refresh_hz),
         ..config
     };
 
@@ -669,7 +685,7 @@ fn run_vendor(
     let config = Config {
         width,
         height,
-        fps: settle_pace(shared, config.fps, refresh_hz),
+        fps: settle_pace(shared, shared.asked_fps(), refresh_hz),
         ..config
     };
     let Ok(mut encoder) = session.initialize(

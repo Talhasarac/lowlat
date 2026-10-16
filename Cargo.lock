@@ -873,6 +873,7 @@ dependencies = [
  "lowlat-encode",
  "lowlat-inject",
  "lowlat-net",
+ "lowlat-vdd-ctl",
 ]
 
 [[package]]

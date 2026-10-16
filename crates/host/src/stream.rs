@@ -393,6 +393,9 @@ struct Join {
     /// wake is gone and a late notify writes to a descriptor nobody reads
     /// rather than to whatever inherited the number.
     wake: WakeHandle,
+    /// What it said of the picture it wants: what the host's own display is
+    /// readied with when it arrives into an empty room.
+    declared: Declared,
 }
 
 /// Everything both sides of the handoff can see.
@@ -490,6 +493,17 @@ pub(crate) struct Shared {
     /// per frame (AGENTS 6.8).
     video_asked: AtomicU32,
     video: std::sync::Mutex<LiveVideo>,
+    /// The frame rate last asked for, before any display bounded it.
+    ///
+    /// **Kept apart from the live figure**, which the build overwrites with
+    /// the pace it settled on: a rebuild settles again from what was asked,
+    /// not from what the last display allowed, and the host's own display
+    /// takes its refresh from it.
+    asked_fps: AtomicU32,
+    /// What the host's own display is asked to be, and a counter bumped when
+    /// that changes: the same counter and lock as the live video above.
+    own_asked: AtomicU32,
+    own_display: std::sync::Mutex<OwnDisplay>,
     /// Where this loop announces what only it knows.
     ///
     /// **Here rather than threaded through every call.** Everything else the
@@ -737,6 +751,18 @@ struct Held {
 }
 
 impl Shared {
+    /// The frame rate last asked for, before any display bounded it.
+    pub(crate) fn asked_fps(&self) -> u32 {
+        self.asked_fps.load(Ordering::Relaxed)
+    }
+
+    /// What the host's own display is asked to be.
+    pub(crate) fn own_display(&self) -> OwnDisplay {
+        self.own_display
+            .lock()
+            .map_or_else(|held| *held.into_inner(), |held| *held)
+    }
+
     /// Which encodings the seated guests actually want.
     ///
     /// **Asked once per frame rather than assumed.** A room with nobody in it
@@ -1223,6 +1249,68 @@ pub struct Config {
     /// nothing configured it, so every session ran the setting that declares
     /// congestion on any stale fragment.
     pub cg_level: usize,
+    /// Whether the host plugs its own display when nothing else is lit.
+    ///
+    /// **Settled when hosting starts, and a change to the machine**, so off in
+    /// the library's defaults. The display then lives as long as the host,
+    /// whatever lights up later; asking for it by [`crate::display::VIRTUAL`]
+    /// plugs it either way. Only Windows has one.
+    pub virtual_fallback: bool,
+    /// What the host's own display is asked to be when hosting starts: the
+    /// first value of the live setting ([`Stream::set_own_display`]).
+    pub own_display: OwnDisplay,
+}
+
+/// What the host's own display is asked to be, while a host runs: zero lets
+/// the host decide (docs/06-api.md section 14).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnDisplay {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_hz: u32,
+}
+
+/// What a guest said of the picture it wants, as it took its seat.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Declared {
+    /// The guest owns the machine.
+    pub owner: bool,
+    /// The size it stated, where it stated one.
+    pub size: Option<(u32, u32)>,
+    /// The largest picture it accepts, where it named one.
+    pub limit: Option<(u32, u32)>,
+}
+
+/// The refresh the host's own display is put at: the one asked of it, else
+/// the stream's frame-rate ceiling, and 60 when that is zero as well. **A
+/// display composing faster than the stream takes pictures composes pictures
+/// nobody is sent**, and the refresh a client states is a fixed number rather
+/// than a reading of its screen.
+pub fn own_refresh(asked_fps: u32, own: OwnDisplay) -> u32 {
+    match (own.refresh_hz, asked_fps) {
+        (0, 0) => DEFAULT_FPS,
+        (0, asked) => asked,
+        (refresh, _) => refresh,
+    }
+}
+
+/// The size the host's own display takes: the one asked of it; else, as
+/// `joining` arrives into an empty room, the size it states when it owns the
+/// machine -- the owner's machine is not resized for a guest it let in --
+/// or the size the display has; either one within the largest picture that
+/// guest accepts.
+pub fn own_size(current: (u32, u32), own: OwnDisplay, joining: Option<Declared>) -> (u32, u32) {
+    if own.width != 0 && own.height != 0 {
+        return (own.width, own.height);
+    }
+    let Some(joining) = joining else {
+        return current;
+    };
+    let (width, height) = joining.size.filter(|_| joining.owner).unwrap_or(current);
+    match joining.limit {
+        Some((max_width, max_height)) => (width.min(max_width), height.min(max_height)),
+        None => (width, height),
+    }
 }
 
 /// The part of a video configuration that changes while the stream runs.
@@ -1324,6 +1412,9 @@ impl Stream {
                 min_mbps: config.min_mbps,
                 full_fps: config.full_fps,
             }),
+            asked_fps: AtomicU32::new(config.fps),
+            own_asked: AtomicU32::new(0),
+            own_display: std::sync::Mutex::new(config.own_display),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -1436,7 +1527,27 @@ impl Stream {
         };
         *held = video;
         drop(held);
+        self.shared.asked_fps.store(video.fps, Ordering::Relaxed);
         self.shared.video_asked.fetch_add(1, Ordering::Release);
+    }
+
+    /// Ask the host's own display for a size and a refresh, zero letting the
+    /// host decide (docs/06-api.md section 14): put within a second while
+    /// nobody is seated, by a rebuild while it is being captured, and at the
+    /// next build while another output is.
+    pub fn set_own_display(&self, own: OwnDisplay) {
+        let Ok(mut held) = self.shared.own_display.lock() else {
+            return;
+        };
+        *held = own;
+        drop(held);
+        self.shared.own_asked.fetch_add(1, Ordering::Release);
+    }
+
+    /// What the host's own display is asked to be: the request, which the
+    /// display's own size is not.
+    pub fn own_display(&self) -> OwnDisplay {
+        self.shared.own_display()
     }
 
     /// What the stream is running at now.
@@ -1539,7 +1650,12 @@ impl Seats {
     /// Called by the guest's thread once it is streamable, never before: a
     /// seat taken by a guest that has not declared itself is a share of the
     /// bitrate budget spent on a peer that may never decode anything.
-    pub fn take(&self, wake: WakeHandle, audio_wake: WakeHandle) -> Option<SeatHold> {
+    pub fn take(
+        &self,
+        wake: WakeHandle,
+        audio_wake: WakeHandle,
+        declared: Declared,
+    ) -> Option<SeatHold> {
         let joins = self.joins.as_ref()?;
         for (index, seat) in self.shared.seats.iter().enumerate() {
             if seat
@@ -1571,7 +1687,14 @@ impl Seats {
                 if let Ok(mut held) = seat.audio_wake.lock() {
                     *held = Some(audio_wake);
                 }
-                if joins.send(Join { seat: index, wake }).is_err() {
+                if joins
+                    .send(Join {
+                        seat: index,
+                        wake,
+                        declared,
+                    })
+                    .is_err()
+                {
                     if let Ok(mut held) = seat.audio_wake.lock() {
                         *held = None;
                     }
@@ -1933,6 +2056,9 @@ struct Roster {
     active: Vec<Active>,
     guests: Vec<gate::Guest>,
     controllers: Vec<Controller>,
+    /// Joins received ahead of a build and not yet admitted
+    /// ([`receive_joins`]).
+    pending: Vec<Join>,
     /// **The delivery gate is the session's, not the encoder's.** It carries
     /// the largest frame the session has produced, and a latched guest is
     /// retested against that rather than against the frame in hand. Rebuilt
@@ -1973,6 +2099,10 @@ fn run(
     // When the device first refused an encoder in the current run of
     // refusals, so a refusal that persists can be told from one that passes.
     let mut refused_since: Option<lowlat_common::clock::Time> = None;
+    // **The host's own display lives with this thread**, which is the host's:
+    // plugged before anybody connects where the configuration wants it, and
+    // gone when the host ends (docs/impl-plan-windows.md W3).
+    let mut own = sys::Own::default();
     loop {
         // Waiting rather than holding hardware. A host advertises itself long
         // before anyone connects, and an encoder open across that whole time
@@ -1997,6 +2127,11 @@ fn run(
             if shared.stopping.load(Ordering::Acquire) != 0 {
                 return;
             }
+            // **Taken while nobody is seated too**, so an output named while
+            // the room is empty -- the host's own display among them -- is
+            // the one the room's first guest finds.
+            take_output(shared, asked, &mut config, &mut previous_output);
+            own.idle(shared, &config);
             std::thread::sleep(IDLE_WAIT);
         }
 
@@ -2005,21 +2140,14 @@ fn run(
         reconcile_sound(shared, 1, &config);
 
         // Drained here, where the configuration is owned.
-        if let Some(id) = requested(asked) {
-            previous_output = Some(config.output.take());
-            // **A different device is owed the question afresh.** What the
-            // last one refused says nothing about this one, and a mask carried
-            // across the move would deny a preference on hardware that has it.
-            shared.refused.store(0, Ordering::Relaxed);
-            config.output = id;
-            lowlat_common::log_info!(
-                "stream: capturing {}",
-                config
-                    .output
-                    .as_deref()
-                    .unwrap_or("the first output that is lit")
-            );
-        }
+        take_output(shared, asked, &mut config, &mut previous_output);
+
+        // **The display is readied before anything is built on it**: the
+        // host's own display plugged where it is wanted, held at its mode,
+        // and put at the size a guest arriving into an empty room states, so
+        // that guest's first picture is already at it.
+        let joining = receive_joins(shared, arrivals, &mut roster);
+        own.prepare(shared, &config, joining);
 
         // **What this run will produce, published before it produces it.** A
         // status read from the configuration says what was asked for; a guest
@@ -2170,6 +2298,67 @@ fn run(
             }
         }
     }
+}
+
+/// Take the output last asked for into the configuration, remembering the one
+/// it replaces in case the new one cannot be served.
+fn take_output(
+    shared: &Shared,
+    asked: &mpsc::Receiver<Option<String>>,
+    config: &mut Config,
+    previous_output: &mut Option<Option<String>>,
+) {
+    let Some(id) = requested(asked) else {
+        return;
+    };
+    *previous_output = Some(config.output.take());
+    // **A different device is owed the question afresh.** What the last one
+    // refused says nothing about this one, and a mask carried across the move
+    // would deny a preference on hardware that has it.
+    shared.refused.store(0, Ordering::Relaxed);
+    config.output = id;
+    lowlat_common::log_info!(
+        "stream: capturing {}",
+        config
+            .output
+            .as_deref()
+            .unwrap_or("the first output that is lit")
+    );
+}
+
+/// How long a build waits for the join of a seat already claimed: it is sent
+/// with the claim, so this bounds a guest that went away in between.
+const JOIN_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Receive, ahead of the build, the joins of every seat claimed and not yet
+/// admitted; and when they arrive into an empty room, answer what the first
+/// of them declared -- an owner's first -- which is what the host's own
+/// display is readied with. The joins wait in the roster to be admitted.
+fn receive_joins(
+    shared: &Shared,
+    arrivals: &mpsc::Receiver<Join>,
+    roster: &mut Roster,
+) -> Option<Declared> {
+    let claimed = shared
+        .seats
+        .iter()
+        .filter(|seat| seat.state.load(Ordering::Acquire) == seat_state::CLAIMED)
+        .count();
+    while roster.pending.len() < claimed {
+        match arrivals.recv_timeout(JOIN_WAIT) {
+            Ok(join) => roster.pending.push(join),
+            Err(_) => break,
+        }
+    }
+    if !roster.active.is_empty() {
+        return None;
+    }
+    roster
+        .pending
+        .iter()
+        .map(|join| join.declared)
+        .find(|declared| declared.owner && declared.size.is_some())
+        .or_else(|| roster.pending.first().map(|join| join.declared))
 }
 
 /// Publish what the loop codes: the codec in the low byte as the boundary
@@ -2807,6 +2996,97 @@ pub fn paced(asked: u32, refresh_hz: u32) -> u32 {
 const DEFAULT_FPS: u32 = 60;
 
 #[cfg(test)]
+mod own_tests {
+    use super::{DEFAULT_FPS, Declared, OwnDisplay, own_refresh, own_size};
+
+    /// **The refresh asked of the display, else the stream's ceiling, else
+    /// sixty**: a display composing faster than the stream takes pictures
+    /// composes pictures nobody is sent.
+    #[test]
+    fn the_refresh_is_the_one_asked_else_the_ceiling_else_sixty() {
+        let none = OwnDisplay::default();
+        assert_eq!(own_refresh(0, none), DEFAULT_FPS);
+        assert_eq!(own_refresh(144, none), 144);
+        let asked = OwnDisplay {
+            refresh_hz: 90,
+            ..none
+        };
+        assert_eq!(
+            own_refresh(144, asked),
+            90,
+            "the display's own request lost"
+        );
+        assert_eq!(own_refresh(0, asked), 90);
+    }
+
+    /// **The size asked of the display wins; else an owner's, into an empty
+    /// room; else the size it has -- within the largest picture that guest
+    /// accepts.**
+    #[test]
+    fn the_size_is_asked_else_an_owners_else_kept_within_the_guests_limit() {
+        let none = OwnDisplay::default();
+        let current = (1920, 1080);
+        let owner = Declared {
+            owner: true,
+            size: Some((3420, 2148)),
+            limit: None,
+        };
+        assert_eq!(
+            own_size(current, none, None),
+            current,
+            "nobody arriving moved it"
+        );
+        assert_eq!(own_size(current, none, Some(owner)), (3420, 2148));
+        assert_eq!(
+            own_size(
+                current,
+                none,
+                Some(Declared {
+                    owner: false,
+                    ..owner
+                })
+            ),
+            current,
+            "the owner's machine was resized for a guest it let in"
+        );
+        assert_eq!(
+            own_size(
+                current,
+                none,
+                Some(Declared {
+                    limit: Some((2560, 1440)),
+                    ..owner
+                })
+            ),
+            (2560, 1440),
+            "a size past the guest's largest picture was not brought within it"
+        );
+        assert_eq!(
+            own_size(
+                (3840, 2160),
+                none,
+                Some(Declared {
+                    owner: false,
+                    size: None,
+                    limit: Some((1920, 1080)),
+                })
+            ),
+            (1920, 1080),
+            "the size kept was not brought within the arriving guest's limit"
+        );
+        let asked = OwnDisplay {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 0,
+        };
+        assert_eq!(own_size(current, asked, Some(owner)), (2560, 1440));
+        // A half-asked size is no request: both or neither.
+        let half = OwnDisplay { height: 0, ..asked };
+        assert_eq!(own_size(current, half, None), current);
+    }
+}
+
+#[cfg(test)]
 mod pace_tests {
     use super::{DEFAULT_FPS, paced};
 
@@ -3133,6 +3413,7 @@ fn encode_loop<E: Encoder + FromDevice>(
         active,
         guests,
         controllers,
+        pending,
         gate,
     } = roster;
     let mut samples: Vec<Sample> = Vec::with_capacity(MAX_SEATS);
@@ -3160,6 +3441,11 @@ fn encode_loop<E: Encoder + FromDevice>(
         .lock()
         .map_or_else(|held| *held.into_inner(), |held| *held);
     let mut video_seen = shared.video_asked.load(Ordering::Acquire);
+    // What the host's own display was asked when this run began: a change is
+    // its rebuild, below.
+    let mut own_seen = shared.own_asked.load(Ordering::Acquire);
+    let mut asked_seen = shared.asked_fps();
+    let own_refresh_seen = own_refresh(asked_seen, shared.own_display());
     let mut interval_ms = 1000.0 / f64::from(live.fps.max(1));
     let mut next_frame_ms = 0.0f64;
     let mut previous_submit: Option<lowlat_common::clock::Time> = None;
@@ -3222,7 +3508,15 @@ fn encode_loop<E: Encoder + FromDevice>(
             return Exit::Stopped;
         }
 
-        let moved = admit_and_retire(shared, arrivals, &config, active, guests, controllers);
+        let moved = admit_and_retire(
+            shared,
+            arrivals,
+            &config,
+            active,
+            guests,
+            controllers,
+            pending,
+        );
         if moved {
             rebind(&mut budget, active.len(), guests, controllers);
         }
@@ -3590,8 +3884,24 @@ fn encode_loop<E: Encoder + FromDevice>(
             // picture in a corner of a stale frame, which is what a peer sees
             // until it is told otherwise.
             if display.as_deref_mut().is_some_and(Display::take_resize) {
-                return Exit::Rediscover("the display changed size");
+                return Exit::Rediscover("the display changed its mode");
             }
+            // **The host's own display is put at a new mode by a rebuild**,
+            // whose preparation puts it before anything is built on it: a
+            // size or a refresh asked of it, or a frame rate its refresh
+            // follows. Compared only when a counter moved, so an unchanged
+            // stream pays two loads a pass.
+            let own_moved = shared.own_asked.load(Ordering::Acquire) != own_seen;
+            if (own_moved || shared.asked_fps() != asked_seen)
+                && display.as_deref().and_then(Display::selected) == Some(crate::display::VIRTUAL)
+            {
+                let wanted = own_refresh(shared.asked_fps(), shared.own_display());
+                if own_moved || wanted != own_refresh_seen {
+                    return Exit::Rediscover("the host's own display was asked for another mode");
+                }
+            }
+            own_seen = shared.own_asked.load(Ordering::Acquire);
+            asked_seen = shared.asked_fps();
             // **The same rebuild, for the same reason.** A picture from another
             // output is no more absorbable than one of another size: the
             // encoder and the conversion target are built around the one that
@@ -4101,10 +4411,15 @@ fn admit_and_retire(
     active: &mut Vec<Active>,
     guests: &mut Vec<gate::Guest>,
     controllers: &mut Vec<Controller>,
+    pending: &mut Vec<Join>,
 ) -> bool {
     let mut moved = false;
 
-    while let Ok(join) = arrivals.try_recv() {
+    // **Those received ahead of the build first**, then whoever arrived since.
+    let arrived = pending
+        .drain(..)
+        .chain(core::iter::from_fn(|| arrivals.try_recv().ok()));
+    for join in arrived {
         let Some(seat) = shared.seats.get(join.seat) else {
             continue;
         };
@@ -4479,6 +4794,8 @@ mod tests {
             allow_raw_audio: false,
             output: None,
             display: false,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width: 320,
             height: 240,
             fps: 60,
@@ -4618,6 +4935,8 @@ mod tests {
                 allow_raw_audio: false,
                 output: None,
                 display: false,
+                virtual_fallback: false,
+                own_display: OwnDisplay::default(),
                 width: 320,
                 height: 240,
                 fps: 240,
@@ -4658,6 +4977,9 @@ mod tests {
                 raise: None,
                 video_asked: AtomicU32::new(0),
                 video: std::sync::Mutex::new(LiveVideo::default()),
+                asked_fps: AtomicU32::new(0),
+                own_asked: AtomicU32::new(0),
+                own_display: std::sync::Mutex::new(OwnDisplay::default()),
                 epoch: AtomicU32::new(0),
                 colour: AtomicU32::new(0),
                 ten_bit: AtomicU32::new(0),
@@ -4700,6 +5022,7 @@ mod tests {
                 .take(
                     wake.handle().expect("handle"),
                     wake.handle().expect("a second handle"),
+                    Declared::default(),
                 )
                 .expect("a free seat")
         }
@@ -4735,6 +5058,9 @@ mod tests {
             raise: None,
             video_asked: AtomicU32::new(0),
             video: std::sync::Mutex::new(LiveVideo::default()),
+            asked_fps: AtomicU32::new(0),
+            own_asked: AtomicU32::new(0),
+            own_display: std::sync::Mutex::new(OwnDisplay::default()),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -4749,6 +5075,93 @@ mod tests {
             thread: None,
         };
         (shared, stream, arrivals)
+    }
+
+    /// **What a guest declared reaches the build before anything is built**,
+    /// and only an arrival into an empty room is answered: the host's own
+    /// display is put at an owner's size before the first picture, never
+    /// resized for a guest joining a room already watching.
+    #[test]
+    fn a_declaration_travels_with_the_seat_to_the_build() {
+        let (shared, stream, arrivals) = parked();
+        let guest = Declared {
+            owner: false,
+            size: Some((1920, 1080)),
+            limit: None,
+        };
+        let owner = Declared {
+            owner: true,
+            size: Some((3420, 2148)),
+            limit: None,
+        };
+        let _guest = stream
+            .seats()
+            .take(wake_handle(), wake_handle(), guest)
+            .expect("a free seat");
+        let _owner = stream
+            .seats()
+            .take(wake_handle(), wake_handle(), owner)
+            .expect("a free seat");
+        let mut roster = Roster::default();
+        assert_eq!(
+            receive_joins(&shared, &arrivals, &mut roster),
+            Some(owner),
+            "an owner arriving with another guest did not size the display"
+        );
+        assert_eq!(
+            roster.pending.len(),
+            2,
+            "the joins were not kept to be admitted"
+        );
+
+        // Admitted from the roster, not lost by being received early.
+        let config = test_config(Codec::H264);
+        let (mut active, mut guests, mut controllers) = (Vec::new(), Vec::new(), Vec::new());
+        assert!(admit_and_retire(
+            &shared,
+            &arrivals,
+            &config,
+            &mut active,
+            &mut guests,
+            &mut controllers,
+            &mut roster.pending,
+        ));
+        assert_eq!(
+            active.len(),
+            2,
+            "a join received ahead of the build was never admitted"
+        );
+        assert!(roster.pending.is_empty());
+
+        // **A room already watching answers nothing**, whoever arrives.
+        roster.active = active;
+        let _second = stream
+            .seats()
+            .take(wake_handle(), wake_handle(), owner)
+            .expect("a second seat");
+        assert_eq!(receive_joins(&shared, &arrivals, &mut roster), None);
+        assert_eq!(roster.pending.len(), 1);
+    }
+
+    /// **The frame rate asked for outlives the pace a display allowed.** A
+    /// rebuild settles again from what was asked; settled from the live figure
+    /// instead, a guest that asked 144 of a display then at 120 would be held
+    /// at 120 after the display came back faster.
+    #[test]
+    fn the_rate_asked_for_is_kept_apart_from_the_pace_settled() {
+        let (shared, stream, _arrivals) = parked();
+        stream.set_video(LiveVideo {
+            fps: 144,
+            ..LiveVideo::default()
+        });
+        assert_eq!(settle_pace(&shared, shared.asked_fps(), 120), 120);
+        assert_eq!(stream.video().fps, 120, "the live figure is the pace");
+        assert_eq!(
+            shared.asked_fps(),
+            144,
+            "the request was overwritten by a pace"
+        );
+        assert_eq!(settle_pace(&shared, shared.asked_fps(), 144), 144);
     }
 
     /// **The order preferences come off, and that it bottoms out.**
@@ -4809,6 +5222,8 @@ mod tests {
             allow_raw_audio: false,
             output: None,
             display: false,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width: 320,
             height: 240,
             fps: 240,
@@ -4850,6 +5265,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
         let active = [seat_of(0)];
@@ -5071,6 +5487,9 @@ mod tests {
             raise: None,
             video_asked: AtomicU32::new(0),
             video: std::sync::Mutex::new(LiveVideo::default()),
+            asked_fps: AtomicU32::new(0),
+            own_asked: AtomicU32::new(0),
+            own_display: std::sync::Mutex::new(OwnDisplay::default()),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -5208,6 +5627,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
 
@@ -5234,6 +5654,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
 
@@ -5327,7 +5748,7 @@ mod tests {
         let (_shared, stream, _arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let mut settings = stream.audio();
         for accept in [true, false, true] {
@@ -5347,7 +5768,7 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         held.declare(lowlat_core::init::FLAG_FULL_RANGE | lowlat_core::init::FLAG_HEVC);
         held.request_reconfigure();
@@ -5359,7 +5780,7 @@ mod tests {
             .store(seat_state::FREE, Ordering::Release);
         let next = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         assert_eq!(
             shared.seats[0].flags.load(Ordering::Relaxed),
@@ -5422,11 +5843,11 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let compressed = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let uncompressed = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         streaming(&shared, 0);
         streaming(&shared, 1);
@@ -5466,7 +5887,7 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let hold = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         streaming(&shared, 0);
         hold.declare_audio(true);
@@ -5493,7 +5914,7 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let hold = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         streaming(&shared, 0);
         hold.declare_audio(true);
@@ -5517,7 +5938,7 @@ mod tests {
         assert_eq!(shared.audio_wanted(), (false, false));
         let hold = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         // A seat that is claimed but not yet admitted is not listening either.
         assert_eq!(shared.audio_wanted(), (false, false));
@@ -5543,7 +5964,7 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let hold = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         hold.declare(lowlat_core::init::FLAG_FULL_RANGE);
         shared.set_sound(true, false, 128);
@@ -5785,11 +6206,11 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let behind = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let listening = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         streaming(&shared, 0);
         streaming(&shared, 1);
@@ -5832,11 +6253,11 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let first = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let second = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         first.declare(lowlat_core::init::FLAG_FULL_RANGE);
         second.declare(lowlat_core::init::FLAG_FULL_RANGE);
@@ -5890,7 +6311,7 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         held.declare(lowlat_core::init::FLAG_FULL_RANGE);
 
@@ -6024,7 +6445,7 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         held.declare(lowlat_core::init::FLAG_FULL_RANGE | lowlat_core::init::FLAG_HEVC);
         held.request_reconfigure();
@@ -6104,7 +6525,7 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         held.declare(lowlat_core::init::FLAG_FULL_RANGE | lowlat_core::init::FLAG_HEVC);
 
@@ -6179,7 +6600,7 @@ mod tests {
         let (shared, stream, arrivals) = parked();
         let held = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         held.declare(lowlat_core::init::FLAG_FULL_RANGE);
 
@@ -6241,7 +6662,7 @@ mod tests {
             let (shared, stream, arrivals) = parked();
             let held = stream
                 .seats()
-                .take(wake_handle(), wake_handle())
+                .take(wake_handle(), wake_handle(), Declared::default())
                 .expect("a seat");
             held.declare(lowlat_core::init::FLAG_FULL_RANGE);
 
@@ -6274,11 +6695,11 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let first = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let second = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let active = [seat_of(0), seat_of(1)];
 
@@ -6299,11 +6720,11 @@ mod tests {
         let (shared, stream, _arrivals) = parked();
         let asker = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let watcher = stream
             .seats()
-            .take(wake_handle(), wake_handle())
+            .take(wake_handle(), wake_handle(), Declared::default())
             .expect("a seat");
         let active = [seat_of(0), seat_of(1)];
 
@@ -6570,6 +6991,8 @@ mod tests {
             allow_raw_audio: false,
             output: None,
             display: false,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width: 1920,
             height: 1080,
             fps: 60,
@@ -6587,6 +7010,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
 
@@ -6672,6 +7096,8 @@ mod tests {
             allow_raw_audio: false,
             output,
             display,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width,
             height,
             fps: 60,
@@ -6696,6 +7122,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
 
@@ -6755,6 +7182,7 @@ mod tests {
                 .take(
                     wake.handle().expect("handle"),
                     wake.handle().expect("a second handle"),
+                    Declared::default(),
                 )
                 .expect("a free seat");
             let mut received = 0usize;
@@ -6800,6 +7228,7 @@ mod tests {
                 .take(
                     wake.handle().expect("handle"),
                     wake.handle().expect("a second handle"),
+                    Declared::default(),
                 )
                 .expect("a free seat");
             until_within(30_000.0, "the squeezed window to report", || {
@@ -6850,6 +7279,8 @@ mod tests {
             allow_raw_audio: false,
             output: None,
             display: false,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width: 1920,
             height: 1080,
             fps: 60,
@@ -6880,6 +7311,8 @@ mod tests {
             allow_raw_audio: false,
             output: None,
             display: false,
+            virtual_fallback: false,
+            own_display: OwnDisplay::default(),
             width: 1920,
             height: 1080,
             fps,
@@ -6897,6 +7330,7 @@ mod tests {
             .take(
                 wake.handle().expect("handle"),
                 wake.handle().expect("a second handle"),
+                Declared::default(),
             )
             .expect("a free seat");
 

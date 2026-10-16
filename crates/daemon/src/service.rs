@@ -435,6 +435,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // **The host's own display exists on Windows alone**, and a stream asked
+    // for an output that never lights waits for ever rather than failing.
+    if cfg!(not(windows))
+        && flag("--output")
+            .is_some_and(|output| output.eq_ignore_ascii_case(lowlat_host::display::VIRTUAL))
+    {
+        return Err("--output virtual names the host's own display, which only Windows has".into());
+    }
+
     // **Whether this process can reach the display, answered before anything
     // is advertised.** A display that is lit but out of reach is the
     // privilege, and a host that finds that out from its first guest has
@@ -698,6 +707,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // than generating pictures in its place, because a stream of the
             // wrong thing is worse than none.
             display: !flag_set("--synth"),
+            // **On, where the library's default is off.** A service is what
+            // a machine with no monitor is remote-controlled through, and a
+            // display of the host's own is what such a machine needs before
+            // anybody connects. Only Windows has one.
+            virtual_fallback: !flag_set("--no-virtual-fallback"),
+            own_display: lowlat_host::stream::OwnDisplay::default(),
         }),
     });
 
@@ -817,9 +832,10 @@ async fn session_loop(
     reject_all: bool,
     settings: &app::Settings,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    // What was being captured the last time every guest was told. Zero until a
-    // display has been opened, which is also what a host with no stream has.
-    let mut captured: u32 = 0;
+    // What was being captured, and at what rate, the last time every guest was
+    // told. Zero until a display has been opened, which is also what a host
+    // with no stream has.
+    let mut announced: (u32, u32) = (0, 0);
     // Resent on every connection, not just the first: the service takes it as
     // the frame that registers the session, so a reconnect without it is a
     // connection the service has not associated with this host.
@@ -993,7 +1009,7 @@ async fn session_loop(
         // output and a display moving to another card both change what is
         // being captured, and only the loop that rebuilt knows which happened;
         // this notices either, once it has actually landed.
-        captured = app::announce_capture(seam, settings, captured);
+        announced = app::announce_capture(seam, settings, announced);
 
         // **Repeated, because what it carries moves.** The room's membership
         // changes on an event and the roster is sent then; the telemetry inside

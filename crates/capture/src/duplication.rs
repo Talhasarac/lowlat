@@ -30,6 +30,8 @@ use windows_sys::Win32::Devices::Display::{
     QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
 };
 use windows_sys::Win32::Foundation::GENERIC_ALL;
+use windows_sys::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICEW, EnumDisplayDevicesW};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Power::{
     ES_CONTINUOUS, ES_DISPLAY_REQUIRED, SetThreadExecutionState,
@@ -542,6 +544,51 @@ pub fn refresh_of(name: &str) -> Option<(u32, u32)> {
         .into_iter()
         .find(|output| output.name == name)
         .and_then(|output| (output.refresh.1 != 0).then_some(output.refresh))
+}
+
+/// How many times a second the desktop is composed, as a ratio: the
+/// compositor's one clock, which every output's pictures are made on.
+///
+/// **An output's mode can overstate it.** With another display the primary,
+/// an output is composed at the primary's rate whatever its own mode says --
+/// a virtual display at 144 or 240 was handed 120 pictures a second under a
+/// 120 Hz primary, measured -- so the rate an output presents at is the lower
+/// of this and its mode. Nothing where the compositor will not say.
+pub fn composed_rate() -> Option<(u32, u32)> {
+    let mut info = DWM_TIMING_INFO {
+        cbSize: u32::try_from(size_of::<DWM_TIMING_INFO>()).unwrap_or(0),
+        ..Default::default()
+    };
+    // SAFETY: a live structure with its size stamped; no window asks for the
+    // desktop's own timing, the one form the call takes.
+    if unsafe { DwmGetCompositionTimingInfo(core::ptr::null_mut(), &raw mut info) } < 0 {
+        return None;
+    }
+    // Copied out whole: the structure is packed, so its fields are read by
+    // value and never borrowed.
+    let rate = info.rateRefresh;
+    let (numerator, denominator) = (rate.uiNumerator, rate.uiDenominator);
+    (numerator != 0 && denominator != 0).then_some((numerator, denominator))
+}
+
+/// Whether the system lists a monitor behind the output named `name`.
+///
+/// **An output can stay on the desktop with nothing behind it.** The last
+/// monitor's cable pulled leaves its output active and part of the desktop,
+/// composed for nobody, and nothing marks the change; the monitor leaves only
+/// the list of monitors under the output, which is what this reads. A virtual
+/// display lists its monitor the way a panel does.
+pub fn monitored(name: &str) -> bool {
+    let source: Vec<u16> = format!(r"\\.\{name}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut monitor = DISPLAY_DEVICEW {
+        cb: u32::try_from(size_of::<DISPLAY_DEVICEW>()).unwrap_or(0),
+        ..Default::default()
+    };
+    // SAFETY: a terminated name and a live structure with its size stamped.
+    unsafe { EnumDisplayDevicesW(source.as_ptr(), 0, &raw mut monitor, 0) != 0 }
 }
 
 /// A name the system wrote, up to its terminator.

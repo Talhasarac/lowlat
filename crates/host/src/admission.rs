@@ -1484,6 +1484,21 @@ impl Admission {
         }
     }
 
+    /// Ask the host's own display for a size and a refresh, zero letting the
+    /// host decide.
+    pub fn set_own_display(&self, own: crate::stream::OwnDisplay) {
+        if let Some(stream) = self.stream.as_ref() {
+            stream.set_own_display(own);
+        }
+    }
+
+    /// What the host's own display is asked to be.
+    pub fn own_display(&self) -> crate::stream::OwnDisplay {
+        self.stream
+            .as_ref()
+            .map_or_else(Default::default, crate::stream::Stream::own_display)
+    }
+
     /// Change what sound is set to, while a host runs.
     pub fn set_audio(&self, settings: &crate::stream::SoundSettings) {
         if let Some(stream) = self.stream.as_ref() {
@@ -2797,7 +2812,24 @@ fn drive<M: Media>(
             // the other's. Both point at this loop's own wake.
             && let Ok(for_sound) = shell.wake_handle()
         {
-            seat = seats.take(handle, for_sound);
+            // **What it said of the picture travels with the seat**, so the
+            // host's own display can be put at an owner's size before the
+            // first picture is built.
+            let declared = negotiation
+                .as_ref()
+                .and_then(Negotiation::asked)
+                .map_or_else(crate::stream::Declared::default, |asked| {
+                    crate::stream::Declared {
+                        owner: args.owner,
+                        size: asked
+                            .has_preferred_size()
+                            .then_some((asked.resolution_x, asked.resolution_y)),
+                        limit: asked
+                            .has_size_limit()
+                            .then_some((asked.max_width, asked.max_height)),
+                    }
+                });
+            seat = seats.take(handle, for_sound, declared);
             if let (Some(seat), Some(asked)) = (
                 seat.as_ref(),
                 negotiation.as_ref().and_then(Negotiation::asked),

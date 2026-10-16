@@ -32,6 +32,9 @@ libc.workspace = true
 # types from the device seam the encoder is bound through. Already in the
 # graph under both; a direct edge, not a new dependency.
 lowlat-drivers.workspace = true
+# The host's own display: plugged, held at its mode and bound to the host
+# through the display driver's controller, which is this workspace's.
+lowlat-vdd-ctl.workspace = true
 
 [dev-dependencies]
 # The allocation counter behind the per-report path's assertion.

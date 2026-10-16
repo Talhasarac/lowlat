@@ -31,7 +31,7 @@ use lowlat_drivers::ffi::d3d11::{
     IDXGIOutput,
 };
 
-use super::{Acquired, Capturable, Selectable};
+use super::{Acquired, Capturable, Selectable, VIRTUAL};
 use crate::timing::Stage;
 
 /// How long after a refusal the duplication is asked for again, while the
@@ -47,6 +47,9 @@ const PERIOD_MS: f64 = 1000.0 / 60.0;
 /// Pictures converted between one report of where the time went and the
 /// next: ten seconds at sixty frames.
 const REPORT_EVERY: u32 = 600;
+
+/// How often the compositor's clock is asked again while a display runs.
+const CLOCK_CHECK_MS: f64 = 1000.0;
 
 /// The pointer's state must hold for longer than this, with a change pending,
 /// before it is said, and is said once (docs/05-host.md section 8.3).
@@ -106,12 +109,30 @@ fn named(wanted: &str, name: &str) -> bool {
 }
 
 /// Every output the system lists, read per-monitor aware so the rectangles
-/// are physical pixels whatever the calling thread was.
+/// are physical pixels whatever the calling thread was, each lit only with a
+/// monitor behind it ([`lit`]).
 fn listed() -> Vec<Output> {
     let _aware = Aware::per_monitor();
-    D3d11::load()
-        .and_then(|d3d11| d3d11.outputs())
-        .unwrap_or_default()
+    lit(
+        D3d11::load()
+            .and_then(|d3d11| d3d11.outputs())
+            .unwrap_or_default(),
+        duplication::monitored,
+    )
+}
+
+/// The outputs as lit: part of the desktop **and** a monitor behind them.
+///
+/// **The last monitor's cable pulled leaves its output on the desktop**,
+/// active and composed for nobody, and no event marks it; so an output whose
+/// monitor has left counts as dark here, where every rule that asks whether
+/// something is lit reads it -- what can be captured, what is listed, which
+/// output a request lands on, and whether the host's own display is wanted.
+fn lit(mut outputs: Vec<Output>, monitored: impl Fn(&str) -> bool) -> Vec<Output> {
+    for output in &mut outputs {
+        output.attached = output.attached && monitored(&output.name);
+    }
+    outputs
 }
 
 /// The size of the picture an output's duplication hands over: the panel's,
@@ -171,9 +192,14 @@ fn primary(listed: &[Output]) -> Option<&Output> {
 
 /// The output a request names, or with none the primary; only one that is
 /// part of the desktop. **A name the system renumbered is followed** to the
-/// output now showing the monitor it named ([`renamed`]).
+/// output now showing the monitor it named ([`renamed`]), and [`VIRTUAL`] is
+/// whichever output the host's own display has now.
 fn chosen<'a>(listed: &'a [Output], wanted: Option<&str>) -> Option<&'a Output> {
     match wanted {
+        Some(wanted) if wanted.eq_ignore_ascii_case(VIRTUAL) => {
+            let own = own()?;
+            listed.iter().find(|o| o.attached && named(&own, &o.name))
+        }
         Some(wanted) => listed
             .iter()
             .find(|o| o.attached && named(wanted, &o.name))
@@ -235,18 +261,82 @@ fn follow(held: &[(String, String)], shown: &[duplication::Shown], wanted: &str)
         .map(|output| output.name.clone())
 }
 
-/// Presents a second, rounded to the nearest as a mode's rate is, or zero
-/// where the system will not say.
+/// The host's own display, while one is plugged: the system's name for its
+/// output now, which a driver restart or a replug renews.
+static OWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Say which output is the host's own display, or that none is: `DISPLAYn`,
+/// the `\\.\` prefix optional.
+pub(crate) fn publish_own(name: Option<&str>) {
+    let bare = name.map(|name| name.strip_prefix(r"\\.\").unwrap_or(name).to_string());
+    *OWN.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = bare;
+}
+
+/// The output the host's own display has now, if one is plugged.
+fn own() -> Option<String> {
+    OWN.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// What an output is asked for by: [`VIRTUAL`] for the host's own display,
+/// else the system's own name.
+fn id_of(name: &str) -> String {
+    if own().is_some_and(|own| own.eq_ignore_ascii_case(name)) {
+        VIRTUAL.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// A rate the system gave as a ratio, rounded to the nearest as a mode's is.
+fn rounded((numerator, denominator): (u32, u32)) -> u32 {
+    (numerator + denominator / 2) / denominator.max(1)
+}
+
+/// Presents a second, rounded to the nearest, or zero where the system will
+/// not say: **the lower of the output's mode and the compositor's clock**,
+/// since an output is composed on the compositor's one clock whatever its
+/// mode says ([`duplication::composed_rate`]).
 fn hz_of(name: &str) -> u32 {
-    duplication::refresh_of(name).map_or(0, |(numerator, denominator)| {
-        (numerator + denominator / 2) / denominator.max(1)
-    })
+    rate_for(duplication::refresh_of(name).unwrap_or((0, 0)))
+}
+
+/// The rate an output whose mode presents at `refresh` presents at: the
+/// lower of that and the compositor's clock, zero where neither is known.
+fn rate_for(refresh: (u32, u32)) -> u32 {
+    let mode = if refresh.1 == 0 { 0 } else { rounded(refresh) };
+    let clock = duplication::composed_rate().map_or(0, rounded);
+    match (mode, clock) {
+        (0, clock) => clock,
+        (mode, 0) => mode,
+        (mode, clock) => mode.min(clock),
+    }
 }
 
 /// One refresh in milliseconds, from a rate the system gave as a ratio.
 fn period_of((numerator, denominator): (u32, u32)) -> Option<f64> {
     (numerator > 0 && denominator > 0)
         .then(|| 1000.0 * f64::from(denominator) / f64::from(numerator))
+}
+
+/// The refresh the loop places its deadlines on, in milliseconds: **the
+/// compositor's clock, on which every composition lands** -- an output at a
+/// mode slower than the clock is still composed on it, 120 times a second
+/// for a 60 Hz virtual display under a 120 Hz primary, measured -- else the
+/// output's own mode where the compositor will not say.
+fn period_for(refresh: (u32, u32)) -> f64 {
+    duplication::composed_rate()
+        .and_then(period_of)
+        .or_else(|| period_of(refresh))
+        .unwrap_or(PERIOD_MS)
+}
+
+/// Whether two refresh periods differ by more than a rate's rounding: a mode
+/// of 59.94 against 60 is the same rate, 120 against 144 is not.
+fn period_moved(was: f64, now: f64) -> bool {
+    (was - now).abs() > was * 0.01
 }
 
 /// What one look at the duplication found.
@@ -565,10 +655,22 @@ pub struct Display {
     interface: Com<IDXGIOutput>,
     /// The output as it was when the display opened.
     output: Output,
+    /// Whether that output is the host's own display, asked for as
+    /// [`VIRTUAL`].
+    own: bool,
     place: Placement,
     /// The picture size the targets and the encoder were built for.
     size: (u32, u32),
+    /// The refresh the deadlines are placed on ([`period_for`]).
     period_ms: f64,
+    /// The rate the output's mode presents at, as the duplication reported
+    /// it; and the refresh and the rate first found for this display, which
+    /// the stream was paced against -- either one different later is a
+    /// rebuild.
+    mode_refresh: (u32, u32),
+    settled: Option<(f64, u32)>,
+    /// When the compositor's clock was last asked whether it moved.
+    clock_checked: Time,
     /// Pictures converted, which names the next target.
     next: usize,
     /// When the wait for a present past the deadline began.
@@ -612,7 +714,7 @@ impl Display {
             .map(|o| {
                 let (width, height) = picture_of(o);
                 Selectable {
-                    id: o.name.clone(),
+                    id: id_of(&o.name),
                     connector: o.name.clone(),
                     width,
                     height,
@@ -640,7 +742,7 @@ impl Display {
     /// The output this host captures when it is asked for nothing: the one
     /// at the desktop's corner, from the same rule [`Display::open`] follows.
     pub fn preferred() -> Option<String> {
-        primary(&listed()).map(|o| o.name.clone())
+        primary(&listed()).map(|o| id_of(&o.name))
     }
 
     /// The picture the output asked for hands over, and how many times a
@@ -652,11 +754,19 @@ impl Display {
         Some((width, height, hz_of(&output.name)))
     }
 
+    /// Whether a request -- a name, or none for the primary -- lands on the
+    /// host's own display.
+    pub fn captures_own(wanted: Option<&str>) -> bool {
+        let listed = listed();
+        chosen(&listed, wanted).is_some_and(|output| id_of(&output.name) == VIRTUAL)
+    }
+
     /// The output a request names, or the primary, with the adapter that
     /// scans it out: what decides the device everything is built on.
     pub fn locate(wanted: Option<&str>) -> Option<Output> {
         let found = chosen(&listed(), wanted).cloned()?;
         if let Some(wanted) = wanted
+            && !wanted.eq_ignore_ascii_case(VIRTUAL)
             && !named(wanted, &found.name)
         {
             lowlat_common::log_info!(
@@ -701,6 +811,7 @@ impl Display {
             );
             targets.push(target);
         }
+        let own = own().is_some_and(|own| own.eq_ignore_ascii_case(&output.name));
         let mut display = Self {
             duplication: None,
             kept: None,
@@ -711,9 +822,13 @@ impl Display {
             place: place_of(&output, &listed),
             interface,
             output,
+            own,
             d3d11,
             size,
             period_ms: PERIOD_MS,
+            mode_refresh: (0, 0),
+            settled: None,
+            clock_checked: Time::now(),
             next: 0,
             waiting_since: None,
             flight: None,
@@ -795,7 +910,8 @@ impl Display {
         match made {
             Ok(made) => {
                 let mode = made.mode();
-                self.period_ms = period_of(mode.refresh).unwrap_or(PERIOD_MS);
+                self.mode_refresh = mode.refresh;
+                self.repace();
                 // **A picture of another size, or turned another way, is a
                 // rebuild**: the targets and the encoder are built for one,
                 // and the turn is what the place declares.
@@ -839,6 +955,31 @@ impl Display {
         }
     }
 
+    /// Take the refresh the deadlines sit on and the rate the output presents
+    /// at, from its mode and the compositor's clock as they are now. **A rate
+    /// or a refresh other than the one the stream was paced against is a
+    /// rebuild**, as a size is: the pace was settled from the first, and a
+    /// refresh changed alone -- the output's mode, or the clock under it --
+    /// otherwise leaves the stream paced and budgeted for a rate nothing is
+    /// composed at, its deadlines off the compositions.
+    fn repace(&mut self) {
+        let (period_ms, rate) = (period_for(self.mode_refresh), rate_for(self.mode_refresh));
+        match self.settled {
+            None => self.settled = Some((period_ms, rate)),
+            Some((was, was_rate)) if period_moved(was, period_ms) || was_rate != rate => {
+                lowlat_common::log_info!(
+                    "display: {} presents at {rate} composed every {period_ms:.3} ms now, was \
+                     {was_rate} every {was:.3}",
+                    self.output.name
+                );
+                self.settled = Some((period_ms, rate));
+                self.resized = true;
+            }
+            Some(_) => {}
+        }
+        self.period_ms = period_ms;
+    }
+
     /// The duplication answered with a failure: let it go, and with it what
     /// it lent, to be made again as it goes.
     fn lose(&mut self, error: duplication::Error) {
@@ -878,7 +1019,7 @@ impl Display {
 
     /// What is being captured, by the name [`Display::outputs`] gives.
     pub fn selected(&self) -> Option<&str> {
-        Some(&self.output.name)
+        Some(if self.own { VIRTUAL } else { &self.output.name })
     }
 
     /// The registration the last conversion wrote into.
@@ -896,6 +1037,15 @@ impl Display {
     pub fn acquire(&mut self) -> Result<Time, Error> {
         self.waiting_since = None;
         self.flight = None;
+        // **The compositor's clock can move under an unchanged output** --
+        // the primary display set to another rate -- and nothing here is
+        // told, so it is asked again on the slow cadence.
+        if clock::elapsed_ms(self.clock_checked) >= CLOCK_CHECK_MS {
+            self.clock_checked = Time::now();
+            if self.settled.is_some() {
+                self.repace();
+            }
+        }
         self.duplicate()?;
         let kept = match self.kept.take() {
             Some(kept) => kept,
@@ -1031,14 +1181,19 @@ impl Display {
         self.watch.settle.relative()
     }
 
-    /// Whether the output being captured is still part of the desktop, on
-    /// the adapter it was opened on, and the device still there.
+    /// Whether the output being captured is still part of the desktop with a
+    /// monitor behind it ([`lit`]), on the adapter it was opened on, and the
+    /// device still there.
     pub fn attached(&self) -> bool {
         if self.device.lost() {
             return false;
         }
         match self.d3d11.output(&self.output.name) {
-            Ok(Some((_, now))) => now.attached && now.adapter.luid == self.output.adapter.luid,
+            Ok(Some((_, now))) => {
+                now.attached
+                    && now.adapter.luid == self.output.adapter.luid
+                    && duplication::monitored(&now.name)
+            }
             Ok(None) => false,
             // A system that cannot answer is not evidence that the output
             // went, and ending a session on it would be worse.
@@ -1278,6 +1433,86 @@ mod tests {
         assert!(named("display1", "DISPLAY1"));
         assert!(!named("DISPLAY12", "DISPLAY1"));
         assert!(!named("DISPLAY", "DISPLAY1"));
+    }
+
+    /// **The host's own display is asked for as `virtual`**, whatever the
+    /// system numbers its output now, listed under that name and under its
+    /// own number nowhere; and with none plugged, `virtual` names nothing
+    /// rather than falling back to another screen.
+    #[test]
+    fn the_host_display_is_asked_for_as_virtual() {
+        let listed = [
+            output("DISPLAY1", 0, 0, 2560, 1440),
+            output("DISPLAY9", 2560, 0, 1920, 1080),
+        ];
+        publish_own(Some(r"\\.\DISPLAY9"));
+        let found = chosen(&listed, Some("virtual")).map(|o| o.name.as_str());
+        assert_eq!(found, Some("DISPLAY9"));
+        assert_eq!(
+            chosen(&listed, Some("VIRTUAL")).map(|o| o.name.as_str()),
+            Some("DISPLAY9")
+        );
+        assert_eq!(id_of("DISPLAY9"), VIRTUAL);
+        assert_eq!(id_of("DISPLAY1"), "DISPLAY1");
+        publish_own(None);
+        assert!(
+            chosen(&listed, Some("virtual")).is_none(),
+            "virtual fell back to a screen"
+        );
+        assert_eq!(id_of("DISPLAY9"), "DISPLAY9");
+    }
+
+    /// **A refresh moves only past a rate's rounding**: 59.94 against 60 is
+    /// the same rate, 120 against 144 is a rebuild.
+    #[test]
+    fn a_refresh_moves_only_past_rounding() {
+        let sixty = 1000.0 / 60.0;
+        let ntsc = 1000.0 * 1001.0 / 60000.0;
+        assert!(!period_moved(sixty, ntsc));
+        assert!(period_moved(1000.0 / 144.0, 1000.0 / 120.0));
+        assert!(period_moved(1000.0 / 120.0, 1000.0 / 60.0));
+    }
+
+    /// **An output on the desktop with no monitor behind it is dark**, as the
+    /// last monitor's cable pulled leaves one: neither the primary nor
+    /// anything a request can land on, and with it the only output, nothing
+    /// is lit. An output off the desktop is not asked about.
+    #[test]
+    fn an_output_with_no_monitor_behind_it_is_dark() {
+        let mut off = output("DISPLAY3", 4480, 0, 1920, 1080);
+        off.attached = false;
+        let listed = lit(
+            vec![
+                output("DISPLAY1", 0, 0, 2560, 1440),
+                output("DISPLAY2", 2560, 0, 1920, 1080),
+                off,
+            ],
+            |name| {
+                assert_ne!(name, "DISPLAY3", "an output off the desktop was asked");
+                name == "DISPLAY2"
+            },
+        );
+        let shown: Vec<&str> = listed
+            .iter()
+            .filter(|o| o.attached)
+            .map(|o| o.name.as_str())
+            .collect();
+        assert_eq!(shown, ["DISPLAY2"]);
+        assert_eq!(
+            primary(&listed).map(|o| o.name.as_str()),
+            Some("DISPLAY2"),
+            "the primary stayed on an output with nothing behind it"
+        );
+
+        let gone = lit(vec![output("DISPLAY1", 0, 0, 2560, 1440)], |_| false);
+        assert!(
+            primary(&gone).is_none(),
+            "an output with no monitor was lit"
+        );
+        assert!(
+            chosen(&gone, Some("DISPLAY1")).is_none(),
+            "an output with no monitor could be asked for"
+        );
     }
 
     fn output(name: &str, left: i32, top: i32, width: i32, height: i32) -> Output {

@@ -133,6 +133,14 @@ int read()
 	// The renderer converts with each picture's range, so it takes either.
 	const char *range = getenv("LOWLAT_FULL_RANGE");
 	s.video.full_range = range == NULL || strcmp(range, "0") != 0;
+	// A size asked of the host's display, `WxH`, which a host that sizes its
+	// own display takes from an owner arriving into an empty room; none by
+	// default, since it changes the person's monitor.
+	unsigned width = 0, height = 0;
+	if (sscanf(env_or("LOWLAT_RESOLUTION", ""), "%ux%u", &width, &height) == 2) {
+		s.video.resolution_x = width;
+		s.video.resolution_y = height;
+	}
 
 	s.stun = getenv("LOWLAT_STUN");
 	s.raw_audio = getenv("LOWLAT_RAW_AUDIO") != NULL;

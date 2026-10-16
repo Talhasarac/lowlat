@@ -50,7 +50,10 @@ enum Fail {
 mod imp {
     use super::Fail;
 
-    pub(super) fn run(_args: &[String]) -> Result<(), Fail> {
+    pub(super) fn run(args: &[String]) -> Result<(), Fail> {
+        if args.is_empty() {
+            return Err(Fail::Usage);
+        }
         Err(Fail::Refused(
             "the virtual displays are the Windows driver's; there is none here".into(),
         ))

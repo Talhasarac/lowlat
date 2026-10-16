@@ -45,6 +45,10 @@ const THE_SYSTEMS_OWN: Duration = Duration::from_millis(400);
 /// How often a wait looks again.
 const POLL: Duration = Duration::from_millis(20);
 
+/// How long a mode just put is given to show before the system is taken to
+/// have put another back, and it is put again.
+const RESETTLE: Duration = Duration::from_millis(300);
+
 /// Why a call did not do what it asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -219,11 +223,28 @@ impl Controller {
         }
         let save = kept && display::others_active(adapter);
         self.put_mode(&shown.name, mode, save, deadline)?;
-        wait(deadline, || {
-            display::shown(adapter, target).filter(|shown| shown.mode == mode)
-        })
-        .map(|_| ())
-        .ok_or(Error::NotReady)
+        // **Put again while the system takes it back.** A monitor plugged
+        // again is restored to its set's saved arrangement as its arrival
+        // completes, which can come after the mode was put -- a second and
+        // more later while a program presents on it, measured -- and an
+        // unsaved mode does not survive that. So the mode is put again
+        // whenever the system has the monitor at another, until the bound.
+        loop {
+            let settle = (Instant::now() + RESETTLE).min(deadline);
+            if wait(settle, || {
+                display::shown(adapter, target).filter(|shown| shown.mode == mode)
+            })
+            .is_some()
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::NotReady);
+            }
+            if let Some(now) = display::shown(adapter, target) {
+                self.put_mode(&now.name, mode, save, deadline)?;
+            }
+        }
     }
 
     /// Set a mode, again within the bound while the system refuses it: after

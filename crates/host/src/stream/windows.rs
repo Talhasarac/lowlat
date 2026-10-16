@@ -8,13 +8,84 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use lowlat_capture::d3d11::Layout;
+use lowlat_common::clock::{self, Time};
 use lowlat_core::control::status;
+use lowlat_vdd_ctl::Mode;
 
 use super::{
-    Backend, Codec, Config, DISPLAY_WAIT, Exit, FromDevice, Join, Roster, Shared, await_display,
-    encode_loop, settle_pace, start_bps,
+    Backend, Codec, Config, DISPLAY_WAIT, Declared, Exit, FromDevice, Join, Roster, Shared,
+    await_display, encode_loop, own_refresh, own_size, settle_pace, start_bps,
 };
-use crate::display::Display;
+use crate::display::own::FIRST_SIZE;
+use crate::display::{Capturable, Display, VIRTUAL};
+
+/// How often the host's own display is looked at while nobody is seated.
+const OWN_LOOK_MS: f64 = 1000.0;
+
+/// The host's own display, as the stream's thread keeps it
+/// (docs/impl-plan-windows.md W3): plugged when the configuration names it,
+/// or allows it and nothing else is lit; held at its mode; sized for a guest
+/// arriving into an empty room.
+#[derive(Debug, Default)]
+pub(super) struct Own {
+    display: crate::display::own::Own,
+    looked: Option<Time>,
+}
+
+impl Own {
+    /// One pass while nobody is seated: at most once a second, so a machine
+    /// with no monitor has a display before anybody connects and one whose
+    /// mode the system put back is held.
+    pub(super) fn idle(&mut self, shared: &Shared, config: &Config) {
+        if self
+            .looked
+            .is_some_and(|at| clock::elapsed_ms(at) < OWN_LOOK_MS)
+        {
+            return;
+        }
+        self.looked = Some(Time::now());
+        self.reconcile(shared, config, None);
+    }
+
+    /// Before a stream is built: the same, and the size `joining` stated
+    /// when it arrives into an empty room and the stream captures this
+    /// display.
+    pub(super) fn prepare(&mut self, shared: &Shared, config: &Config, joining: Option<Declared>) {
+        self.looked = Some(Time::now());
+        self.reconcile(shared, config, joining);
+    }
+
+    fn reconcile(&mut self, shared: &Shared, config: &Config, joining: Option<Declared>) {
+        let named = config
+            .output
+            .as_deref()
+            .is_some_and(|output| output.eq_ignore_ascii_case(VIRTUAL));
+        let asked = shared.own_display();
+        let refresh = own_refresh(shared.asked_fps(), asked);
+        if !self.display.plugged() {
+            if !named
+                && !(config.virtual_fallback && Display::capturable() == Capturable::NothingLit)
+            {
+                return;
+            }
+            // **Plugged first**, at the size asked of it or the first size,
+            // so the display a guest is about to watch exists to be asked.
+            let (width, height) = own_size(FIRST_SIZE, asked, None);
+            if !self.display.hold(Mode::new(width, height, refresh)) && !self.display.plugged() {
+                return;
+            }
+        }
+        let current = self
+            .display
+            .wanted()
+            .map_or(FIRST_SIZE, |mode| (mode.width, mode.height));
+        // **Only for the display the stream is about to capture**: a guest
+        // arriving to watch another output says nothing about this one.
+        let joining = joining.filter(|_| Display::captures_own(config.output.as_deref()));
+        let (width, height) = own_size(current, asked, joining);
+        self.display.hold(Mode::new(width, height, refresh));
+    }
+}
 
 /// The vendor whose encoder this platform builds.
 const NVIDIA: u32 = 0x10de;
@@ -149,9 +220,10 @@ fn run_display(
         return Exit::Rediscover("the output went before it could be opened");
     };
     // **The encoder follows the output**, and only the vendor's is built
-    // here: an output another adapter scans out -- another vendor's, or a
-    // virtual display's, which renders on another GPU -- is refused rather
-    // than copied across, which would measure the copy.
+    // here: an output another vendor's GPU renders is refused rather than
+    // copied across, which would measure the copy. A virtual display's output
+    // is listed under the GPU that renders it, so it is that GPU's like any
+    // other, and refused only where that GPU is another vendor's.
     if output.adapter.vendor != NVIDIA || !output.adapter.decodes_here() {
         lowlat_common::log_error!(
             "stream: {} is on {}, which has no encoder this host builds",
@@ -185,7 +257,7 @@ fn run_display(
     let config = Config {
         width,
         height,
-        fps: settle_pace(shared, config.fps, refresh_hz),
+        fps: settle_pace(shared, shared.asked_fps(), refresh_hz),
         ..config
     };
     let Ok(api) = lowlat_encode::nvenc::Api::load() else {
@@ -296,7 +368,7 @@ fn run_vendor(
     // before any guest is seated, as it is once a display has answered.
     shared.publish_picture(config.width, config.height);
     let config = Config {
-        fps: settle_pace(shared, config.fps, 0),
+        fps: settle_pace(shared, shared.asked_fps(), 0),
         ..config
     };
     let mut encoder = match session.initialize(encoder_config(&config)) {

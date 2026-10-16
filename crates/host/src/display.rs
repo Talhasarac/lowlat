@@ -15,11 +15,21 @@ mod sys;
 #[path = "display/windows.rs"]
 mod sys;
 
+/// The host's own display, which only Windows has.
+#[cfg(windows)]
+#[path = "display/own.rs"]
+pub(crate) mod own;
+
 #[cfg(target_os = "linux")]
 pub use sys::Register;
 #[cfg(target_os = "linux")]
 pub(crate) use sys::driver_of;
 pub use sys::{Display, Error, Registration};
+
+/// What the host's own display is asked for by, whatever the system numbers
+/// its output. A display driver of the host's own exists on Windows alone
+/// (docs/11-drivers.md), so elsewhere nothing answers to it.
+pub const VIRTUAL: &str = "virtual";
 
 /// One output a host can be asked to capture.
 #[derive(Debug, Clone)]

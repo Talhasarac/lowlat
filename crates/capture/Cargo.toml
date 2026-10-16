@@ -32,6 +32,11 @@ lowlat-drivers.workspace = true
 windows-sys = { version = "0.61", features = [
     "Win32_Devices_Display",
     "Win32_Foundation",
+    # The compositor's clock, which every output's pictures are made on.
+    "Win32_Graphics_Dwm",
+    # The monitors listed behind an output, which is what a pulled cable
+    # changes when the output itself stays on the desktop.
+    "Win32_Graphics_Gdi",
     "Win32_System_Performance",
     "Win32_System_Power",
     "Win32_System_RemoteDesktop",

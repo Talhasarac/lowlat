@@ -53,6 +53,8 @@ fn main() {
         // `LOWLAT_SYNTH=1` runs the generator instead, which needs no display
         // and no privilege, and is how the generator itself is checked.
         display: std::env::var("LOWLAT_SYNTH").is_err(),
+        virtual_fallback: false,
+        own_display: lowlat_host::stream::OwnDisplay::default(),
         width: 1920,
         height: 1080,
         fps: 60,
@@ -78,6 +80,7 @@ fn main() {
         .take(
             wake.handle().expect("handle"),
             wake.handle().expect("a second handle"),
+            lowlat_host::stream::Declared::default(),
         )
         .expect("a free seat");
 
