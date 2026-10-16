@@ -3664,7 +3664,10 @@ mod tests {
     /// system account in the console session: `LOWLAT_LOAD` is the load's
     /// command line, `{display}` replaced by the output's name;
     /// `LOWLAT_MODE` (2560x1440@120), `LOWLAT_BLOCK` pictures a block (600),
-    /// `LOWLAT_ROUNDS` (3).
+    /// `LOWLAT_ROUNDS` (3); `LOWLAT_RECORDS`, a file each picture is written
+    /// to -- its source, round, the conversion done on the performance
+    /// counter in microseconds and its composition to then -- so the two
+    /// sources can be timed from one reference outside the test.
     #[test]
     #[ignore = "requires the display driver, the vendor's GPU, a load and the system account"]
     fn the_direct_frame_against_the_duplication() {
@@ -3726,6 +3729,7 @@ mod tests {
         // the pictures converted again.
         let mut done: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
         let mut again = 0u64;
+        let mut records = String::from("source,round,done_us,total_ms\n");
         for round in 0..rounds {
             for direct in [false, true] {
                 let mut display = if direct {
@@ -3765,11 +3769,13 @@ mod tests {
                         event.wait(core::time::Duration::from_millis(200)),
                         "a conversion did not finish"
                     );
+                    let done_us = clock::monotonic_us();
                     let total = got.composed_before_ms.unwrap_or(0.0) + clock::elapsed_ms(got.at);
                     // The first pictures of a block include the source's own
                     // start: left out.
                     if taken >= 30 {
                         done[source].push(total);
+                        records.push_str(&format!("{source},{round},{done_us},{total:.4}\n"));
                     }
                     taken += 1;
                 }
@@ -3814,6 +3820,9 @@ mod tests {
             );
         }
         println!("direct: {again} converted again");
+        if let Ok(path) = std::env::var("LOWLAT_RECORDS") {
+            std::fs::write(&path, records).expect("the records written");
+        }
     }
 
     /// **An absolute position lands on the pixel it names, on every output

@@ -24,7 +24,8 @@ use lowlat_vdd_proto::frames::{self as channel, ShapeKind};
 use lowlat_vdd_proto::settings::Pointer;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
+    CreateEventW, GetCurrentThread, SetEvent, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+    WaitForMultipleObjects, WaitForSingleObject,
 };
 
 use crate::ffi::{
@@ -125,6 +126,13 @@ impl Worker {
             .name(format!("vdd-swapchain-{slot}"))
             .spawn(move || {
                 let run = run;
+                // Above normal work: its wait's boost wins the acquire, but
+                // the fence's signal and flush after it ran late beside busy
+                // threads of the same priority. Below the compositor's.
+                // SAFETY: the calling thread's own pseudo-handle.
+                if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) } == 0 {
+                    log_warn!("vdd: the frame thread's priority was not raised, slot={slot}");
+                }
                 run.0.run();
             })
             .map_err(|_| STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN)?;
