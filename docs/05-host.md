@@ -1061,7 +1061,9 @@ display, on the input desktop; the frames need no desktop, so the reading thread
 input desktop itself whenever a read fails, at the duplication's retry pace. A pointer larger
 than the 256 the wire carries is drawn by the system into the pictures and reported not visible,
 so it reads as `hidden`; the duplication, whose pictures never carry the pointer, keeps the last
-shape it could send.
+shape it could send. *Corrected at the build, the same day:* the duplication of that display says
+the same, measured -- it keeps its last shape and reports the pointer not visible, the system
+drawing it -- so both sources send a guest to relative motion while the pointer is that large.
 
 ### §8.4 Deriving hidden from plane presence
 

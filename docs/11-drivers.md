@@ -208,6 +208,12 @@ into targets of its own, by measurement.
   takes it over until it shrinks, as for any pointer the system draws. With no hardware cursor
   -- the file's setting, or a setup the system refused -- the section says so, and the pointer
   is in the pictures.
+  *Built 2026-10-16:* each kind of pointer reads the same to the byte from the driver as from the
+  system's duplication of the display, and **the secure desktop keeps the hardware cursor** --
+  the pointer brought up there by Ctrl+Alt+Del was the driver's, visible, measured. The
+  duplication says a pointer over 256 hidden as well. The worker reads the cursor between
+  pictures: a read costs 4 to 5 us at the median, so a picture's acquire waits behind one at most
+  that long.
 
 ### §1.8 Lifecycle
 
@@ -282,7 +288,11 @@ own device in another process, three buffers in turn, a picture intact about thr
 model-checked, the host's display reading it as a second source, the freshness check and a
 still desktop's picture each shown working and broken, the driver's process ended and its device
 restarted mid-stream stranding nothing, two readers at once both served, the frame thread left at
-normal priority by measurement; the host's display streams it from W3.4.
+normal priority by measurement; the host's display streams it from W3.4. **The pointer from
+the driver is built and checked** (W3.4, 2026-10-16): published beside the pictures and
+model-checked, each kind drawn as the duplication draws it, read on whatever desktop takes the
+input, the secure one included; the host's own display read straight from the driver as the
+system account, and duplicated as any other user.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

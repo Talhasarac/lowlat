@@ -3,6 +3,33 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.4 built and checked: the pointer from the display driver
+
+### Added
+- **The pointer in the frame section** ([11 §1.7](11-drivers.md)): the display driver publishes
+  what the system says of its hardware cursor -- set up, visible, the shape's kind, size, pitch,
+  hotspot and number -- under a sequence lock of its own, and a new shape's pixels under another
+  before the state that names them, model-checked. The frame channel is at version 2.
+- **The host's own display reads its pointer from the driver** and is read straight from the
+  driver whenever the driver's frames can be taken, duplicated otherwise; its pointer's read
+  follows the desktop that takes the input ([05 §8.2](05-host.md)).
+- **A masked colour pointer that is a monochrome one in another form is drawn as one**, on both
+  Windows sources.
+- Hardware tests, as the system account: the pointer from both sources at once for each kind of
+  shape, hidden and shown, off the display and back; the desktop that takes the input, the
+  secure one by a person's Ctrl+Alt+Del; the host's own display's source as the system account
+  and as a user.
+
+### Measured
+- Each kind of pointer the same to the byte from the driver and the duplication; the text cursor
+  differs without the monochrome rule. The cursor's read 4 to 5 us at the median and 13 at p99
+  with the pointer swept about 920 times a second.
+
+### Found
+- The secure desktop keeps the hardware cursor: the pointer there is the driver's, visible.
+- A pointer over 256 is hidden on the duplication too, which keeps its last shape; the review
+  said the duplication stays visible ([05 §8.2](05-host.md), corrected).
+
 ## 2026-10-16 - W3.4 reviewed: the pointer from the display driver
 
 ### Decided

@@ -1195,7 +1195,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   twenty came within 0.09 ms. Found: an update restarts the other virtual displays' devices too,
   and one held open by its own software leaves the update waiting for a reboot, this driver
   restarted onto the new one all the same ([11 §1.8](11-drivers.md)).
-- [ ] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
+- [x] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
   driver, position and show state as in W2. Checked by each kind of shape, one larger than the
   wire's 256, and the visibility while the system draws the pointer itself.
   *Amended 2026-10-16, at W3.3's review:* with its pointer, the host's own display reads the
@@ -1230,6 +1230,28 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   pointer swept a thousand times a second against the frame's acquire; the host's own display
   streaming direct as the system account and duplicating as a user, and back on direct after its
   driver restarts; the publication model-checked; both bars.
+  *Built and checked 2026-10-16*, on the development machine, as the system account. **The
+  pointer reads the same from the driver as from the duplication**: the system's arrow, text
+  cursor and hand, a monochrome pointer of the test's own and one inverting in colour, each the
+  same picture to the byte with the same hotspot; with the monochrome rule taken out, the text
+  cursor and the monochrome pointer differed and the rest did not -- the duplication reports the
+  text cursor monochrome and the driver is handed it in masked colour, as the review read. Hidden
+  by an application the pointer turned relative on both, and shown again absolute at its place;
+  off the display nothing was said, and back on it the state was right. **The secure desktop
+  keeps the hardware cursor**: brought up by a person with Ctrl+Alt+Del, the reading thread
+  followed the input onto it and the driver's pointer was said there, not hidden; with the
+  following taken out, a desktop of the test's own taking the input left the pointer's change
+  unsaid. The host's own display opened on the direct frame as the system account and duplicated
+  as an ordinary user, said once why; opened again after its driver's device restarted, direct.
+  The cursor's read costs 4 to 5 us at the median, 13 at p99, about 920 a second with the
+  pointer swept, so a picture's acquire waits behind one at most that long -- one read in 48,000
+  took 1.7 ms -- and the read stays on the frame's worker; the acquire's own timing could not
+  show it, the compositor's clock sitting at a refresh's edge of the display's and splitting
+  its frames between two refreshes, swept or not. The publication model-checked, a reader
+  waiting for the state to name the shape; shown to fail with the state published before the
+  pixels. Found: **a pointer over 256 is hidden on the duplication too** -- it keeps its last
+  shape and reports the pointer not visible, the system drawing it (the review said otherwise,
+  corrected in [05 §8.2](05-host.md)); that the picture then carries it was not read back.
 - [ ] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
   driver restarted, the display asleep, the lock screen, the secure attention screen and an
   elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
@@ -1267,6 +1289,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.4 built, checked and ticked: the pointer the same to the byte from the driver
+  as from the duplication, the text cursor by the monochrome rule; the secure desktop keeping
+  the hardware cursor, the pointer's read following the input onto it; the host's own display
+  direct as the system account and duplicated as a user; a pointer over 256 hidden on both
+  sources; the cursor's read 4 to 5 us, kept on the frame's worker.
 - 2026-10-16: W3.4 reviewed: the driver publishes the pointer in the monitor's frame section,
   the channel's version 2; the pointer's read follows the input desktop; a masked colour pointer
   that is a monochrome one in another form is drawn as one; a pointer over 256 stays the
