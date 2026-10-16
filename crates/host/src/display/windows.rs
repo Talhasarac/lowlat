@@ -18,6 +18,8 @@
 
 use std::sync::Arc;
 
+use std::os::windows::io::AsHandle;
+
 use lowlat_capture::d3d11::{Converter, Layout, Target};
 use lowlat_capture::duplication::{
     self, Awake, Aware, Cursor, Duplication, Frame, InputDesktop, Shape,
@@ -27,9 +29,10 @@ use lowlat_common::clock::{self, Time};
 use lowlat_core::video::Rotation;
 use lowlat_drivers::d3d11::{Com, D3d11, Device, Fence, Output, Span, Timer};
 use lowlat_drivers::ffi::d3d11::{
-    DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_ROTATE270, ID3D11Texture2D,
-    IDXGIOutput,
+    DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_ROTATE270,
+    ID3D11ShaderResourceView, ID3D11Texture2D, IDXGIOutput,
 };
+use lowlat_vdd_ctl::{FramePage, Snapshot, Waited};
 
 use super::{Acquired, Capturable, Selectable, VIRTUAL};
 use crate::timing::Stage;
@@ -68,6 +71,8 @@ pub enum Error {
     NoOutput,
     /// The encoder would not take a target.
     Register,
+    /// The host's own display's driver: its frame page, or a handle it names.
+    Frames(lowlat_vdd_ctl::Error),
 }
 
 impl core::fmt::Display for Error {
@@ -77,7 +82,14 @@ impl core::fmt::Display for Error {
             Self::Duplication(error) => write!(f, "duplication: {error}"),
             Self::NoOutput => f.write_str("no such output is part of the desktop"),
             Self::Register => f.write_str("the encoder refused a target on its own device"),
+            Self::Frames(error) => write!(f, "the display driver's frames: {error:?}"),
         }
+    }
+}
+
+impl From<lowlat_vdd_ctl::Error> for Error {
+    fn from(error: lowlat_vdd_ctl::Error) -> Self {
+        Self::Frames(error)
     }
 }
 
@@ -639,6 +651,204 @@ impl Timing {
     }
 }
 
+/// The host's own display read straight from its driver (docs/11-drivers.md
+/// section 1.6): the system's own buffers, taken from the driver's process
+/// and opened on the stream's device once each, converted into the encoder's
+/// inputs. **Nothing here holds the driver up**: it publishes whether or not
+/// this reads, and a picture taken too late is caught after its conversion
+/// is queued and the latest converted instead.
+struct Direct {
+    page: FramePage,
+    /// What the buffers and the fence below belong to; zero before any.
+    generation: u64,
+    fence: Option<Fence>,
+    /// Each buffer the page named, opened here, and the view it is read
+    /// through: made once each for the generation.
+    buffers: Vec<Option<(Com<ID3D11Texture2D>, Com<ID3D11ShaderResourceView>)>>,
+    /// The picture last taken: its generation, sequence and frame number.
+    taken: Option<(u64, u64, u32)>,
+    /// A picture published since the last take, seen by a wait.
+    pending: bool,
+    /// Pictures converted again, their buffer possibly written meanwhile.
+    again: u64,
+    /// How long a take stalls after queuing its conversion: a reader made
+    /// late on purpose, which the freshness check must catch.
+    #[cfg(test)]
+    stall_ms: u64,
+}
+
+/// Whether a picture of frame number `frame` is the one taken last.
+/// **By the frame this took, never by the driver's word that it repeats**: a
+/// still desktop's marker repeats the last frame number in another buffer,
+/// and when the picture it repeats was never taken, the marker is the only
+/// way left for it to reach the encoder.
+fn the_same_picture(taken: Option<(u64, u64, u32)>, frame: u32) -> bool {
+    taken.is_some_and(|(_, _, last)| last == frame)
+}
+
+/// What a take of the direct source found.
+enum Took {
+    /// A picture converted: the driver's acquire time, by the performance
+    /// counter.
+    Picture(i64),
+    /// The same picture as the last, or none yet.
+    Same,
+    /// Another size than the display was built for.
+    Resized,
+}
+
+impl Direct {
+    fn attach(slot: u8) -> Result<Self, Error> {
+        let page = FramePage::open(slot)?;
+        let named = Snapshot::default().buffer.len();
+        Ok(Self {
+            page,
+            generation: 0,
+            fence: None,
+            buffers: (0..named).map(|_| None).collect(),
+            taken: None,
+            pending: false,
+            again: 0,
+            #[cfg(test)]
+            stall_ms: 0,
+        })
+    }
+
+    /// Whether the page names a picture this has not taken.
+    fn fresh(&self, snapshot: &Snapshot) -> bool {
+        snapshot.generation != 0
+            && snapshot.picture.sequence != 0
+            && self
+                .taken
+                .map(|(generation, sequence, _)| (generation, sequence))
+                != Some((snapshot.generation, snapshot.picture.sequence))
+    }
+
+    /// The generation `snapshot` names, its fence taken and opened: what was
+    /// open of another is let go. **Handles are taken by value and the value
+    /// may have been reused by the time it is**, so the page is read again
+    /// after and a generation that moved is not trusted.
+    fn renew(&mut self, device: &Device, snapshot: &Snapshot) -> Result<bool, Error> {
+        if self.generation == snapshot.generation && self.fence.is_some() {
+            return Ok(true);
+        }
+        self.fence = None;
+        self.buffers.iter_mut().for_each(|buffer| *buffer = None);
+        self.generation = 0;
+        let taken = self.page.pull(snapshot.fence)?;
+        let fence = device.open_shared_fence(taken.as_handle())?;
+        if self.page.read().map(|now| now.generation) != Some(snapshot.generation) {
+            return Ok(false);
+        }
+        self.fence = Some(fence);
+        self.generation = snapshot.generation;
+        Ok(true)
+    }
+
+    /// Buffer `index` of the current generation, opened here the first time.
+    fn view(
+        &mut self,
+        device: &Device,
+        snapshot: &Snapshot,
+        index: u32,
+    ) -> Result<Option<&Com<ID3D11ShaderResourceView>>, Error> {
+        let at = usize::try_from(index).unwrap_or(usize::MAX);
+        let opened = self.buffers.get(at).is_some_and(Option::is_some);
+        if !opened {
+            let Some(value) = snapshot.buffer(index) else {
+                return Ok(None);
+            };
+            let taken = self.page.pull(value)?;
+            let texture = device.open_shared_nt(taken.as_handle())?;
+            if self.page.read().map(|now| now.generation) != Some(self.generation) {
+                return Ok(None);
+            }
+            let view = Converter::view_of(device, texture.as_ptr())?;
+            if let Some(slot) = self.buffers.get_mut(at) {
+                *slot = Some((texture, view));
+            }
+        }
+        Ok(self
+            .buffers
+            .get(at)
+            .and_then(Option::as_ref)
+            .map(|(_, view)| view))
+    }
+
+    /// Convert the latest picture into `target`, unless it is the one taken
+    /// last; when the driver has since acquired enough newer ones that the
+    /// buffer may have been written again, the latest instead, counted.
+    fn take(
+        &mut self,
+        device: &Device,
+        converter: &Converter,
+        target: &Target,
+        size: (u32, u32),
+    ) -> Result<Took, Error> {
+        let Some(snapshot) = self.page.read() else {
+            return Ok(Took::Same);
+        };
+        if snapshot.generation == 0 || snapshot.picture.sequence == 0 {
+            return Ok(Took::Same);
+        }
+        if (snapshot.width, snapshot.height) != size {
+            return Ok(Took::Resized);
+        }
+        if !self.fresh(&snapshot) {
+            return Ok(Took::Same);
+        }
+        let picture = snapshot.picture;
+        let same = the_same_picture(self.taken, picture.frame);
+        self.taken = Some((snapshot.generation, picture.sequence, picture.frame));
+        if same {
+            return Ok(Took::Same);
+        }
+        let mut converted = self.convert(device, converter, target, &snapshot)?;
+        #[cfg(test)]
+        if self.stall_ms > 0 {
+            std::thread::sleep(core::time::Duration::from_millis(self.stall_ms));
+        }
+        if let Some(now) = self.page.read()
+            && now.overtaken(snapshot.generation, picture.sequence)
+            && now.generation == snapshot.generation
+        {
+            self.again += 1;
+            self.taken = Some((now.generation, now.picture.sequence, now.picture.frame));
+            if let Some(acquired) = self.convert(device, converter, target, &now)? {
+                converted = Some(acquired);
+            }
+        }
+        Ok(converted.map_or(Took::Same, Took::Picture))
+    }
+
+    /// Queue the conversion of `snapshot`'s picture behind the driver's fence:
+    /// its acquire time, or none where its buffer could not be opened.
+    fn convert(
+        &mut self,
+        device: &Device,
+        converter: &Converter,
+        target: &Target,
+        snapshot: &Snapshot,
+    ) -> Result<Option<i64>, Error> {
+        if !self.renew(device, snapshot)? {
+            return Ok(None);
+        }
+        let picture = snapshot.picture;
+        let Some(view) = self.view(device, snapshot, picture.index)? else {
+            return Ok(None);
+        };
+        let view = view.clone_ref();
+        let Some(fence) = &self.fence else {
+            return Ok(None);
+        };
+        // **Only a value the driver has published**, and so already queued to
+        // be signalled behind the system's write of this buffer.
+        device.wait(fence, picture.sequence)?;
+        converter.convert_view(device, &view, target)?;
+        Ok(Some(i64::try_from(picture.acquired).unwrap_or(i64::MAX)))
+    }
+}
+
 /// The desktop, ready to hand pictures to an encoder.
 ///
 /// **Fields drop in the order written**: the duplication first, so the frame
@@ -646,6 +856,9 @@ impl Timing {
 /// state last, after everything made under it.
 pub struct Display {
     duplication: Option<Duplication>,
+    /// The host's own display read straight from its driver, in place of the
+    /// duplication, where it was opened so ([`Display::open_direct`]).
+    direct: Option<Direct>,
     kept: Option<Kept>,
     converter: Converter,
     targets: Vec<Target>,
@@ -792,6 +1005,33 @@ impl Display {
         size: (u32, u32),
         encoder: &lowlat_encode::nvenc::Encoder<'_>,
     ) -> Result<Self, Error> {
+        Self::open_with(device, name, layout, size, encoder, None)
+    }
+
+    /// Prepare to capture the host's own display, whose output is `name`,
+    /// straight from its driver's monitor at `slot` rather than through the
+    /// system's duplication of it (docs/11-drivers.md section 1.6), into the
+    /// same targets. **The process must be able to take handles from the
+    /// driver's**, which the system account can.
+    pub fn open_direct(
+        device: &Arc<Device>,
+        name: &str,
+        layout: Layout,
+        size: (u32, u32),
+        encoder: &lowlat_encode::nvenc::Encoder<'_>,
+        slot: u8,
+    ) -> Result<Self, Error> {
+        Self::open_with(device, name, layout, size, encoder, Some(slot))
+    }
+
+    fn open_with(
+        device: &Arc<Device>,
+        name: &str,
+        layout: Layout,
+        size: (u32, u32),
+        encoder: &lowlat_encode::nvenc::Encoder<'_>,
+        direct: Option<u8>,
+    ) -> Result<Self, Error> {
         let aware = Aware::per_monitor();
         let d3d11 = D3d11::load()?;
         let listed = d3d11.outputs()?;
@@ -814,6 +1054,7 @@ impl Display {
         let own = own().is_some_and(|own| own.eq_ignore_ascii_case(&output.name));
         let mut display = Self {
             duplication: None,
+            direct: None,
             kept: None,
             converter,
             targets,
@@ -844,14 +1085,24 @@ impl Display {
             _aware: aware,
         };
         remember(name);
-        match display.duplicate() {
-            Ok(()) => {}
-            Err(Error::Duplication(duplication::Error::Busy(_) | duplication::Error::Lost)) => {
-                lowlat_common::log_info!(
-                    "display: the desktop of {name} is out of reach for now, asking again as it goes"
-                );
+        if let Some(slot) = direct {
+            let attached = Direct::attach(slot)?;
+            if let Some(snapshot) = attached.page.read() {
+                display.mode_refresh = snapshot.refresh;
             }
-            Err(error) => return Err(error),
+            display.direct = Some(attached);
+            display.repace();
+            lowlat_common::log_info!("display: {name} read straight from its driver, slot={slot}");
+        } else {
+            match display.duplicate() {
+                Ok(()) => {}
+                Err(Error::Duplication(duplication::Error::Busy(_) | duplication::Error::Lost)) => {
+                    lowlat_common::log_info!(
+                        "display: the desktop of {name} is out of reach for now, asking again as it goes"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
         lowlat_common::log_info!(
             "display: {name} {}x{} at {},{} of a {}x{} desktop, turned {:?}, {} target(s) of \
@@ -1046,6 +1297,9 @@ impl Display {
                 self.repace();
             }
         }
+        if self.direct.is_some() {
+            return self.acquire_direct();
+        }
         self.duplicate()?;
         let kept = match self.kept.take() {
             Some(kept) => kept,
@@ -1127,6 +1381,143 @@ impl Display {
         }
     }
 
+    /// [`Display::acquire`] for the host's own display read from its driver:
+    /// the latest picture converted into the next target, unless it is the
+    /// one taken last. Another size is a rebuild, as the duplication's is.
+    fn acquire_direct(&mut self) -> Result<Time, Error> {
+        // **The refresh comes with each swapchain**, and one can change with
+        // the size unchanged: the pace and the deadlines settle again from
+        // it, as the duplication's mode does at each duplication.
+        let refresh = self
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.page.read())
+            .filter(|snapshot| snapshot.generation != 0 && snapshot.refresh.1 != 0)
+            .map(|snapshot| snapshot.refresh);
+        if let Some(refresh) = refresh
+            && refresh != self.mode_refresh
+        {
+            self.mode_refresh = refresh;
+            self.repace();
+        }
+        let Some(direct) = self.direct.as_mut() else {
+            return Ok(Time::now());
+        };
+        direct.pending = false;
+        let slot = self.next % self.targets.len().max(1);
+        let target = self.targets.get(slot).ok_or(Error::Register)?;
+        // Timed only where a conversion will be queued: the timer holds one
+        // span, which an empty one would spend.
+        let seen = direct.page.read().filter(|snapshot| {
+            direct.fresh(snapshot)
+                && !the_same_picture(direct.taken, snapshot.picture.frame)
+                && (snapshot.width, snapshot.height) == self.size
+        });
+        let timed = seen.is_some() && self.timing.read(&self.device);
+        if timed && let Some(timer) = &self.timing.timer {
+            self.device.begin_span(timer);
+        }
+        let took = direct.take(&self.device, &self.converter, target, self.size);
+        if timed
+            && let (Some(fence), Some(timer)) = (&self.timing.fence, &self.timing.timer)
+            && self
+                .device
+                .signal_timed(fence, self.timing.signalled + 1, timer)
+                .is_ok()
+        {
+            self.timing.signalled += 1;
+            self.timing.timing = true;
+        }
+        let acquired = match took? {
+            Took::Picture(acquired) => acquired,
+            Took::Same => return Ok(Time::now()),
+            Took::Resized => {
+                lowlat_common::log_info!(
+                    "display: {} is another size now, was {}x{}",
+                    self.output.name,
+                    self.size.0,
+                    self.size.1
+                );
+                self.resized = true;
+                return Ok(Time::now());
+            }
+        };
+        let at = Time::now();
+        self.next = self.next.wrapping_add(1);
+        if let Some(seen) = seen {
+            let handed = i64::try_from(seen.picture.acquired).unwrap_or(i64::MAX);
+            self.timing.handed.record(duplication::age_ms(handed));
+        }
+        let age_ms = duplication::age_ms(acquired);
+        self.timing.queued.record(age_ms);
+        self.timing.report(&self.output.name);
+        if self.timing.pictures % REPORT_EVERY == 0
+            && let Some(direct) = &self.direct
+        {
+            lowlat_common::log_info!(
+                "display: {} read from its driver, converted again {} of {} pictures",
+                self.output.name,
+                direct.again,
+                self.timing.pictures
+            );
+        }
+        self.flight = Some(Acquired {
+            at,
+            changed: true,
+            composed_before_ms: Some(age_ms),
+        });
+        Ok(at)
+    }
+
+    /// [`Display::wait_present`] for the host's own display read from its
+    /// driver: a picture published that has not been taken is a present; a
+    /// refresh past the deadline with none is a present of the same picture,
+    /// as the duplication's wait has it -- **once there is a picture to be the
+    /// same as**: before the first, the wait is for it, as the duplication's
+    /// first acquire hands over the desktop. The driver's process ending is a
+    /// present, so the tick runs and the acquire finds out.
+    fn wait_direct(&mut self, timeout_ms: i32) -> Option<bool> {
+        let period = self.period_ms;
+        let direct = self.direct.as_mut()?;
+        let fresh = |direct: &Direct| direct.page.read().is_some_and(|s| direct.fresh(&s));
+        if direct.pending || fresh(direct) {
+            direct.pending = true;
+            return Some(true);
+        }
+        let first = direct.taken.is_none();
+        let began = *self.waiting_since.get_or_insert_with(Time::now);
+        let called = Time::now();
+        loop {
+            let now = Time::now();
+            let bound = if first {
+                f64::INFINITY
+            } else {
+                period - clock::diff_ms(began, now)
+            };
+            if bound <= 0.0 {
+                return Some(true);
+            }
+            let budget = f64::from(timeout_ms.max(1)) - clock::diff_ms(called, now);
+            if budget <= 0.0 {
+                return None;
+            }
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a positive wait of at most a refresh or the loop's timeout"
+            )]
+            let wait = budget.min(bound).ceil().max(1.0) as u32;
+            match direct.page.wait(wait) {
+                Waited::Published if fresh(direct) => {
+                    direct.pending = true;
+                    return Some(true);
+                }
+                Waited::Published | Waited::TimedOut => {}
+                Waited::Ended => return Some(true),
+            }
+        }
+    }
+
     /// What the last acquire converted, if it converted anything: nothing
     /// is a picture that did not change, which the loop reads as such.
     pub fn converted(&mut self) -> Result<Option<Acquired>, Error> {
@@ -1139,6 +1530,11 @@ impl Display {
     /// into account while it is there: a pointer on another screen is not
     /// this stream's to describe.
     pub fn pointer(&mut self) -> Option<Pointer> {
+        // The direct source's pictures carry no pointer and nothing here
+        // reads the driver's yet (docs/impl-plan-windows.md W3.4).
+        if self.direct.is_some() {
+            return None;
+        }
         let cursor = duplication::cursor()?;
         let output = &self.output;
         if cursor.x < output.left
@@ -1222,6 +1618,9 @@ impl Display {
     /// all. Nothing at all in the time: nothing. **A duplication lost or out
     /// of reach is a present**, so the tick runs and its acquire asks again.
     pub fn wait_present(&mut self, timeout_ms: i32) -> Option<bool> {
+        if self.direct.is_some() {
+            return self.wait_direct(timeout_ms);
+        }
         if self.kept.is_some() || self.duplication.is_none() {
             return Some(true);
         }
@@ -1465,6 +1864,15 @@ mod tests {
     /// **A refresh moves only past a rate's rounding**: 59.94 against 60 is
     /// the same rate, 120 against 144 is a rebuild.
     #[test]
+    fn a_repeat_the_reader_never_took_is_a_new_picture() {
+        // The marker repeats frame 381; a reader that last took 380 takes it,
+        // one that took 381 already does not.
+        assert!(!the_same_picture(Some((8, 300, 380)), 381));
+        assert!(the_same_picture(Some((8, 301, 381)), 381));
+        assert!(!the_same_picture(None, 381));
+    }
+
+    #[test]
     fn a_refresh_moves_only_past_rounding() {
         let sixty = 1000.0 / 60.0;
         let ntsc = 1000.0 * 1001.0 / 60000.0;
@@ -1702,6 +2110,725 @@ mod tests {
         assert!(changed >= 1, "the desktop was never converted");
         assert_eq!(units, ticks, "a tick went unencoded");
         assert_eq!(late, 0, "a present took longer than two refreshes");
+    }
+
+    /// **The host's own display, read straight from its driver, converts and
+    /// encodes at the display's pace**: a monitor of the driver plugged by
+    /// this test and bound to it, opened through its frame page; the first
+    /// present at once, every tick an access unit, none later than two
+    /// refreshes. Anything presenting on the display makes the pictures change;
+    /// how many were converted again for coming too late is printed. Run as
+    /// the system account, the one allowed to take the driver's handles;
+    /// `LOWLAT_MODE=WxH@Hz` sets the monitor (1920x1080@60) and
+    /// `LOWLAT_SETTLE_MS` how long the desktop is left to go still first
+    /// (3000).
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU and the system account"]
+    fn the_hosts_own_display_converts_straight_from_its_driver() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let ticks: usize = std::env::var("LOWLAT_TICKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(240);
+        let mode = std::env::var("LOWLAT_MODE")
+            .ok()
+            .and_then(|text| {
+                let (size, hz) = text.split_once('@')?;
+                let (width, height) = size.split_once('x')?;
+                Some(Mode::new(
+                    width.parse().ok()?,
+                    height.parse().ok()?,
+                    hz.parse().ok()?,
+                ))
+            })
+            .unwrap_or(Mode::new(1920, 1080, 60));
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(mode, Lifetime::Bound, false, None)
+            .expect("a monitor");
+        println!("slot {} {} at {}", monitor.slot, monitor.name, monitor.mode);
+        // **Asked for once the desktop is still**, when the system hands the
+        // driver nothing new: the first picture must still come at once.
+        let settle_ms: u64 = std::env::var("LOWLAT_SETTLE_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3000);
+        std::thread::sleep(core::time::Duration::from_millis(settle_ms));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let mut display: Display;
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let mut encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width,
+                height,
+                fps: hz.max(1),
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        display = Display::open_direct(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            &encoder,
+            monitor.slot,
+        )
+        .expect("the display, read from its driver");
+
+        let began = Time::now();
+        let first = display.wait_present(150);
+        println!(
+            "first present {first:?} after {:.2} ms",
+            clock::elapsed_ms(began)
+        );
+        assert_eq!(first, Some(true), "the first present did not come at once");
+        let interval = 1000.0 / f64::from(hz.max(1));
+        let (mut changed, mut unchanged, mut units, mut late) = (0, 0, 0, 0);
+        let mut waits = Stage::new();
+        let mut deadline = clock::elapsed_ms(began);
+        for tick in 0..ticks {
+            if tick > 0 {
+                let until = deadline - clock::elapsed_ms(began);
+                if until > 0.0 {
+                    clock::precise_sleep(core::time::Duration::from_secs_f64(until / 1000.0));
+                }
+                let asked = Time::now();
+                while display.wait_present(20) != Some(true) {}
+                let waited = clock::elapsed_ms(asked);
+                waits.record(waited);
+                if waited > 2.0 * interval + 2.0 {
+                    late += 1;
+                }
+            }
+            deadline += interval;
+            display.acquire().expect("an acquire");
+            match display.converted().expect("the conversion") {
+                Some(got) if got.changed => changed += 1,
+                _ => unchanged += 1,
+            }
+            if let Some(input) = display.presented() {
+                encoder
+                    .submit_registered(input, tick == 0)
+                    .expect("a submit");
+                loop {
+                    match encoder.poll().expect("a collect") {
+                        lowlat_encode::Poll::Ready { bitstream, .. } => {
+                            assert!(!bitstream.is_empty());
+                            units += 1;
+                            break;
+                        }
+                        lowlat_encode::Poll::Pending => std::hint::spin_loop(),
+                    }
+                }
+            }
+        }
+        let waited = waits.percentiles();
+        let again = display.direct.as_ref().map_or(0, |direct| direct.again);
+        println!(
+            "{ticks} ticks in {:.0} ms: {changed} changed, {unchanged} the same, {units} units, \
+             {again} converted again; wait for a present ms p50/p95/p99 {:.2}/{:.2}/{:.2}, \
+             {late} late",
+            clock::elapsed_ms(began),
+            waited.p50,
+            waited.p95,
+            waited.p99
+        );
+        let (handed, queued) = (
+            display.timing.handed.percentiles(),
+            display.timing.queued.percentiles(),
+        );
+        println!(
+            "acquired to taken ms p50/p95/p99 {:.3}/{:.3}/{:.3}; to the conversion queued \
+             {:.3}/{:.3}/{:.3}",
+            handed.p50, handed.p95, handed.p99, queued.p50, queued.p95, queued.p99
+        );
+        assert!(changed >= 1, "the display was never converted");
+        assert_eq!(units, ticks, "a tick went unencoded");
+        assert_eq!(late, 0, "a present took longer than two refreshes");
+    }
+
+    /// **A refresh changed alone settles the pace again**, reading the host's
+    /// own display straight from its driver: the monitor put from 120 to 60
+    /// at the same size, the stream is asked to rebuild at 60 within two
+    /// seconds of the change. *Named regression test*: the refresh was taken
+    /// once, at the open, and the pace stayed at 120. Run as the system
+    /// account.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU and the system account"]
+    fn a_refresh_changed_alone_settles_the_direct_pace_again() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1920, 1080, 120), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        std::thread::sleep(core::time::Duration::from_millis(1000));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width: 1920,
+                height: 1080,
+                fps: 120,
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        let mut display = Display::open_direct(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (1920, 1080),
+            &encoder,
+            monitor.slot,
+        )
+        .expect("the display, read from its driver");
+        let rate = |display: &Display| display.settled.map(|(_, rate)| rate);
+        println!(
+            "slot {} {} settled at {:?}",
+            monitor.slot,
+            monitor.name,
+            rate(&display)
+        );
+
+        controller
+            .set_mode(monitor.slot, Mode::new(1920, 1080, 60))
+            .expect("the refresh changed");
+        let began = Time::now();
+        let mut resized = false;
+        while !resized && clock::elapsed_ms(began) < 2000.0 {
+            if display.wait_present(20) == Some(true) {
+                display.acquire().expect("an acquire");
+                display.converted().expect("the conversion");
+            }
+            resized = display.take_resize();
+        }
+        println!(
+            "rebuild asked {resized} {:.0} ms after the change, settled at {:?}",
+            clock::elapsed_ms(began),
+            rate(&display)
+        );
+        assert!(resized, "a refresh changed alone left the pace as it was");
+        assert_eq!(rate(&display), Some(60));
+    }
+
+    /// A load presenting on a display, from `LOWLAT_LOAD` with `{display}`
+    /// replaced by the output's name: ended however the test ends, since it
+    /// holds the test's output open and outlives a failed one otherwise.
+    struct Load(std::process::Child);
+
+    impl Load {
+        fn on(display: &str) -> Option<Self> {
+            let line = std::env::var("LOWLAT_LOAD")
+                .ok()?
+                .replace("{display}", display);
+            let mut words = line.split_whitespace();
+            let program = words.next()?;
+            std::process::Command::new(program)
+                .args(words)
+                .spawn()
+                .ok()
+                .map(Self)
+        }
+    }
+
+    impl Drop for Load {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// **A late reader is caught, and a still desktop's last picture is
+    /// never lost**, reading the host's own display straight from its driver
+    /// with a load presenting on it (`LOWLAT_LOAD`, as the comparison below).
+    /// A take stalled past the system's cycle of buffers -- two refreshes,
+    /// with three buffers -- converts again, counted, and one not stalled
+    /// never does. A reader that stops taking while pictures land, then takes
+    /// once the load has gone and the desktop is still, converts the page's
+    /// latest picture: the still desktop's marker repeats its frame number in
+    /// another buffer and is the only way left to it.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU, a load and the system account"]
+    fn a_late_reader_is_caught_and_the_last_picture_is_never_lost() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1920, 1080, 120), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        let load = Load::on(&monitor.name).expect("a load");
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width,
+                height,
+                fps: hz.max(1),
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        let mut display = Display::open_direct(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            &encoder,
+            monitor.slot,
+        )
+        .expect("the display, read from its driver");
+        let take = |display: &mut Display, takes: usize| {
+            let mut changed = 0;
+            for _ in 0..takes {
+                while display.wait_present(50) != Some(true) {}
+                display.acquire().expect("an acquire");
+                if display
+                    .converted()
+                    .expect("the conversion")
+                    .is_some_and(|got| got.changed)
+                {
+                    changed += 1;
+                }
+            }
+            changed
+        };
+        let again = |display: &Display| display.direct.as_ref().map_or(0, |d| d.again);
+
+        // Not stalled: nothing is overtaken.
+        let changed = take(&mut display, 120);
+        println!(
+            "on time: {changed} changed, {} converted again",
+            again(&display)
+        );
+        assert_eq!(again(&display), 0, "a picture on time was overtaken");
+        // Stalled past two refreshes after queuing: each one overtaken.
+        if let Some(direct) = display.direct.as_mut() {
+            direct.stall_ms = 30;
+        }
+        let changed = take(&mut display, 20);
+        let stalled = again(&display);
+        println!("stalled 30 ms: {changed} changed, {stalled} converted again");
+        assert!(
+            stalled >= 15,
+            "a stalled reader was not caught: {stalled} of 20"
+        );
+        if let Some(direct) = display.direct.as_mut() {
+            direct.stall_ms = 0;
+        }
+
+        // The last picture: stop taking while pictures land, then end the load
+        // and let the desktop go still.
+        take(&mut display, 10);
+        std::thread::sleep(core::time::Duration::from_millis(100));
+        drop(load);
+        std::thread::sleep(core::time::Duration::from_millis(1000));
+        let latest = display
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.page.read())
+            .expect("the page");
+        while display.wait_present(50) != Some(true) {}
+        display.acquire().expect("an acquire");
+        let got = display.converted().expect("the conversion");
+        let taken = display.direct.as_ref().and_then(|direct| direct.taken);
+        println!(
+            "still: the page's latest frame {} (a repeat: {}), taken {taken:?}, converted {:?}",
+            latest.picture.frame,
+            latest.picture.repeat,
+            got.map(|got| got.changed)
+        );
+        assert!(
+            got.is_some_and(|got| got.changed),
+            "the still desktop's last picture was not converted"
+        );
+        assert_eq!(
+            taken.map(|(_, _, frame)| frame),
+            Some(latest.picture.frame),
+            "the picture converted is not the page's latest"
+        );
+    }
+
+    /// **The driver's process ending mid-stream strands nothing**: ended right
+    /// after a picture is published -- its fence's signal queued, perhaps not
+    /// yet passed -- the conversion the reader queues behind it still
+    /// finishes, the stream's check finds the output gone, and the driver is
+    /// back for the next round. `LOWLAT_LOAD` as the comparison below;
+    /// `LOWLAT_ROUNDS` (5); `LOWLAT_RESTART`, the driver's device instance,
+    /// to have the system restart it instead. A round still running after fifteen seconds ends
+    /// the process, since a reader stuck behind a fence that never passes is
+    /// what this looks for.
+    #[test]
+    #[ignore = "ends the display driver's process; requires the vendor's GPU and the system account"]
+    fn the_drivers_end_strands_nothing() {
+        use lowlat_drivers::d3d11::Event;
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+        };
+
+        let _timer = clock::TimerResolution::raise();
+        let rounds: usize = std::env::var("LOWLAT_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+        let (mut stranded, mut refused) = (0, 0);
+        for round in 0..rounds {
+            let finished = Arc::new(AtomicBool::new(false));
+            let watched = Arc::clone(&finished);
+            let watchdog = std::thread::spawn(move || {
+                let began = Time::now();
+                while !watched.load(Ordering::Relaxed) {
+                    if clock::elapsed_ms(began) > 15_000.0 {
+                        eprintln!("round {round}: still running after 15 s, stuck");
+                        std::process::exit(3);
+                    }
+                    std::thread::sleep(core::time::Duration::from_millis(100));
+                }
+            });
+            // The driver, started again after the last round ended it.
+            let began = Time::now();
+            let mut controller = loop {
+                match Controller::open() {
+                    Ok(controller) => break controller,
+                    Err(_) if clock::elapsed_ms(began) < 10_000.0 => {
+                        std::thread::sleep(core::time::Duration::from_millis(100));
+                    }
+                    Err(error) => panic!("the driver did not come back: {error:?}"),
+                }
+            };
+            // **A restart waits for every handle open on the device**, which
+            // the host is to close when the driver asks to be removed
+            // (docs/impl-plan-windows.md W3.5) and does not yet: so for a
+            // restart the monitor is kept and the controller's handle closed
+            // before it.
+            let restarting = std::env::var("LOWLAT_RESTART").is_ok();
+            let lifetime = if restarting {
+                Lifetime::Kept
+            } else {
+                Lifetime::Bound
+            };
+            let monitor = loop {
+                match controller.plug(Mode::new(1920, 1080, 120), lifetime, false, None) {
+                    Ok(monitor) => break monitor,
+                    Err(_) if clock::elapsed_ms(began) < 10_000.0 => {
+                        std::thread::sleep(core::time::Duration::from_millis(100));
+                    }
+                    Err(error) => panic!("no monitor: {error:?}"),
+                }
+            };
+            if restarting {
+                drop(controller);
+            }
+            println!(
+                "round {round}: the driver back in {:.0} ms",
+                clock::elapsed_ms(began)
+            );
+            let load = Load::on(&monitor.name).expect("a load");
+            std::thread::sleep(core::time::Duration::from_millis(1000));
+            let output = Display::locate(Some(&monitor.name)).expect("its output");
+            let (width, height, hz) =
+                Display::shape_of_display(Some(&output.name)).expect("a shape");
+            let d3d11 = D3d11::load().expect("the system's libraries");
+            let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+            let api = nvenc::Api::load().expect("the encoder's runtime");
+            let session = api.open_session(Arc::clone(&device)).expect("a session");
+            let encoder = session
+                .initialize(nvenc::Config {
+                    codec: nvenc::Codec::H265,
+                    width,
+                    height,
+                    fps: hz.max(1),
+                    bitrate_bps: 20_000_000,
+                    min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                    thorough: false,
+                    chroma: nvenc::Chroma::Yuv420,
+                    depth: nvenc::Depth::Eight,
+                })
+                .expect("an encoder");
+            let mut display = Display::open_direct(
+                &device,
+                &output.name,
+                Layout::Nv12,
+                (width, height),
+                &encoder,
+                monitor.slot,
+            )
+            .expect("the display, read from its driver");
+            let fence = device.fence(0).expect("a fence");
+            let event = Event::new().expect("an event");
+            let mut signalled = 0u64;
+            let mut finishes = |display: &mut Display| -> Option<bool> {
+                display.acquire().ok()?;
+                display.converted().ok()??;
+                signalled += 1;
+                device.signal(&fence, signalled).ok()?;
+                fence.notify_at(signalled, &event).ok()?;
+                Some(event.wait(core::time::Duration::from_millis(1000)))
+            };
+            for _ in 0..30 + (round * 37) % 90 {
+                while display.wait_present(50) != Some(true) {}
+                assert_ne!(
+                    finishes(&mut display),
+                    Some(false),
+                    "a conversion did not finish"
+                );
+            }
+            // Right after a publish: the driver ended before the reader queues
+            // its wait on the picture's fence value.
+            while display.wait_present(50) != Some(true) {}
+            let process = display
+                .direct
+                .as_ref()
+                .map_or(0, |direct| direct.page.process_id());
+            // `LOWLAT_RESTART`, a device instance: the driver restarted by the
+            // system rather than its process ended.
+            let mut restart = std::env::var("LOWLAT_RESTART").ok().map(|instance| {
+                std::process::Command::new("pnputil")
+                    .args(["/restart-device", &instance])
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .expect("pnputil")
+            });
+            if restart.is_none() {
+                // SAFETY: an identifier the system checks; the handle closed
+                // once.
+                unsafe {
+                    let handle = OpenProcess(PROCESS_TERMINATE, 0, process);
+                    assert!(
+                        !handle.is_null(),
+                        "the driver's process could not be opened"
+                    );
+                    TerminateProcess(handle, 1);
+                    CloseHandle(handle);
+                }
+            }
+            match finishes(&mut display) {
+                Some(true) => {}
+                Some(false) => stranded += 1,
+                // Its handles gone with the process: nothing queued at all.
+                None => refused += 1,
+            }
+            let ended = Time::now();
+            while display.attached() && clock::elapsed_ms(ended) < 3000.0 {
+                std::thread::sleep(core::time::Duration::from_millis(20));
+            }
+            let gone_ms = clock::elapsed_ms(ended);
+            println!(
+                "round {round}: ended after a publish, the output gone in {gone_ms:.0} ms, \
+                 stranded so far {stranded}, nothing queued so far {refused}"
+            );
+            assert!(!display.attached(), "the output outlived the driver");
+            if let Some(restart) = restart.as_mut() {
+                let _ = restart.wait();
+            }
+            drop(load);
+            drop(display);
+            drop(encoder);
+            drop(device);
+            finished.store(true, Ordering::Relaxed);
+            let _ = watchdog.join();
+        }
+        assert_eq!(
+            stranded, 0,
+            "a conversion was stranded behind the ended driver's fence"
+        );
+    }
+
+    /// **The comparison the host's default is decided by, offline**: a monitor
+    /// of the driver plugged by this test, a load presenting on it, and the
+    /// display read in interleaved blocks through the system's duplication
+    /// and straight from the driver; per picture, its composition to its
+    /// conversion done on the device -- the conversion's own fence, waited on
+    /// the processor -- and the conversion's time on the device. Run as the
+    /// system account in the console session: `LOWLAT_LOAD` is the load's
+    /// command line, `{display}` replaced by the output's name;
+    /// `LOWLAT_MODE` (2560x1440@120), `LOWLAT_BLOCK` pictures a block (600),
+    /// `LOWLAT_ROUNDS` (3).
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU, a load and the system account"]
+    fn the_direct_frame_against_the_duplication() {
+        use lowlat_drivers::d3d11::Event;
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let number = |key: &str, default: usize| {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let (block, rounds) = (number("LOWLAT_BLOCK", 600), number("LOWLAT_ROUNDS", 3));
+        let mode = std::env::var("LOWLAT_MODE")
+            .ok()
+            .and_then(|text| {
+                let (size, hz) = text.split_once('@')?;
+                let (width, height) = size.split_once('x')?;
+                Some(Mode::new(
+                    width.parse().ok()?,
+                    height.parse().ok()?,
+                    hz.parse().ok()?,
+                ))
+            })
+            .unwrap_or(Mode::new(2560, 1440, 120));
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(mode, Lifetime::Bound, false, None)
+            .expect("a monitor");
+        println!("slot {} {} at {}", monitor.slot, monitor.name, monitor.mode);
+        let _load = Load::on(&monitor.name);
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        println!("{width}x{height}, {hz} a second");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width,
+                height,
+                fps: hz.max(1),
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        let fence = device.fence(0).expect("a fence");
+        let event = Event::new().expect("an event");
+        let mut signalled = 0u64;
+        // Composition to the conversion done per source, every picture kept;
+        // the pictures converted again.
+        let mut done: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut again = 0u64;
+        for round in 0..rounds {
+            for direct in [false, true] {
+                let mut display = if direct {
+                    Display::open_direct(
+                        &device,
+                        &output.name,
+                        Layout::Nv12,
+                        (width, height),
+                        &encoder,
+                        monitor.slot,
+                    )
+                } else {
+                    Display::open(
+                        &device,
+                        &output.name,
+                        Layout::Nv12,
+                        (width, height),
+                        &encoder,
+                    )
+                }
+                .expect("the display");
+                let source = usize::from(direct);
+                let began = Time::now();
+                let mut taken = 0;
+                while taken < block && clock::elapsed_ms(began) < 30_000.0 {
+                    if display.wait_present(20) != Some(true) {
+                        continue;
+                    }
+                    display.acquire().expect("an acquire");
+                    let Some(got) = display.converted().expect("the conversion") else {
+                        continue;
+                    };
+                    signalled += 1;
+                    device.signal(&fence, signalled).expect("a signal");
+                    fence.notify_at(signalled, &event).expect("an event");
+                    assert!(
+                        event.wait(core::time::Duration::from_millis(200)),
+                        "a conversion did not finish"
+                    );
+                    let total = got.composed_before_ms.unwrap_or(0.0) + clock::elapsed_ms(got.at);
+                    // The first pictures of a block include the source's own
+                    // start: left out.
+                    if taken >= 30 {
+                        done[source].push(total);
+                    }
+                    taken += 1;
+                }
+                // The device's own clock for the conversion, its last span
+                // read once the device has passed it.
+                let _ = display.timing.read(&device);
+                let gpu = display.timing.converting.percentiles();
+                if let Some(direct) = &display.direct {
+                    again += direct.again;
+                }
+                println!(
+                    "round {round} {}: {taken} pictures in {:.0} ms, the conversion on the device \
+                     p50/p95 {:.3}/{:.3} ms",
+                    if direct { "direct" } else { "duplication" },
+                    clock::elapsed_ms(began),
+                    gpu.p50,
+                    gpu.p95
+                );
+            }
+        }
+        let rank = |sorted: &[f64], fraction: f64| {
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "an index into the samples"
+            )]
+            let at = ((fraction * sorted.len() as f64).ceil() as usize).saturating_sub(1);
+            sorted.get(at).copied().unwrap_or(0.0)
+        };
+        for (source, name) in [(0, "duplication"), (1, "direct")] {
+            let mut sorted = done[source].clone();
+            sorted.sort_unstable_by(f64::total_cmp);
+            println!(
+                "{name}: composition to the conversion done ms p50/p95/p99/max \
+                 {:.3}/{:.3}/{:.3}/{:.3} over {} pictures",
+                rank(&sorted, 0.50),
+                rank(&sorted, 0.95),
+                rank(&sorted, 0.99),
+                sorted.last().copied().unwrap_or(0.0),
+                sorted.len()
+            );
+        }
+        println!("direct: {again} converted again");
     }
 
     /// **An absolute position lands on the pixel it names, on every output

@@ -40,6 +40,12 @@ lowlat-vdd-ctl.workspace = true
 # The allocation counter behind the per-report path's assertion.
 lowlat-common = { workspace = true, features = ["alloc-counter"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+# Ending the display driver's process mid-stream, in the hardware test that
+# checks a reader is stranded by nothing. Already in the graph under the
+# controller.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
 

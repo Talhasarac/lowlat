@@ -2,7 +2,8 @@
 //! pictures (docs/11-drivers.md sections 1.6 to 1.8).
 //!
 //! The worker sets the device first and does the rest after, takes every
-//! picture and finishes it at once, and deletes the swapchain on every way
+//! picture, shares and publishes it where its monitor's frames were asked for
+//! (`frames`), finishes it at once, and deletes the swapchain on every way
 //! out. **Its stop is immediate**: the system cannot depart a monitor while a
 //! picture is held, so the wait for the next picture also waits on the stop.
 //! A swapchain's deletion may call the unassignment back on another thread
@@ -35,6 +36,7 @@ use crate::ffi::{
     idd_swapchain_finished_processing_frame, idd_swapchain_release_and_acquire_buffer,
     idd_swapchain_set_device, nt_success, size_of, wdf_object_delete,
 };
+use crate::frames::Sharing;
 use crate::monitor::{self, Handle, Stats, status_word};
 
 /// The largest pointer the wire carries a picture of, a side.
@@ -205,6 +207,17 @@ impl Run {
 
     fn frames(&self, mut cursor: Option<&mut Cursor>) {
         let slot = self.slot;
+        // Ends before the swapchain's deletion below: its handles close first.
+        let mut sharing = Sharing::new(
+            slot,
+            self.stats.render_luid.load(Ordering::Relaxed),
+            monitor::committed_refresh(slot),
+            &self.device,
+        );
+        // The last picture's surface and what it was, held until the next
+        // acquire -- as long as it stays the driver's -- so a page asked for
+        // while the desktop is still is given the picture on the display.
+        let mut held: Option<(Com<IUnknown>, u32, bool)> = None;
         loop {
             let mut acquired = IDARG_OUT_RELEASEANDACQUIREBUFFER::default();
             // SAFETY: the swapchain this worker owns.
@@ -233,6 +246,10 @@ impl Run {
                     }
                     return;
                 }
+                sharing.catch_up(
+                    held.as_ref()
+                        .map(|(surface, frame, protected)| (surface.as_ptr(), *frame, *protected)),
+                );
                 continue;
             }
             if hr == DXGI_ERROR_ACCESS_LOST {
@@ -246,10 +263,17 @@ impl Run {
                 return;
             }
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
-            // The surface's reference is the driver's to release. The surface
-            // stays the driver's until the next acquire.
+            let frame = acquired.MetaData.PresentationFrameNumber;
+            let protected = acquired.MetaData.HwProtectedSurface != 0;
+            // The surface's reference is the driver's to release, and the
+            // surface stays the driver's until the next acquire: kept until
+            // then, the last one let go here.
             // SAFETY: the reference the acquire handed over.
-            drop(unsafe { Com::<IUnknown>::from_raw(acquired.MetaData.pSurface.cast()) });
+            let surface = unsafe { Com::<IUnknown>::from_raw(acquired.MetaData.pSurface.cast()) };
+            if let Some(surface) = &surface {
+                sharing.picture(surface.as_ptr(), frame, protected);
+            }
+            held = surface.map(|surface| (surface, frame, protected));
             // SAFETY: the swapchain this worker owns.
             let hr = unsafe { idd_swapchain_finished_processing_frame(self.swapchain.0) };
             if hr < 0 {

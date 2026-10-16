@@ -2,8 +2,8 @@
 
 use lowlat_vdd_proto::CONTROL_INTERFACE;
 use lowlat_vdd_proto::control::{
-    IOCTL_LIST, IOCTL_PLUG, IOCTL_RELOAD, IOCTL_REPLUG, IOCTL_UNPLUG, IOCTL_VERSION, List, Plug,
-    Plugged, Replug, Unplug, VERSION, Version,
+    FrameChannel, Frames, IOCTL_FRAMES, IOCTL_LIST, IOCTL_PLUG, IOCTL_RELOAD, IOCTL_REPLUG,
+    IOCTL_UNPLUG, IOCTL_VERSION, List, Plug, Plugged, Replug, Unplug, VERSION, Version,
 };
 use lowlat_vdd_proto::modes::Mode;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -191,5 +191,17 @@ impl Device {
     pub(crate) fn reload(&self) -> Result<(), Error> {
         self.ask(IOCTL_RELOAD, &[], &mut [])?;
         Ok(())
+    }
+
+    pub(crate) fn frames(&self, slot: u8) -> Result<FrameChannel, Error> {
+        let mut input = [0u8; Frames::LEN];
+        Frames { slot }
+            .encode(&mut input)
+            .map_err(|_| Error::Argument)?;
+        let mut out = [0u8; FrameChannel::LEN];
+        let len = self
+            .ask(IOCTL_FRAMES, &input, &mut out)
+            .map_err(|e| Self::monitor_error(e, false))?;
+        FrameChannel::decode(out.get(..len).unwrap_or(&[])).map_err(|_| Error::Version(VERSION))
     }
 }
