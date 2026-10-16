@@ -3,6 +3,49 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.3 built: the direct frame
+
+### Added
+- **The frame page** ([11 §1.6](11-drivers.md)): one page per monitor, written once for the
+  display driver and its readers -- the swapchain's generation, size, refresh, fence and buffers,
+  and the latest picture -- under a sequence lock, every word an atomic, model-checked. The
+  control interface's request for a monitor's frames, answered to any caller the device admits;
+  the frame channel carries a version of its own, the control protocol staying at 2.
+- **The driver's half**: the page made at the first request and kept for the driver's life; per
+  swapchain each buffer shared once by an NT handle, read-only, and a fence of its device
+  signalled after each acquire; each acquired buffer kept until the next acquire, so a reader that
+  asks while the desktop is still is given the picture on the display.
+- **The host's half**: the page taken out of the driver's process, which is checked to be the
+  one that answered; the host's own display read straight from it as a second Windows source
+  ([05 §2](05-host.md)), its buffers opened on the stream's device once each, the latest picture
+  converted behind the driver's fence and converted again when the system may have written its
+  buffer meanwhile, its refresh read with each swapchain. Run offline until W3.4 gives it a
+  pointer.
+- Hardware tests, as the system account: the source converting and encoding at the display's
+  pace; a refresh changed alone settling the rate again; a late reader caught and a still
+  desktop's last picture kept; the driver's process ending mid-stream; the comparison with the
+  duplication.
+
+### Changed
+- The display driver's setup no longer asks a priority it never got: the setting chooses a shared
+  pool, and a driver with a process of its own has none ([11 §1.1](11-drivers.md)).
+
+### Measured
+- Composition to the conversion done, offline, the direct frame against the duplication, ms at
+  p50/p95/p99/max: 2560x1440 at 120, 0.608/0.767/0.820/1.326 against 0.661/0.833/0.870/0.924;
+  3840x2160 at 120, 0.841/0.997/1.053/1.277 against 0.943/1.139/1.189/1.462; 1920x1080 at 60
+  under a 120 Hz clock, 1.229/4.904/5.203/6.282 against 1.663/4.144/5.531/6.120.
+
+### Found
+- A restart of the driver's device while a handle on it was open was refused, and left every later
+  restart, and so every update, waiting for a reboot ([11 §1.8](11-drivers.md)). A driver whose
+  process ends is started again about five times in a few minutes, not a sixth.
+
+### Owed
+- After a restart of the machine: the driver restarted twenty times mid-stream, the still
+  desktop's picture broken on purpose in the driver, and the frame thread's priority measured
+  with and without under load.
+
 ## 2026-10-16 - W3.3 reviewed: the driver never waits for the host
 
 ### Decided

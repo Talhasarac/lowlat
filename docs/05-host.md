@@ -98,6 +98,21 @@ Rules:
   mode's period there instead, a ceiling of 60 or 90 took each picture 4.6 to 6.2 ms after its
   composition at the median, where a panel whose mode is its clock takes it within a
   millisecond.
+- **The host's own display can be read straight from its driver** (*added 2026-10-16*,
+  [11 §1.6](11-drivers.md), [impl-plan-windows.md](impl-plan-windows.md) W3.3), the system's
+  own buffers converted as they are, with no duplication between: a second Windows source behind
+  the same names, the host's own display's from W3.4 and the duplication's until then. Its
+  present is a picture the driver published and this host has not taken; a refresh past the
+  deadline with none is a present of the same picture, as the duplication's wait has it, but only
+  once there is a picture to be the same as -- before the first, the wait is for it. A picture's
+  time is the driver's acquire. Its mode's refresh comes with each of the driver's swapchains and
+  is read with each picture, so a refresh changed alone settles the rate again, as the rule above
+  has it. **The latest picture is always taken**, and it is never the same
+  as the last unless its frame number is the last one taken: a still desktop's marker repeats the
+  frame number in another buffer and is the only way left to a picture taken too late. After the
+  conversion is queued the host checks that the driver has not acquired as many newer pictures as
+  the swapchain has buffers, less one -- the system writes a buffer again only then -- and
+  converts the latest instead when it has, counted.
 - **Dirty-rectangle awareness is deferred.** It is a real optimization for desktop work and it
   interacts with the reference chain in ways that need measurement first.
 

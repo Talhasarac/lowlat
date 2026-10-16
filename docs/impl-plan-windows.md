@@ -1144,6 +1144,38 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   restarted mid-stream, twenty times each, the host never stuck behind its wait on the fence; two
   readers at once; a user's process given nothing it can use. No release, bound or claim exists to
   break.
+  *Built 2026-10-16*, not ticked: three checks wait on a restart of the machine. The page is
+  written once for both sides, its layout and its sequence lock, model-checked over every
+  interleaving of a writer publishing twice and a reader, and shown to fail with the reader's
+  second look or the writer's release removed. The driver makes a monitor's page at the first
+  request for its frames and keeps it for its life; per swapchain it shares each buffer once and
+  signals a fence of its device after each acquire, then publishes. **It keeps each acquired
+  buffer until the next acquire**, so a page asked for while the desktop is still is given the
+  picture on the display -- missing at first, when a reader that asked after the desktop went
+  still waited for its next change. The request is answered to anyone the device admits: an
+  ordinary user's process was answered and refused the page, the system account given it. The
+  host's display reads the page as a second source, run by hardware tests and the comparison
+  alone (the decision above). Found at the build as well: **a reader's same picture is its own
+  last frame**, never the driver's mark of a repeat; and, by reading, **the refresh comes with
+  each swapchain**: taken once at the open, the rate stays at 120 after the monitor is put at 60,
+  as a test shows with the read taken out, where it now settles at 60 within a tenth of a
+  second. Checked on the development machine, as the
+  system account: the first picture at once on a still desktop; a reader stalled 30 ms after
+  queuing each conversion caught 20 times in 20 and converted again, and never on time; a reader
+  that stopped taking during a burst converting the still desktop's last picture; the driver's
+  process ended right after a publish five times, each conversion queued behind its fence
+  finished, the output gone in 85 to 97 ms and the driver back in 120 to 300 ms. **The comparison,
+  offline**, a load presenting on the display, interleaved blocks of 600, composition to the
+  conversion done in ms at p50/p95/p99/max: at 2560x1440 at 120 the duplication
+  0.661/0.833/0.870/0.924 and the direct frame 0.608/0.767/0.820/1.326; at 3840x2160 at 120,
+  0.943/1.139/1.189/1.462 and 0.841/0.997/1.053/1.277; at 1920x1080 at 60 under the 120 Hz clock,
+  1.663/4.144/5.531/6.120 and 1.229/4.904/5.203/6.282, both tails unexplained; none converted
+  again. The duplication's own copy delays the conversion's start by about 0.05 ms at 1440p and
+  0.1 at 4K. **Owed, after a restart of the machine**: the driver restarted twenty times
+  mid-stream -- the first restart, made while the test held a handle on the device, was refused
+  and left the device waiting for a reboot ([11 §1.8](11-drivers.md)) -- the still desktop's
+  picture broken on purpose in the driver, and the frame thread's priority measured with and
+  without under load. The 240 Hz leg is the gate's.
 - [ ] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
   driver, position and show state as in W2. Checked by each kind of shape, one larger than the
   wire's 256, and the visibility while the system draws the pointer itself.
@@ -1187,6 +1219,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.3 built: the frame page written once and model-checked; the driver's half -- a
+  page per monitor for its life, each buffer shared, the fence signalled, the last picture kept
+  -- and the host's display's second source, offline until W3.4; the comparison offline at 1440p
+  and 4K at 120 and 1080p at 60; a restart refused with a handle open leaves the device waiting
+  for a reboot; three checks owed after one.
 - 2026-10-16: W3.3 reviewed: the driver never waits for the host -- a probe found the system's
   buffer shared with no keyed mutex and read across processes, three buffers in turn, and a
   picture intact for about three refreshes, so the hold, the release fence and the claim go; the

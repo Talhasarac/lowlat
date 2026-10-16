@@ -153,8 +153,18 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
   it should be shown, which lies ahead of the hand-over.
 - A frame repeating the last frame number is no new picture, and the system's marker for a still
   desktop is a present of the same picture; after it the system sends nothing, and the host's own
-  clock keeps the stream's pace.
-- Each acquired buffer carries a reference the driver releases at its next acquire.
+  clock keeps the stream's pace. *Amended 2026-10-16, at W3.3's build:* **the same picture is the
+  one the reader took last**, by its own frame number: the marker repeats the frame number in
+  another buffer, and to a reader that never took the picture it repeats, it is that picture.
+- Each acquired buffer carries a reference the driver releases at its next acquire. *Amended
+  2026-10-16, at W3.3's build:* **the driver keeps it until then**, as long as the buffer stays
+  its own, so a page asked for while the desktop is still is given the picture on the display:
+  the system hands over nothing new, and the duplication's first picture is the desktop too.
+- *Added 2026-10-16, at W3.3's build:* **a monitor's page lives as long as the driver**, made at
+  the first request for its frames: a replug, a mode and every new swapchain keep it, each a new
+  generation in it. Any number of readers may take it and nothing in the driver knows how many;
+  the event a publish sets wakes one waiter, so a second reader at once can learn of a picture a
+  refresh late, at its wait's own bound.
 
 *Rewritten 2026-10-16, at W3.3's review.* The driver first held each buffer, acquiring no other,
 until the host released it or a bound inside a frame period passed. Measured, the system's own
@@ -195,7 +205,13 @@ into targets of its own, by measurement.
 - A display switched off takes the monitor's path out of the topology; the host keeps the display
   awake while it captures.
 - An update of the driver: the host closes its handle when the driver asks to be removed, and
-  opens it again when the driver is back.
+  opens it again when the driver is back. *Amended 2026-10-16, at W3.3's build:* **this is not
+  optional.** A restart of the device while a handle on it stayed open was refused, and from then
+  on the system answered every restart, and so every update, with a reboot still to come, nothing
+  open any more. And a driver whose process ends is started again by the system about five times
+  in a few minutes, not a sixth: the device stays failed until it is restarted. Its pictures'
+  reader is stranded by neither, measured: a conversion queued behind the fence of a picture
+  published just before the driver's process ended finished every time.
 - A GPU reset reassigns every swapchain; no monitor departs during one.
 
 ### §1.9 The controller, and people
@@ -235,6 +251,10 @@ sized at an owner's join and streamed through the system's duplication of it. Th
 pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built. *The hand-over probed
 2026-10-16, at W3.3's review*: the system's buffer shared, opened and read by the system account's
 own device in another process, three buffers in turn, a picture intact about three refreshes.
+**The hand-over is built and checked offline** (W3.3, 2026-10-16): the page, its publication
+model-checked, the host's display reading it as a second source, the freshness check and a
+still desktop's picture each shown working and broken, the driver's end mid-stream stranding
+nothing; the host's display streams it from W3.4.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.
