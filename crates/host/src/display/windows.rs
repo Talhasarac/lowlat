@@ -1541,10 +1541,11 @@ impl Display {
     /// [`Display::wait_present`] for the host's own display read from its
     /// driver: a picture published that has not been taken is a present; a
     /// refresh past the deadline with none is a present of the same picture,
-    /// as the duplication's wait has it -- **once there is a picture to be the
-    /// same as**: before the first, the wait is for it, as the duplication's
-    /// first acquire hands over the desktop. The driver's process ending is a
-    /// present, so the tick runs and the acquire finds out.
+    /// as the duplication's wait has it -- **before the first picture too**,
+    /// so the wait always answers within a refresh: unbounded, a stream built
+    /// before its display had a picture (plugged again a moment before, or
+    /// asleep) found no present at its start, was paced by the clock instead,
+    /// and spun, each tick that took nothing waiting again at once.
     fn wait_direct(&mut self, timeout_ms: i32) -> Option<bool> {
         let period = self.period_ms;
         let direct = self.direct.as_mut()?;
@@ -1553,16 +1554,11 @@ impl Display {
             direct.pending = true;
             return Some(true);
         }
-        let first = direct.taken.is_none();
         let began = *self.waiting_since.get_or_insert_with(Time::now);
         let called = Time::now();
         loop {
             let now = Time::now();
-            let bound = if first {
-                f64::INFINITY
-            } else {
-                period - clock::diff_ms(began, now)
-            };
+            let bound = period - clock::diff_ms(began, now);
             if bound <= 0.0 {
                 return Some(true);
             }
@@ -1582,7 +1578,13 @@ impl Display {
                     return Some(true);
                 }
                 Waited::Published | Waited::TimedOut => {}
-                Waited::Ended => return Some(true),
+                // **The driver's process ended: nothing will be published,
+                // and the process answers every wait at once.** The wait runs
+                // to its bound as a still desktop's does -- answering at once
+                // spun the loop until the output's departure rebuilt it.
+                Waited::Ended => {
+                    std::thread::sleep(core::time::Duration::from_millis(u64::from(wait)))
+                }
             }
         }
     }
@@ -1673,6 +1675,29 @@ impl Display {
             }
         }
         duplication::cursor()
+    }
+
+    /// Wake the display with one pointer move of no distance
+    /// (docs/05-host.md section 2), from the desktop that takes the input:
+    /// the system inserts it from nowhere else.
+    pub fn wake(&mut self) {
+        if !duplication::wake() {
+            match InputDesktop::attach() {
+                Ok(desktop) => self.desktop = Some(desktop),
+                Err(error) => {
+                    lowlat_common::log_warn!(
+                        "display: the input desktop could not be attached to wake {}, {error}",
+                        self.output.name
+                    );
+                    return;
+                }
+            }
+            if !duplication::wake() {
+                lowlat_common::log_warn!("display: {} could not be woken", self.output.name);
+                return;
+            }
+        }
+        lowlat_common::log_info!("display: {} woken as the stream starts", self.output.name);
     }
 
     /// Whether something holds the pointer's motion, as of the last look at
@@ -2176,7 +2201,16 @@ mod tests {
             display.acquire().expect("an acquire");
             match display.converted().expect("the conversion") {
                 Some(got) if got.changed => changed += 1,
-                _ => unchanged += 1,
+                // A present before any picture is one of the same picture, so
+                // the first picture's coming at once is a conversion within
+                // the first ticks.
+                _ => {
+                    assert!(
+                        changed > 0 || clock::elapsed_ms(began) < 150.0,
+                        "the first picture did not come within 150 ms"
+                    );
+                    unchanged += 1;
+                }
             }
             if let Some(input) = display.presented() {
                 encoder
@@ -2324,7 +2358,16 @@ mod tests {
             display.acquire().expect("an acquire");
             match display.converted().expect("the conversion") {
                 Some(got) if got.changed => changed += 1,
-                _ => unchanged += 1,
+                // A present before any picture is one of the same picture, so
+                // the first picture's coming at once is a conversion within
+                // the first ticks.
+                _ => {
+                    assert!(
+                        changed > 0 || clock::elapsed_ms(began) < 150.0,
+                        "the first picture did not come within 150 ms"
+                    );
+                    unchanged += 1;
+                }
             }
             if let Some(input) = display.presented() {
                 encoder
@@ -2729,15 +2772,21 @@ mod tests {
         };
         let began = Time::now();
         let first = display.wait_present(500);
+        // A present before any picture is one of the same picture: the
+        // picture is what the acquire converts.
+        let pictured = first == Some(true)
+            && display.acquire().is_ok()
+            && display.converted().is_ok_and(|got| got.is_some());
         println!(
-            "slot {} {} read through the {source}, first present {first:?} after {:.1} ms",
+            "slot {} {} read through the {source}, first present {first:?} after {:.1} ms, \
+             a picture {pictured}",
             monitor.slot,
             monitor.name,
             clock::elapsed_ms(began)
         );
         publish_own(None);
         assert_eq!(source, expect);
-        assert_eq!(first, Some(true), "nothing presented");
+        assert!(pictured, "nothing presented");
     }
 
     /// A window over a whole output whose pointer is the test's own: made and
@@ -3478,19 +3527,12 @@ mod tests {
                     Err(error) => panic!("the driver did not come back: {error:?}"),
                 }
             };
-            // **A restart waits for every handle open on the device**, which
-            // the host is to close when the driver asks to be removed
-            // (docs/impl-plan-windows.md W3.5) and does not yet: so for a
-            // restart the monitor is kept and the controller's handle closed
-            // before it.
-            let restarting = std::env::var("LOWLAT_RESTART").is_ok();
-            let lifetime = if restarting {
-                Lifetime::Kept
-            } else {
-                Lifetime::Bound
-            };
+            // **A restart waits for every handle open on the device**, and
+            // the controller's closes itself as the driver is asked to be
+            // removed (docs/11-drivers.md section 1.8): so the monitor is
+            // bound and its handle held through the restart, as a host's is.
             let monitor = loop {
-                match controller.plug(Mode::new(1920, 1080, 120), lifetime, false, None) {
+                match controller.plug(Mode::new(1920, 1080, 120), Lifetime::Bound, false, None) {
                     Ok(monitor) => break monitor,
                     Err(_) if clock::elapsed_ms(began) < 10_000.0 => {
                         std::thread::sleep(core::time::Duration::from_millis(100));
@@ -3498,9 +3540,6 @@ mod tests {
                     Err(error) => panic!("no monitor: {error:?}"),
                 }
             };
-            if restarting {
-                drop(controller);
-            }
             println!(
                 "round {round}: the driver back in {:.0} ms",
                 clock::elapsed_ms(began)

@@ -45,6 +45,9 @@ use windows_sys::Win32::System::StationsAndDesktops::{
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CURSOR_SHOWING, CURSOR_SUPPRESSED, CURSORINFO, GetCursorInfo,
 };
@@ -177,6 +180,36 @@ impl Drop for Awake {
         // SAFETY: as above; continuous alone clears what the hold set.
         unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
     }
+}
+
+/// Wake the display with one pointer move of no distance. **Holding it on
+/// ([`Awake`]) does not wake one that slept**, which gives no pictures until
+/// input wakes it: measured, held asleep for eight seconds, woken by this in
+/// 170 ms. Answers whether the system took the move, which it does from the
+/// input desktop alone.
+pub fn wake() -> bool {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    // SAFETY: one live input of the size stated.
+    let inserted = unsafe {
+        SendInput(
+            1,
+            &raw const input,
+            i32::try_from(size_of::<INPUT>()).unwrap_or(0),
+        )
+    };
+    inserted == 1
 }
 
 /// The desktop that receives input, which this thread is attached to.
