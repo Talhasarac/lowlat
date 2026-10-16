@@ -12,6 +12,10 @@
 //! or not. The system writes a buffer again only once the driver has
 //! acquired as many newer pictures as the swapchain has buffers, less one,
 //! which is the reader's to check.
+//!
+//! **The pointer goes in the same section** (section 1.7): what the system
+//! last said of the hardware cursor, published by the same worker when it
+//! changes, a new shape's pixels before the state that names them.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -30,7 +34,9 @@ use lowlat_drivers::ffi::d3d11_guids::{
 use lowlat_drivers::vcall;
 use lowlat_vdd_proto::MAX_MONITORS;
 use lowlat_vdd_proto::control::FrameChannel;
-use lowlat_vdd_proto::frames::{self, MAX_BUFFERS, PAGE, Picture, Snapshot};
+use lowlat_vdd_proto::frames::{
+    self, MAX_BUFFERS, Picture, Pointer, SECTION_WORDS, SIZE, Snapshot,
+};
 use windows_sys::Win32::Foundation::{
     CloseHandle, FILETIME, GENERIC_ALL, HANDLE, INVALID_HANDLE_VALUE,
 };
@@ -94,9 +100,9 @@ fn page_of(slot: usize) -> Option<&'static [AtomicU64]> {
     if address == 0 {
         return None;
     }
-    // SAFETY: a view of PAGE bytes, page-aligned, mapped and never unmapped;
-    // only atomics touch it.
-    Some(unsafe { core::slice::from_raw_parts(address as *const AtomicU64, PAGE / 8) })
+    // SAFETY: a view of the whole section, page-aligned, mapped and never
+    // unmapped; only atomics touch it.
+    Some(unsafe { core::slice::from_raw_parts(address as *const AtomicU64, SECTION_WORDS) })
 }
 
 /// Answer a request for `slot`'s frames: its page, made at the first.
@@ -108,7 +114,7 @@ pub(crate) fn request(slot: usize) -> Result<FrameChannel, NTSTATUS> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let section = sections.get_mut(slot).ok_or(STATUS_INVALID_PARAMETER)?;
     if *section == 0 {
-        let size = u32::try_from(PAGE).map_err(|_| STATUS_INSUFFICIENT_RESOURCES)?;
+        let size = u32::try_from(SIZE).map_err(|_| STATUS_INSUFFICIENT_RESOURCES)?;
         // SAFETY: a section backed by the page file, no name, no security
         // attributes: what reaches it is a handle taken from this process.
         let made = unsafe {
@@ -126,7 +132,7 @@ pub(crate) fn request(slot: usize) -> Result<FrameChannel, NTSTATUS> {
             return Err(STATUS_INSUFFICIENT_RESOURCES);
         }
         // SAFETY: the section just made, mapped whole.
-        let view = unsafe { MapViewOfFile(made, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, PAGE) };
+        let view = unsafe { MapViewOfFile(made, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, SIZE) };
         // SAFETY: no name, no security attributes; reset by each wait it ends.
         let event = unsafe { CreateEventW(core::ptr::null(), 0, 0, core::ptr::null()) };
         if view.Value.is_null() || event.is_null() {
@@ -141,7 +147,8 @@ pub(crate) fn request(slot: usize) -> Result<FrameChannel, NTSTATUS> {
             return Err(STATUS_INSUFFICIENT_RESOURCES);
         }
         // SAFETY: as in `page_of`, before any other thread has the address.
-        let page = unsafe { core::slice::from_raw_parts(view.Value as *const AtomicU64, PAGE / 8) };
+        let page =
+            unsafe { core::slice::from_raw_parts(view.Value as *const AtomicU64, SECTION_WORDS) };
         frames::prepare(page);
         frames::publish(
             page,
@@ -162,7 +169,7 @@ pub(crate) fn request(slot: usize) -> Result<FrameChannel, NTSTATUS> {
         version: frames::VERSION,
         // SAFETY: no precondition.
         process: unsafe { GetCurrentProcessId() },
-        size: u32::try_from(PAGE).unwrap_or(0),
+        size: u32::try_from(SIZE).unwrap_or(0),
         started: started(),
         section: *section as u64,
     })
@@ -447,5 +454,46 @@ impl Drop for Sharing {
             self.snapshot.pictures,
             self.snapshot.gaps
         );
+    }
+}
+
+/// The pointer's half of a monitor's section, on its swapchain worker's
+/// thread: what the system last said of the pointer, published when it
+/// changes, and whole when the page has appeared since.
+pub(crate) struct PointerShare {
+    slot: usize,
+    page: Option<&'static [AtomicU64]>,
+    /// What the page says now; nothing before this has said anything.
+    said: Option<Pointer>,
+}
+
+impl PointerShare {
+    pub(crate) fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            page: None,
+            said: None,
+        }
+    }
+
+    /// Keep the page at `pointer`, `shape` the pixels of the shape it names.
+    /// **A shape's pixels go before the state that names them**, so a reader
+    /// that sees a new number finds them; a state that names the same shape
+    /// leaves the pixels as they are.
+    pub(crate) fn keep(&mut self, pointer: &Pointer, shape: &[u8]) {
+        if self.page.is_none() {
+            self.page = page_of(self.slot);
+        }
+        let Some(page) = self.page else {
+            return;
+        };
+        if self.said.as_ref() == Some(pointer) {
+            return;
+        }
+        if pointer.shape != 0 && self.said.is_none_or(|said| said.shape != pointer.shape) {
+            frames::publish_shape(page, pointer.shape, shape);
+        }
+        frames::publish_pointer(page, pointer);
+        self.said = Some(*pointer);
     }
 }

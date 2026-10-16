@@ -11,7 +11,7 @@
 use core::sync::atomic::AtomicU64;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
-use lowlat_vdd_proto::frames::{self, PAGE, Snapshot};
+use lowlat_vdd_proto::frames::{self, Pointer, SECTION_WORDS, SIZE, Snapshot};
 use windows_sys::Win32::Foundation::{
     DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, FILETIME, GetLastError, HANDLE,
     WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -52,9 +52,9 @@ impl Drop for View {
 
 impl View {
     fn words(&self) -> &[AtomicU64] {
-        // SAFETY: a view of PAGE bytes, page-aligned, mapped for this view's
-        // life and read through atomics alone.
-        unsafe { core::slice::from_raw_parts(self.0 as *const AtomicU64, PAGE / 8) }
+        // SAFETY: a view of the whole section, page-aligned, mapped for this
+        // view's life and read through atomics alone.
+        unsafe { core::slice::from_raw_parts(self.0 as *const AtomicU64, SECTION_WORDS) }
     }
 }
 
@@ -137,7 +137,7 @@ impl FramePage {
     /// Ask the driver for slot `slot`'s page and take it.
     pub fn open(slot: u8) -> Result<Self, Error> {
         let answer = Device::open()?.frames(slot)?;
-        if answer.version != frames::VERSION {
+        if answer.version != frames::VERSION || usize::try_from(answer.size).ok() != Some(SIZE) {
             return Err(Error::Version(answer.version));
         }
         // SAFETY: no handle passed in; the identifier is checked by the
@@ -161,7 +161,7 @@ impl FramePage {
         }
         let section = take(process.as_raw_handle(), answer.section, FILE_MAP_READ)?;
         // SAFETY: a section handle with the right to map it for reading.
-        let mapped = unsafe { MapViewOfFile(section.as_raw_handle(), FILE_MAP_READ, 0, 0, PAGE) };
+        let mapped = unsafe { MapViewOfFile(section.as_raw_handle(), FILE_MAP_READ, 0, 0, SIZE) };
         if mapped.Value.is_null() {
             return Err(last_error());
         }
@@ -180,6 +180,18 @@ impl FramePage {
     /// reader's patience or wrote what cannot be.
     pub fn read(&self) -> Option<Snapshot> {
         frames::read(self.view.words())
+    }
+
+    /// The pointer as the driver last said it, or none before it has said
+    /// anything (docs/11-drivers.md section 1.7).
+    pub fn pointer(&self) -> Option<Pointer> {
+        frames::read_pointer(self.view.words())
+    }
+
+    /// The pixels of the shape numbered `shape` into `into`: how many bytes,
+    /// or none when the page holds another shape's by now.
+    pub fn shape(&self, shape: u32, into: &mut [u8]) -> Option<usize> {
+        frames::read_shape(self.view.words(), shape, into)
     }
 
     /// A handle the page names -- a buffer or the fence -- taken into this

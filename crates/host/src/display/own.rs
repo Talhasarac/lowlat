@@ -65,7 +65,7 @@ impl Own {
             }
         };
         if monitor.active && !monitor.name.is_empty() {
-            publish_own(Some(&monitor.name));
+            publish_own(Some((monitor.name.as_str(), slot)));
         }
         if monitor.active && monitor.mode == mode {
             return true;
@@ -78,7 +78,7 @@ impl Own {
                     if monitor.active { "shown" } else { "not shown" }
                 );
                 if !now.name.is_empty() {
-                    publish_own(Some(&now.name));
+                    publish_own(Some((now.name.as_str(), slot)));
                 }
                 self.refused = None;
                 true
@@ -123,7 +123,7 @@ impl Own {
                     );
                     self.slot = Some(slot);
                     if !monitor.name.is_empty() {
-                        publish_own(Some(&monitor.name));
+                        publish_own(Some((monitor.name.as_str(), slot)));
                     }
                     self.refused = None;
                     return true;

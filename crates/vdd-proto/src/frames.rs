@@ -21,6 +21,13 @@
 //! newer pictures as the swapchain has buffers, less one, so a reader checks
 //! [`Snapshot::overtaken`] after it has queued its read, and reads the latest
 //! instead when the picture it took was overtaken.
+//!
+//! **The pointer travels in the same section** (section 1.7): what the system
+//! last said of its hardware cursor over the monitor, in the page's own words
+//! under a sequence of its own, and the shape's pixels in the pages after it,
+//! under another, with the system's number for the shape. The driver writes a
+//! shape's pixels before the state that names it, so a reader that sees a new
+//! number in the state finds those pixels, or a newer shape's.
 
 // The crate takes no dependency, so the model checker's atomics are named
 // here rather than through the shared shim; nothing else of it is needed.
@@ -31,7 +38,7 @@ use loom::sync::atomic::{AtomicU64, Ordering, fence};
 
 /// The channel's own version, in its page and in the answer to a request for
 /// a monitor's frames; a reader refuses a page of another.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The page: one of the system's.
 pub const PAGE: usize = 4096;
@@ -73,6 +80,39 @@ pub const WORDS: usize = W_DATA + DATA;
 
 // The page holds every word this version uses.
 const _: () = assert!(WORDS * 8 <= PAGE);
+
+// The pointer's state: its sequence, then its words, in the page past the
+// snapshot's.
+const W_POINTER: usize = 64;
+const P_FLAGS: usize = 0;
+const P_SHAPE: usize = 1;
+const P_KIND: usize = 2;
+const P_SIZE: usize = 3;
+const P_PITCH: usize = 4;
+const P_HOT: usize = 5;
+/// The pointer's state's length in words.
+pub const POINTER_DATA: usize = 6;
+const _: () = assert!(WORDS <= W_POINTER && (W_POINTER + 1 + POINTER_DATA) * 8 <= PAGE);
+const CURSOR: u64 = 1;
+const VISIBLE: u64 = 2;
+
+/// The most a pointer's picture spans a side: the largest the wire carries.
+pub const POINTER_LIMIT: u32 = 256;
+/// The most bytes a shape's pixels take: four a pixel at the limit.
+pub const SHAPE_BYTES: usize = (POINTER_LIMIT * POINTER_LIMIT * 4) as usize;
+// The shape's pixels, from the second page: their sequence, the shape's
+// number and length, then the bytes eight to a word.
+const W_SHAPE: usize = PAGE / 8;
+const S_ID: usize = 0;
+const S_BYTES: usize = 1;
+const S_DATA: usize = 2;
+
+/// The section's size in bytes: the page, then the shape's, in whole pages.
+pub const SIZE: usize = (8 * (W_SHAPE + 1 + S_DATA + SHAPE_BYTES / 8)).div_ceil(PAGE) * PAGE;
+/// The section's length in words.
+pub const SECTION_WORDS: usize = SIZE / 8;
+// The section is whole pages and holds a shape at the limit after the page.
+const _: () = assert!(SIZE % PAGE == 0 && W_SHAPE + 1 + S_DATA + SHAPE_BYTES / 8 <= SECTION_WORDS);
 
 const REPEAT: u64 = 1;
 const PROTECTED: u64 = 2;
@@ -243,13 +283,126 @@ impl Snapshot {
     }
 }
 
-/// Prepare `page` before any reader can have it: its magic and version.
-/// False when the page is shorter than the channel's words.
-pub fn prepare(page: &[AtomicU64]) -> bool {
-    let (Some(magic), Some(version)) = (page.get(W_MAGIC), page.get(W_VERSION)) else {
+/// The two kinds of shape the system hands a display driver, four bytes a
+/// pixel each; it converts every monochrome pointer to the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeKind {
+    /// BGRA whose alpha says, for each pixel, opaque (0) or inverting the
+    /// screen beneath it (0xFF).
+    MaskedColour,
+    /// BGRA with alpha.
+    Alpha,
+}
+
+/// What the system last said of the pointer over the monitor, as the driver
+/// read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Pointer {
+    /// A hardware cursor is set up: without one the system draws the pointer
+    /// into the pictures.
+    pub cursor: bool,
+    /// The system shows the cursor: not while it hides it, nor while it draws
+    /// the pointer into the pictures itself.
+    pub visible: bool,
+    /// The system's number for the shape, moved each time a shape is set,
+    /// the same picture again included; zero before the first.
+    pub shape: u32,
+    /// The shape's kind; none before the first.
+    pub kind: Option<ShapeKind>,
+    pub width: u32,
+    pub height: u32,
+    /// Bytes from one row of the shape's pixels to the next.
+    pub pitch: u32,
+    /// Where in the shape the pointer points, from its top-left.
+    pub hot_x: u32,
+    pub hot_y: u32,
+}
+
+impl Pointer {
+    fn encode(&self) -> [u64; POINTER_DATA] {
+        let mut words = [0u64; POINTER_DATA];
+        let mut put = |at: usize, value: u64| {
+            if let Some(word) = words.get_mut(at) {
+                *word = value;
+            }
+        };
+        put(
+            P_FLAGS,
+            if self.cursor { CURSOR } else { 0 } | if self.visible { VISIBLE } else { 0 },
+        );
+        put(P_SHAPE, u64::from(self.shape));
+        put(
+            P_KIND,
+            match self.kind {
+                None => 0,
+                Some(ShapeKind::MaskedColour) => 1,
+                Some(ShapeKind::Alpha) => 2,
+            },
+        );
+        put(
+            P_SIZE,
+            (u64::from(self.width) << 32) | u64::from(self.height),
+        );
+        put(P_PITCH, u64::from(self.pitch));
+        put(P_HOT, (u64::from(self.hot_x) << 32) | u64::from(self.hot_y));
+        words
+    }
+
+    /// The pointer `words` describe, or none when they cannot be one: a kind
+    /// there is no such, a shape past the limit, or rows that would not fit
+    /// the section. **Read as hostile**: another process wrote it.
+    fn decode(words: &[u64; POINTER_DATA]) -> Option<Self> {
+        let get = |at: usize| words.get(at).copied().unwrap_or(0);
+        let half = |word: u64| {
+            (
+                u32::try_from(word >> 32).unwrap_or(0),
+                u32::try_from(word & 0xffff_ffff).unwrap_or(0),
+            )
+        };
+        let kind = match get(P_KIND) {
+            0 => None,
+            1 => Some(ShapeKind::MaskedColour),
+            2 => Some(ShapeKind::Alpha),
+            _ => return None,
+        };
+        let (width, height) = half(get(P_SIZE));
+        let pitch = u32::try_from(get(P_PITCH)).ok()?;
+        if width > POINTER_LIMIT
+            || height > POINTER_LIMIT
+            || u64::from(pitch) * u64::from(height) > SHAPE_BYTES as u64
+            || (kind.is_some() && u64::from(pitch) < u64::from(width) * 4)
+        {
+            return None;
+        }
+        let flags = get(P_FLAGS);
+        let (hot_x, hot_y) = half(get(P_HOT));
+        Some(Self {
+            cursor: flags & CURSOR != 0,
+            visible: flags & VISIBLE != 0,
+            shape: u32::try_from(get(P_SHAPE)).ok()?,
+            kind,
+            width,
+            height,
+            pitch,
+            hot_x,
+            hot_y,
+        })
+    }
+
+    /// The bytes the shape's pixels take: its rows at its pitch.
+    #[must_use]
+    pub fn shape_bytes(&self) -> usize {
+        usize::try_from(u64::from(self.pitch) * u64::from(self.height)).unwrap_or(usize::MAX)
+    }
+}
+
+/// Prepare `section` before any reader can have it: its magic and version.
+/// False when it is shorter than the channel's section.
+pub fn prepare(section: &[AtomicU64]) -> bool {
+    let (Some(magic), Some(version)) = (section.get(W_MAGIC), section.get(W_VERSION)) else {
         return false;
     };
-    if page.len() < WORDS {
+    if section.len() < SECTION_WORDS {
         return false;
     }
     version.store(u64::from(VERSION), Ordering::Relaxed);
@@ -264,20 +417,23 @@ pub fn publish(page: &[AtomicU64], snapshot: &Snapshot) {
     let (Some(lock), Some(words)) = (page.get(W_SEQUENCE), page.get(W_DATA..WORDS)) else {
         return;
     };
-    write_locked(lock, words, &snapshot.encode());
+    write_locked(lock, words, snapshot.encode());
+}
+
+/// Whether `section` is prepared and of this version.
+fn current(section: &[AtomicU64]) -> bool {
+    let (Some(magic), Some(version)) = (section.get(W_MAGIC), section.get(W_VERSION)) else {
+        return false;
+    };
+    // Acquire: pairs with the magic's release in `prepare`.
+    magic.load(Ordering::Acquire) == MAGIC && version.load(Ordering::Relaxed) == u64::from(VERSION)
 }
 
 /// The latest snapshot of `page`: none when the page is not this version's,
 /// when the writer overlapped every attempt -- a writer that died mid write
 /// leaves its sequence odd for good -- or when what it says cannot be.
 pub fn read(page: &[AtomicU64]) -> Option<Snapshot> {
-    let (Some(magic), Some(version)) = (page.get(W_MAGIC), page.get(W_VERSION)) else {
-        return None;
-    };
-    // Acquire: pairs with the magic's release in `prepare`.
-    if magic.load(Ordering::Acquire) != MAGIC
-        || version.load(Ordering::Relaxed) != u64::from(VERSION)
-    {
+    if !current(page) {
         return None;
     }
     let (Some(lock), Some(words)) = (page.get(W_SEQUENCE), page.get(W_DATA..WORDS)) else {
@@ -293,15 +449,120 @@ pub fn read(page: &[AtomicU64]) -> Option<Snapshot> {
     None
 }
 
+/// Publish `pointer` into `section`, after the pixels of the shape it names
+/// ([`publish_shape`]). The one writer's alone, as [`publish`] is.
+pub fn publish_pointer(section: &[AtomicU64], pointer: &Pointer) {
+    let (Some(lock), Some(words)) = (
+        section.get(W_POINTER),
+        section.get(W_POINTER + 1..W_POINTER + 1 + POINTER_DATA),
+    ) else {
+        return;
+    };
+    write_locked(lock, words, pointer.encode());
+}
+
+/// The pointer as `section` last says it: none before the driver has said
+/// anything of it, and as [`read`] says none.
+pub fn read_pointer(section: &[AtomicU64]) -> Option<Pointer> {
+    if !current(section) {
+        return None;
+    }
+    let (Some(lock), Some(words)) = (
+        section.get(W_POINTER),
+        section.get(W_POINTER + 1..W_POINTER + 1 + POINTER_DATA),
+    ) else {
+        return None;
+    };
+    // Never written: nothing said yet.
+    if lock.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    let mut data = [0u64; POINTER_DATA];
+    for _ in 0..ATTEMPTS {
+        if read_locked(lock, words, &mut data) {
+            return Pointer::decode(&data);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
+
+/// Publish the pixels of the shape the system numbered `shape` into
+/// `section`, **before the pointer's state names it**. False for more bytes
+/// than a shape at the limit takes.
+pub fn publish_shape(section: &[AtomicU64], shape: u32, bytes: &[u8]) -> bool {
+    if bytes.len() > SHAPE_BYTES {
+        return false;
+    }
+    let (Some(lock), Some(words)) = (
+        section.get(W_SHAPE),
+        section.get(W_SHAPE + 1..W_SHAPE + 1 + S_DATA + bytes.len().div_ceil(8)),
+    ) else {
+        return false;
+    };
+    let header = [u64::from(shape), bytes.len() as u64];
+    let pixels = bytes.chunks(8).map(|chunk| {
+        let mut word = [0u8; 8];
+        word.get_mut(..chunk.len())
+            .unwrap_or_default()
+            .copy_from_slice(chunk);
+        u64::from_le_bytes(word)
+    });
+    write_locked(lock, words, header.into_iter().chain(pixels));
+    true
+}
+
+/// Copy the pixels of the shape numbered `shape` from `section` into `into`:
+/// how many bytes, or none when the section holds another shape's -- a newer
+/// one, published since the state was read -- when they would not fit, or as
+/// [`read`] says none.
+pub fn read_shape(section: &[AtomicU64], shape: u32, into: &mut [u8]) -> Option<usize> {
+    if !current(section) {
+        return None;
+    }
+    let lock = section.get(W_SHAPE)?;
+    for _ in 0..ATTEMPTS {
+        // The length first, unchecked, to know how many words to read; the
+        // locked read below says whether it held.
+        let length = section.get(W_SHAPE + 1 + S_BYTES)?.load(Ordering::Relaxed);
+        let length = usize::try_from(length)
+            .ok()
+            .filter(|&n| n <= SHAPE_BYTES && n <= into.len())?;
+        let words = section.get(W_SHAPE + 1..W_SHAPE + 1 + S_DATA + length.div_ceil(8))?;
+        let (mut id, mut bytes) = (u64::MAX, u64::MAX);
+        let whole = read_locked_with(lock, words, |at, value| match at {
+            S_ID => id = value,
+            S_BYTES => bytes = value,
+            _ => {
+                let start = (at - S_DATA) * 8;
+                if let Some(chunk) = into.get_mut(start..(start + 8).min(length)) {
+                    chunk.copy_from_slice(
+                        value.to_le_bytes().get(..chunk.len()).unwrap_or_default(),
+                    );
+                }
+            }
+        });
+        if whole && bytes == length as u64 {
+            return (id == u64::from(shape)).then_some(length);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
+
 /// Write `data` into `words` under `lock`. The sequence goes odd before the
 /// first word and even again after the last; the release fence keeps every
 /// word's store after the odd one, so a reader that sees any of them sees the
 /// sequence moved.
-pub(crate) fn write_locked(lock: &AtomicU64, words: &[AtomicU64], data: &[u64]) {
+pub(crate) fn write_locked(
+    lock: &AtomicU64,
+    words: &[AtomicU64],
+    data: impl IntoIterator<Item = u64>,
+) {
     let sequence = lock.load(Ordering::Relaxed);
     lock.store(sequence.wrapping_add(1), Ordering::Relaxed);
     fence(Ordering::Release);
-    for (word, &value) in words.iter().zip(data) {
+    for (word, value) in words.iter().zip(data) {
         word.store(value, Ordering::Relaxed);
     }
     // Release: a reader that sees the even sequence sees every word above.
@@ -309,15 +570,30 @@ pub(crate) fn write_locked(lock: &AtomicU64, words: &[AtomicU64], data: &[u64]) 
 }
 
 /// Read `words` under `lock` into `out`: true when no write overlapped.
-/// The acquire fence after the words keeps the sequence's second load after
-/// them, so a word from a later write is caught by the sequence it moved.
 pub(crate) fn read_locked(lock: &AtomicU64, words: &[AtomicU64], out: &mut [u64]) -> bool {
+    read_locked_with(lock, words, |at, value| {
+        if let Some(slot) = out.get_mut(at) {
+            *slot = value;
+        }
+    })
+}
+
+/// Read `words` under `lock`, each handed to `take` with its place: true
+/// when no write overlapped, and only then is what `take` was handed one
+/// write's. The acquire fence after the words keeps the sequence's second
+/// load after them, so a word from a later write is caught by the sequence
+/// it moved.
+pub(crate) fn read_locked_with(
+    lock: &AtomicU64,
+    words: &[AtomicU64],
+    mut take: impl FnMut(usize, u64),
+) -> bool {
     let before = lock.load(Ordering::Acquire);
     if before & 1 == 1 {
         return false;
     }
-    for (value, word) in out.iter_mut().zip(words) {
-        *value = word.load(Ordering::Relaxed);
+    for (at, word) in words.iter().enumerate() {
+        take(at, word.load(Ordering::Relaxed));
     }
     fence(Ordering::Acquire);
     lock.load(Ordering::Relaxed) == before
@@ -329,7 +605,21 @@ mod tests {
     use std::vec::Vec;
 
     fn page() -> Vec<AtomicU64> {
-        (0..PAGE / 8).map(|_| AtomicU64::new(0)).collect()
+        (0..SECTION_WORDS).map(|_| AtomicU64::new(0)).collect()
+    }
+
+    fn pointer() -> Pointer {
+        Pointer {
+            cursor: true,
+            visible: true,
+            shape: 0x0001_0203,
+            kind: Some(ShapeKind::Alpha),
+            width: 32,
+            height: 48,
+            pitch: 128,
+            hot_x: 7,
+            hot_y: 31,
+        }
     }
 
     fn snapshot() -> Snapshot {
@@ -406,6 +696,123 @@ mod tests {
         let short: Vec<AtomicU64> = (0..WORDS - 1).map(|_| AtomicU64::new(0)).collect();
         assert!(!prepare(&short));
         assert_eq!(read(&short), None);
+        // A first version's page alone is short of the shape's pages.
+        let one: Vec<AtomicU64> = (0..PAGE / 8).map(|_| AtomicU64::new(0)).collect();
+        assert!(!prepare(&one));
+    }
+
+    #[test]
+    fn the_pointer_round_trips_each_field_in_a_word_of_its_own() {
+        assert_eq!(SHAPE_BYTES, 256 * 256 * 4);
+        let words = pointer().encode();
+        assert_eq!(Pointer::decode(&words), Some(pointer()));
+        // Each field in a word of its own, a pair's halves aside.
+        let mut other = pointer();
+        other.pitch += 4;
+        let changed = words
+            .iter()
+            .zip(other.encode().iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(changed, 1);
+        assert_eq!(pointer().shape_bytes(), 128 * 48);
+    }
+
+    #[test]
+    fn the_pointer_is_nothing_until_said_and_beside_the_pictures() {
+        let section = page();
+        assert!(prepare(&section));
+        assert_eq!(read_pointer(&section), None, "nothing said yet");
+        publish(&section, &snapshot());
+        assert_eq!(read_pointer(&section), None, "a picture says nothing of it");
+        publish_pointer(&section, &pointer());
+        assert_eq!(read_pointer(&section), Some(pointer()));
+        assert_eq!(
+            read(&section),
+            Some(snapshot()),
+            "the pictures' part untouched"
+        );
+        let none = Pointer::default();
+        publish_pointer(&section, &none);
+        assert_eq!(
+            read_pointer(&section),
+            Some(none),
+            "no hardware cursor, said"
+        );
+        section[W_POINTER].store(5, Ordering::Relaxed);
+        assert_eq!(read_pointer(&section), None, "a write in progress");
+        section[W_VERSION].store(1, Ordering::Relaxed);
+        section[W_POINTER].store(6, Ordering::Relaxed);
+        assert_eq!(read_pointer(&section), None, "another version's");
+    }
+
+    #[test]
+    fn a_pointer_that_cannot_be_is_refused() {
+        let mut words = pointer().encode();
+        words[P_KIND] = 3;
+        assert_eq!(Pointer::decode(&words), None, "no such kind");
+        let mut wide = pointer();
+        wide.width = POINTER_LIMIT + 1;
+        wide.pitch = wide.width * 4;
+        assert_eq!(Pointer::decode(&wide.encode()), None, "past the limit");
+        let mut narrow = pointer();
+        narrow.pitch = narrow.width * 4 - 1;
+        assert_eq!(
+            Pointer::decode(&narrow.encode()),
+            None,
+            "rows shorter than their pixels"
+        );
+        let mut long = pointer();
+        long.height = POINTER_LIMIT;
+        long.pitch = POINTER_LIMIT * 4 + 4;
+        assert_eq!(
+            Pointer::decode(&long.encode()),
+            None,
+            "rows past the section"
+        );
+        let mut words = pointer().encode();
+        words[P_SHAPE] = u64::from(u32::MAX) + 1;
+        assert_eq!(Pointer::decode(&words), None);
+    }
+
+    #[test]
+    fn a_shape_is_read_back_by_its_number_alone() {
+        let section = page();
+        assert!(prepare(&section));
+        let pixels: Vec<u8> = (0..33u8).collect();
+        assert!(publish_shape(&section, 7, &pixels));
+        let mut into = [0u8; 64];
+        assert_eq!(read_shape(&section, 7, &mut into), Some(33));
+        assert_eq!(&into[..33], &pixels[..], "an odd length's last word too");
+        assert_eq!(
+            read_shape(&section, 8, &mut into),
+            None,
+            "another shape's pixels"
+        );
+        let mut short = [0u8; 32];
+        assert_eq!(read_shape(&section, 7, &mut short), None, "more than fits");
+        let largest = std::vec![0xA5u8; SHAPE_BYTES];
+        assert!(publish_shape(&section, 9, &largest));
+        let mut back = std::vec![0u8; SHAPE_BYTES];
+        assert_eq!(read_shape(&section, 9, &mut back), Some(SHAPE_BYTES));
+        assert_eq!(back, largest);
+        assert!(!publish_shape(
+            &section,
+            10,
+            &std::vec![0u8; SHAPE_BYTES + 1]
+        ));
+        assert_eq!(
+            read_shape(&section, 9, &mut back),
+            Some(SHAPE_BYTES),
+            "kept"
+        );
+        let sequence = section[W_SHAPE].load(Ordering::Relaxed);
+        section[W_SHAPE].store(sequence + 1, Ordering::Relaxed);
+        assert_eq!(
+            read_shape(&section, 9, &mut back),
+            None,
+            "a write in progress"
+        );
     }
 
     #[test]
@@ -500,8 +907,8 @@ mod model {
             let writer = {
                 let (lock, words) = (Arc::clone(&lock), Arc::clone(&words));
                 loom::thread::spawn(move || {
-                    write_locked(&lock, &words, &[1; N]);
-                    write_locked(&lock, &words, &[2; N]);
+                    write_locked(&lock, &words, [1; N]);
+                    write_locked(&lock, &words, [2; N]);
                 })
             };
             let mut out = [u64::MAX; N];
@@ -516,6 +923,42 @@ mod model {
             let mut last = [0; N];
             assert!(read_locked(&lock, &words, &mut last));
             assert_eq!(last, [2; N]);
+        });
+    }
+
+    /// **The pointer's state never names pixels that are not there yet**: the
+    /// writer publishes a shape's pixels under their sequence, then the state
+    /// naming the shape under its own; a reader that reads the state and then
+    /// the pixels of the shape it names finds them whole. The reader waits for
+    /// the state to name the shape, so every interleaving reaches the check
+    /// rather than the few that happen to read after the writer.
+    #[test]
+    fn a_state_never_names_pixels_not_there() {
+        loom::model(|| {
+            let (shape_lock, state_lock) =
+                (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+            // The shape's number and one word of pixels; the state's number.
+            let shape: Arc<Vec<AtomicU64>> = Arc::new((0..2).map(|_| AtomicU64::new(0)).collect());
+            let state: Arc<Vec<AtomicU64>> = Arc::new((0..1).map(|_| AtomicU64::new(0)).collect());
+            let writer = {
+                let (shape_lock, state_lock) = (Arc::clone(&shape_lock), Arc::clone(&state_lock));
+                let (shape, state) = (Arc::clone(&shape), Arc::clone(&state));
+                loom::thread::spawn(move || {
+                    write_locked(&shape_lock, &shape, [1, 11]);
+                    write_locked(&state_lock, &state, [1]);
+                })
+            };
+            let mut named = [0u64; 1];
+            while !(read_locked(&state_lock, &state, &mut named) && named[0] == 1) {
+                loom::thread::yield_now();
+            }
+            let mut pixels = [0u64; 2];
+            assert!(
+                read_locked(&shape_lock, &shape, &mut pixels),
+                "the pixels were still being written when the state named them"
+            );
+            assert_eq!(pixels, [1, 11]);
+            writer.join().unwrap();
         });
     }
 }
