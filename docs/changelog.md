@@ -3,6 +3,26 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.4 reviewed: the pointer from the display driver
+
+### Decided
+- **The display driver publishes the pointer in the monitor's frame section**
+  ([11 §1.7](11-drivers.md)): whether a hardware cursor is set up and visible, and the shape
+  with its kind, size, row pitch, hotspot and the system's number for it, its pixels copied only
+  when that number moves; each part under a sequence lock of its own, model-checked. The frame
+  channel's version becomes 2.
+- **The host's own display reads its pointer from the driver** in place of the duplication's
+  frames, its position and show state as for any display, settled as before; the reading thread
+  follows the input desktop whenever that read fails, since the frames need none
+  ([05 §8.2](05-host.md)).
+- **A masked colour pointer made only of black, white, clear and inverting pixels is drawn as
+  the monochrome one it is**, since the system hands a display driver every monochrome pointer in
+  that form; both Windows sources then draw the text cursor alike.
+- **A pointer larger than 256 stays the system's to draw**: drawn into the pictures and
+  reported not visible, so a guest takes it over until it shrinks.
+- **The host's own display reads the direct frame when the driver answers**, the duplication
+  otherwise, as decided at W3.3's review.
+
 ## 2026-10-16 - W3.3 built and checked: the direct frame
 
 ### Added

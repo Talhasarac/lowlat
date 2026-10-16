@@ -1041,6 +1041,7 @@ overlay is `hidden` ([§8.1](#81-three-states-never-conflated)):
 | Backend | intent (`relative`) | overlay (`hidden`) |
 |---|---|---|
 | Windows desktop duplication | the show state, or a pointer whose picture is one value throughout | the duplication's own visibility of the pointer, kept from the last frame that carried a pointer update |
+| Windows, the host's own display read from its driver | the show state, or a pointer whose picture is one value throughout | the driver's report of its hardware cursor: not visible -- drawn by the system, or not drawn at all -- and so with no hardware cursor |
 | X11 | cursor visibility notifications from the fixes extension | not built |
 | compositor-mediated | the cursor mode reported alongside the stream | not built |
 | scanout | no direct source; the session's ([07 §2.1](07-platforms.md)) | plane presence, debounced ([§8.4](#84-deriving-hidden-from-plane-presence)) |
@@ -1050,6 +1051,17 @@ collapse and the false-positive rate is highest. It is flagged in
 [07-platforms.md](07-platforms.md) as a backend selection input, not something to paper over
 here. *Corrected 2026-10-14:* what scanout lacks is intent; its plane is the overlay state,
 which a far side is meant to read as relative motion.
+
+*Added 2026-10-16, at W3.4's review:* **the host's own display read from its driver**
+([11 §1.7](11-drivers.md)) takes the shape and the hotspot from the driver as well, and a
+masked colour shape made only of black, white, clear and inverting pixels is drawn as the
+monochrome shape it is -- the system hands a driver every monochrome pointer in that form -- so
+both Windows sources draw the text cursor alike. Its position and show state are read as for any
+display, on the input desktop; the frames need no desktop, so the reading thread follows the
+input desktop itself whenever a read fails, at the duplication's retry pace. A pointer larger
+than the 256 the wire carries is drawn by the system into the pictures and reported not visible,
+so it reads as `hidden`; the duplication, whose pictures never carry the pointer, keeps the last
+shape it could send.
 
 ### §8.4 Deriving hidden from plane presence
 

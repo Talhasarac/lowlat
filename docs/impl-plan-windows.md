@@ -518,6 +518,12 @@ once, here.
   period under the deadlines, a ceiling of 60 or 90 on that display took each picture 4.6 to
   6.2 ms after its composition at the median, against under a millisecond on a panel whose
   mode is its clock.
+  *Amended 2026-10-16, at W3.4's review:* **a masked colour pointer made only of black, white,
+  clear and inverting pixels is drawn as the monochrome one it is**, its inverting pixels black
+  in a light halo: the system hands a display driver every monochrome pointer in that form, so
+  without it the host's own display read from its driver would draw the text cursor dark grey
+  where the duplication draws it with a halo. The duplication, which reports such a pointer
+  monochrome, is unchanged.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -1195,6 +1201,35 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   *Amended 2026-10-16, at W3.3's review:* with its pointer, the host's own display reads the
   direct frame whenever the driver answers, and duplicates it otherwise, so W3.5's checks and the
   gate stream it; before this step its pictures would carry no pointer.
+  *Reviewed 2026-10-16, before its build.* **The driver publishes the pointer in the monitor's
+  frame section**, after the pictures' page ([11 §1.7](11-drivers.md)): whether a hardware cursor
+  is set up and whether it is visible, and the shape -- its kind, size, row pitch, hotspot and the
+  system's number for it -- with its pixels copied in only when that number moves; each part under
+  a sequence lock of its own, written by the monitor's worker when the system signals new cursor
+  data, model-checked as the pictures' part is. The frame channel's version becomes 2. The host's
+  own display reads it in place of the duplication's frames: the visibility and a new shape into
+  the pointer state W2 built, the position, the show state and the touch flag from the system as
+  for any display, settled as in W2. **The frames need no desktop, the pointer's read does**: the
+  reading thread follows the input desktop whenever that read fails, at the duplication's retry
+  pace, so the lock screen and an elevation prompt keep their pointer. The system hands the
+  driver two kinds of shape, alpha and masked colour, every monochrome pointer converted to the
+  latter, which is drawn as the monochrome one it is (W2's decisions, amended). **A pointer
+  larger than 256 stays the system's to draw**: drawn into the pictures and reported invisible,
+  so a guest is told it is drawn and takes it over until it shrinks, as for any pointer the
+  system draws; the duplication keeps its last shape, its pictures never carrying the pointer.
+  No hardware cursor -- the file's setting, or a setup the system refused -- is said as such:
+  the pointer is in the pictures. The cursor is read on the frame's own worker unless measured
+  to move the frame's acquire. The host's own display opens the direct frame when the driver
+  answers -- the host runs as the system account -- and the duplication otherwise; no
+  configuration selects it. Checked by: each kind of shape on both sources from the same pointer
+  -- an arrow, the text cursor, a coloured inverting pointer, a monochrome one of the test's own,
+  a hand -- drawn alike, and the monochrome rule broken once; a pointer over 256 reported hidden
+  with the picture carrying it; a pointer an application hides turning relative, and its showing
+  again carrying the position; the pointer leaving the display and coming back; the lock screen
+  and the secure attention screen keeping their pointer, broken by not following the desktop; a
+  pointer swept a thousand times a second against the frame's acquire; the host's own display
+  streaming direct as the system account and duplicating as a user, and back on direct after its
+  driver restarts; the publication model-checked; both bars.
 - [ ] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
   driver restarted, the display asleep, the lock screen, the secure attention screen and an
   elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
@@ -1232,6 +1267,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.4 reviewed: the driver publishes the pointer in the monitor's frame section,
+  the channel's version 2; the pointer's read follows the input desktop; a masked colour pointer
+  that is a monochrome one in another form is drawn as one; a pointer over 256 stays the
+  system's to draw; the host's own display reads the direct frame when the driver answers.
 - 2026-10-16: W3.3 checked and ticked after a restart of the machine: the device restarted twenty
   times mid-stream, the held picture's publication broken and caught, two readers at once both
   served; the frame thread left at normal priority, since raised it took a fifth of its pictures

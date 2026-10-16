@@ -46,7 +46,7 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
 | Interface | Who opens it | What it carries |
 |---|---|---|
 | control | any interactive user, administrators, the system account | a plug, bound or kept, at a slot asked for or any; an unplug; a replug with a mode; the list; a reload of the file; the version |
-| frames | anyone the device admits may ask; only the system account can use the answer | the section, the buffers and the fence of §1.6 |
+| frames | anyone the device admits may ask; only the system account can use the answer | the section, the buffers and the fence of §1.6; the pointer of §1.7, in the same section |
 
 **The frame interface is a screen-capture channel, and the handles are what limit it.** Its
 answer is a set of handle values in the driver's own process, which only a process allowed to take
@@ -195,6 +195,19 @@ into targets of its own, by measurement.
   the visibility from the driver, the position and the show state as for any display
   ([05 §8](05-host.md)). The file's setting draws it into the pictures instead, for software that
   wants it there.
+  *Amended 2026-10-16, at W3.4's review:* **the driver publishes the pointer in the monitor's
+  frame section** (§1.6), after the pictures' page: whether a hardware cursor is set up and
+  whether it is visible, and the shape -- its kind, size, row pitch, hotspot and the system's
+  number for it -- with its pixels copied in only when that number moves. Each part has a
+  sequence lock of its own, and the monitor's worker writes them when the system signals new
+  cursor data; the channel's version is 2. The system hands a driver two kinds of shape, alpha
+  and masked colour, having converted every monochrome pointer to the latter, so the host draws
+  a masked colour shape made only of black, white, clear and inverting pixels as the monochrome
+  one it is ([05 §8.2](05-host.md)). **A pointer larger than 256 stays the system's to draw**:
+  drawn into the pictures and reported invisible, so a guest is told the pointer is drawn and
+  takes it over until it shrinks, as for any pointer the system draws. With no hardware cursor
+  -- the file's setting, or a setup the system refused -- the section says so, and the pointer
+  is in the pictures.
 
 ### §1.8 Lifecycle
 
