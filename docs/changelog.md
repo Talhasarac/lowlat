@@ -3,7 +3,7 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
-## 2026-10-16 - W3.3 built: the direct frame
+## 2026-10-16 - W3.3 built and checked: the direct frame
 
 ### Added
 - **The frame page** ([11 §1.6](11-drivers.md)): one page per monitor, written once for the
@@ -23,8 +23,8 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   pointer.
 - Hardware tests, as the system account: the source converting and encoding at the display's
   pace; a refresh changed alone settling the rate again; a late reader caught and a still
-  desktop's last picture kept; the driver's process ending mid-stream; the comparison with the
-  duplication.
+  desktop's last picture kept; two readers at once; the driver's process ending or its device
+  restarting mid-stream; the comparison with the duplication.
 
 ### Changed
 - The display driver's setup no longer asks a priority it never got: the setting chooses a shared
@@ -35,16 +35,24 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   p50/p95/p99/max: 2560x1440 at 120, 0.608/0.767/0.820/1.326 against 0.661/0.833/0.870/0.924;
   3840x2160 at 120, 0.841/0.997/1.053/1.277 against 0.943/1.139/1.189/1.462; 1920x1080 at 60
   under a 120 Hz clock, 1.229/4.904/5.203/6.282 against 1.663/4.144/5.531/6.120.
+- The frame thread's acquire against the picture's display time, at 120 a second under one busy
+  loop per logical processor: at normal priority nineteen in twenty within 0.09 ms of the median;
+  raised through the system's multimedia scheduling, one in twenty 1.4 to 1.6 ms later, a fifth
+  late by up to 2 ms. It stays at normal priority ([11 §1.1](11-drivers.md)).
+- After a restart of the machine: the device restarted twenty times mid-stream, nothing stranded,
+  the output gone in 160 to 206 ms; the held picture's publication switched off, the first
+  picture on a still desktop did not come, and on, it came at once; two readers waiting together
+  each converted all 240 pictures, neither waiting more than 9.9 ms.
 
 ### Found
 - A restart of the driver's device while a handle on it was open was refused, and left every later
   restart, and so every update, waiting for a reboot ([11 §1.8](11-drivers.md)). A driver whose
-  process ends is started again about five times in a few minutes, not a sixth.
-
-### Owed
-- After a restart of the machine: the driver restarted twenty times mid-stream, the still
-  desktop's picture broken on purpose in the driver, and the frame thread's priority measured
-  with and without under load.
+  process ends is started again about five times in a few minutes, not a sixth. *Corrected the
+  same day:* an update still restarted the device onto the new driver; only a restart asked of
+  the device alone waits for the reboot.
+- An update restarts the other virtual displays' devices too, and one held open by its own
+  software leaves the update waiting for a reboot, this driver restarted onto the new one all the
+  same ([11 §1.8](11-drivers.md)).
 
 ## 2026-10-16 - W3.3 reviewed: the driver never waits for the host
 

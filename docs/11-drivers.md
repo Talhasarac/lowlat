@@ -28,8 +28,14 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
   handles from holds this driver alone; raised in priority, since its wake lies on every frame's
   path (measured with and without). *Amended 2026-10-16:* the setup's high-priority setting
   chooses a shared pool meant for input drivers, and a driver with a process of its own has none:
-  the process runs at normal priority, measured. Whether the frame thread is raised, through the
-  system's multimedia scheduling, is decided by measurement under load.
+  the process runs at normal priority, measured. **The frame thread stays at normal priority**,
+  measured under one busy loop per logical processor at 120 a second: woken by the system's
+  frame it takes the processor from them at once, nineteen acquires in twenty within 0.09 ms of
+  the median and the worst of 1,200 between 0.9 and 3.1 ms later. Raised through the system's
+  multimedia scheduling it does worse: one acquire in twenty 1.4 to 1.6 ms later than the median
+  and the worst about 2.2 ms, about a fifth of them late by up to 2 ms -- consistent with that
+  scheduling keeping a fifth of each period for other work, the threads it raised dropped below
+  normal meanwhile. Idle, the two are alike.
 - The floor is Windows 10 1903, the first release whose display class lets a driver name the GPU
   to render on.
 - Its log goes to the debugger stream: the driver's host process has no console and no file it
@@ -164,7 +170,8 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
   the first request for its frames: a replug, a mode and every new swapchain keep it, each a new
   generation in it. Any number of readers may take it and nothing in the driver knows how many;
   the event a publish sets wakes one waiter, so a second reader at once can learn of a picture a
-  refresh late, at its wait's own bound.
+  refresh late, at its wait's own bound. Measured, two readers waiting on it together at 120 a
+  second each converted every one of 240 pictures, neither waiting more than 9.9 ms for one.
 
 *Rewritten 2026-10-16, at W3.3's review.* The driver first held each buffer, acquiring no other,
 until the host released it or a bound inside a frame period passed. Measured, the system's own
@@ -208,10 +215,17 @@ into targets of its own, by measurement.
   opens it again when the driver is back. *Amended 2026-10-16, at W3.3's build:* **this is not
   optional.** A restart of the device while a handle on it stayed open was refused, and from then
   on the system answered every restart, and so every update, with a reboot still to come, nothing
-  open any more. And a driver whose process ends is started again by the system about five times
-  in a few minutes, not a sixth: the device stays failed until it is restarted. Its pictures'
-  reader is stranded by neither, measured: a conversion queued behind the fence of a picture
-  published just before the driver's process ended finished every time.
+  open any more. *Corrected the same day, after a restart of the machine:* not every update -- an
+  update still restarted the device onto the new driver while it waited for a reboot; a restart
+  asked of the device alone is what is refused until then. **An update restarts the other virtual
+  displays' devices too**, two other vendors' here, every time, and one held open by its own
+  software refuses: the update is then recorded as waiting for a reboot, though this driver's
+  device was restarted onto the new driver at once. And a driver whose process ends is started
+  again by the system about five times in a few minutes, not a sixth: the device stays failed
+  until it is restarted. Its pictures' reader is stranded by neither, measured: a conversion
+  queued behind the fence of a picture published just before the driver's process ended, five
+  times, or its device was restarted, twenty times, finished every time; restarted, the output
+  was gone in 160 to 206 ms.
 - A GPU reset reassigns every swapchain; no monitor departs during one.
 
 ### §1.9 The controller, and people
@@ -253,8 +267,9 @@ pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built. *The 
 own device in another process, three buffers in turn, a picture intact about three refreshes.
 **The hand-over is built and checked offline** (W3.3, 2026-10-16): the page, its publication
 model-checked, the host's display reading it as a second source, the freshness check and a
-still desktop's picture each shown working and broken, the driver's end mid-stream stranding
-nothing; the host's display streams it from W3.4.
+still desktop's picture each shown working and broken, the driver's process ended and its device
+restarted mid-stream stranding nothing, two readers at once both served, the frame thread left at
+normal priority by measurement; the host's display streams it from W3.4.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

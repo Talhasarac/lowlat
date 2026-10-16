@@ -1120,7 +1120,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   arrived. Nothing lit cannot be made from software here -- the system refuses a desktop with no
   output, and disabling a monitor's device leaves its output lit -- hence the cable. A program
   leaving exclusive fullscreen takes the road a mode set from outside took, not checked again.
-- [ ] **W3.3 the direct frame**: the frame interface, the section, the shared buffers and
+- [x] **W3.3 the direct frame**: the frame interface, the section, the shared buffers and
   fences, the claim, the hold and its bound, a view per buffer, the frame's time; the Windows
   display's second source. Checked by the gate's comparison, run offline first, and by each part
   broken and seen to fail: no wait on the fence, no release, a claimed frame past the bound.
@@ -1176,6 +1176,19 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   and left the device waiting for a reboot ([11 §1.8](11-drivers.md)) -- the still desktop's
   picture broken on purpose in the driver, and the frame thread's priority measured with and
   without under load. The 240 Hz leg is the gate's.
+  *Checked 2026-10-16, after a restart of the machine*, as the system account: the device
+  restarted twenty times mid-stream with the test's handle closed first, nothing stranded, the
+  output gone in 160 to 206 ms; the driver's process ended five times, not twenty -- the system
+  starts a driver whose process ends again no more often in a few minutes. The driver's
+  publication of the held picture switched off, the first picture on a still desktop did not
+  come within 150 ms, and on, it came at once. Two readers waiting on one page together at 120 a
+  second each converted all 240 pictures, neither waiting more than 9.9 ms; no break was built
+  for it. **The frame thread stays at normal priority** ([11 §1.1](11-drivers.md)): under one
+  busy loop per logical processor, raised through the system's multimedia scheduling it acquired
+  one picture in twenty 1.4 to 1.6 ms later than the median, where at normal priority nineteen in
+  twenty came within 0.09 ms. Found: an update restarts the other virtual displays' devices too,
+  and one held open by its own software leaves the update waiting for a reboot, this driver
+  restarted onto the new one all the same ([11 §1.8](11-drivers.md)).
 - [ ] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
   driver, position and show state as in W2. Checked by each kind of shape, one larger than the
   wire's 256, and the visibility while the system draws the pointer itself.
@@ -1219,6 +1232,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.3 checked and ticked after a restart of the machine: the device restarted twenty
+  times mid-stream, the held picture's publication broken and caught, two readers at once both
+  served; the frame thread left at normal priority, since raised it took a fifth of its pictures
+  up to 2 ms late under load; an update restarts the other virtual displays' devices, and one
+  held open leaves the update waiting for a reboot.
 - 2026-10-16: W3.3 built: the frame page written once and model-checked; the driver's half -- a
   page per monitor for its life, each buffer shared, the fence signalled, the last picture kept
   -- and the host's display's second source, offline until W3.4; the comparison offline at 1440p
