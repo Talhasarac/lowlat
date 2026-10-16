@@ -2481,6 +2481,100 @@ mod tests {
         );
     }
 
+    /// **Two readers at once are both served**: one monitor of the driver with
+    /// a load presenting on it (`LOWLAT_LOAD`, as the comparison below), its
+    /// page read by two of the host's displays at once, each on a thread and a
+    /// device of its own, each waiting for the next picture straight after
+    /// converting the last, so both wait on the publish together. Its event
+    /// wakes one waiter and the other learns of the picture at its own wait's
+    /// bound, so neither may wait past two refreshes, and each converts the
+    /// pictures as they land. Run as the system account.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU, a load and the system account"]
+    fn two_readers_at_once_are_both_served() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1920, 1080, 120), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        let _load = Load::on(&monitor.name).expect("a load");
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        let ticks = 240;
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let readers: Vec<_> = (0..2)
+            .map(|reader| {
+                let (name, luid, slot) = (output.name.clone(), output.adapter.luid, monitor.slot);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    let d3d11 = D3d11::load().expect("the system's libraries");
+                    let device = Arc::new(d3d11.open(luid).expect("a device"));
+                    let api = nvenc::Api::load().expect("the encoder's runtime");
+                    let session = api.open_session(Arc::clone(&device)).expect("a session");
+                    let encoder = session
+                        .initialize(nvenc::Config {
+                            codec: nvenc::Codec::H265,
+                            width,
+                            height,
+                            fps: hz.max(1),
+                            bitrate_bps: 20_000_000,
+                            min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                            thorough: false,
+                            chroma: nvenc::Chroma::Yuv420,
+                            depth: nvenc::Depth::Eight,
+                        })
+                        .expect("an encoder");
+                    let mut display = Display::open_direct(
+                        &device,
+                        &name,
+                        Layout::Nv12,
+                        (width, height),
+                        &encoder,
+                        slot,
+                    )
+                    .expect("the display, read from its driver");
+                    start.wait();
+                    let interval = 1000.0 / f64::from(hz.max(1));
+                    let (mut changed, mut late) = (0, 0);
+                    let mut waits = Stage::new();
+                    for _ in 0..ticks {
+                        let asked = Time::now();
+                        while display.wait_present(20) != Some(true) {}
+                        let waited = clock::elapsed_ms(asked);
+                        waits.record(waited);
+                        if waited > 2.0 * interval + 2.0 {
+                            late += 1;
+                        }
+                        display.acquire().expect("an acquire");
+                        if display
+                            .converted()
+                            .expect("the conversion")
+                            .is_some_and(|got| got.changed)
+                        {
+                            changed += 1;
+                        }
+                    }
+                    let waited = waits.percentiles();
+                    println!(
+                        "reader {reader}: {changed} of {ticks} changed; wait for a present ms \
+                         p50/p95/p99 {:.2}/{:.2}/{:.2}, {late} late",
+                        waited.p50, waited.p95, waited.p99
+                    );
+                    (changed, late)
+                })
+            })
+            .collect();
+        for reader in readers {
+            let (changed, late) = reader.join().expect("a reader");
+            assert!(changed >= ticks / 2, "a reader was not handed the pictures");
+            assert_eq!(late, 0, "a reader waited past two refreshes");
+        }
+    }
+
     /// **The driver's process ending mid-stream strands nothing**: ended right
     /// after a picture is published -- its fence's signal queued, perhaps not
     /// yet passed -- the conversion the reader queues behind it still
