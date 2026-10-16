@@ -1378,11 +1378,27 @@ on the LAN and one on a Windows machine:
   the host's display as the primary, unsaved and held, since the compositor's clock is the
   primary's; and the GPU scheduling mode recorded, every measurement so far having had it in the
   driver;
+  *run offline 2026-10-17, before the gate:* both sources timed from one reference -- the
+  compositor's vblank, from a presenting load's own statistics -- since each source's own time
+  for a picture differs from the other's by about the gap measured; vblank to encoder input,
+  interleaved blocks. With hardware scheduling on, the host at its high class and the driver's
+  frame thread raised, the direct frame was at or below the duplication at every percentile at
+  1440p 120 idle and under one busy loop per logical processor (p50 0.06-0.10 ms ahead), and at
+  1080p 60 but for p99 (+0.01 ms, inside the run's noise). Under a load's GPU pass of half a frame
+  and more it was 1.0-1.5 ms ahead at p50 (3.5 ms with scheduling off), and at 240 Hz -- the
+  host's display the primary, the panel lit, the compositor's clock then 240 -- 0.8 ms ahead
+  loaded. No picture converted again. At light load the GPU lowers its clocks every few seconds,
+  each time slowing either source by ~1.5 ms for ~0.2 s; blocks short enough to share that alike,
+  or clocks held, are needed for a fair tail;
 - the test-signed package installing silently with no test mode; CI building the driver; both
   CI jobs and the Linux bar.
 
 ## Change log
 
+- 2026-10-17: the gate's comparison run offline from one reference (the compositor's vblank):
+  the direct frame at or below the duplication at every percentile once the driver's frame
+  thread was raised, milliseconds ahead under GPU load; the 240 Hz leg with the host's display as
+  the primary; the GPU's clock changes at light load named as a tail both sources share.
 - 2026-10-16: W3.5 checked with a person and ticked: a guest on a laptop through the GPU's
   restart, the lock screen and the secure attention screen, with both panels' cables out the host's
   end, the update and the GPU's restart, and the machine's sleep; the secure screens black on the

@@ -35,7 +35,14 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
   multimedia scheduling it does worse: one acquire in twenty 1.4 to 1.6 ms later than the median
   and the worst about 2.2 ms, about a fifth of them late by up to 2 ms -- consistent with that
   scheduling keeping a fifth of each period for other work, the threads it raised dropped below
-  normal meanwhile. Idle, the two are alike.
+  normal meanwhile. Idle, the two are alike. *Amended 2026-10-17:* **the frame thread runs at
+  the highest priority of its class after all**, below the compositor's. The measurement above
+  timed the acquire, where the wait's boost wins; after it, the fence's signal and flush ran late
+  beside busy threads of its own priority -- with the host at its high class, under one busy loop
+  per logical processor, about one picture in a hundred reached the host 1.5 ms later, a tail the
+  system's duplication of the same display did not have. Raised, none did, and the direct frame
+  read at or below the duplication at every percentile ([impl-plan-windows.md](impl-plan-windows.md),
+  the gate's comparison).
 - The floor is Windows 10 1903, the first release whose display class lets a driver name the GPU
   to render on.
 - Its log goes to the debugger stream: the driver's host process has no console and no file it

@@ -3,6 +3,28 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - W3.3 measured: the direct frame against the duplication
+
+### Changed
+- **The display driver's frame thread runs above normal priority** ([11 §1.1](11-drivers.md)):
+  after the acquire, the fence's signal and flush ran late beside busy threads of its own
+  priority.
+
+### Added
+- The comparison test writes each picture to `LOWLAT_RECORDS` when set, so the two sources can be
+  timed from one reference outside it.
+
+### Measured
+- From the compositor's vblank to the encoder's input, interleaved blocks, hardware scheduling
+  on: the direct frame at or below the duplication at every percentile at 1440p 120 idle and under
+  one busy loop per logical processor, 0.06-0.10 ms ahead at p50; 1.0-1.5 ms ahead at p50 under a
+  load's GPU pass of half a frame and more (3.5 ms with scheduling off); 0.8 ms ahead at 240 Hz
+  loaded, the host's display the primary ([impl-plan-windows.md](impl-plan-windows.md), the gate).
+- Before the frame thread was raised, under contention one picture in a hundred came 1.5 ms late
+  on the direct frame alone.
+- At light load the GPU lowers its clocks every few seconds; each change slows either source by
+  ~1.5 ms for ~0.2 s, gone with the clocks held.
+
 ## 2026-10-16 - W3.5 built and checked: lifecycle and no monitor
 
 ### Added
