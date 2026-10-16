@@ -230,6 +230,11 @@ into targets of its own, by measurement.
   never created inside the old one's unassignment.
 - A display switched off takes the monitor's path out of the topology; the host keeps the display
   awake while it captures.
+  *Corrected 2026-10-16, at W3.5's review:* **a display asleep keeps the monitor's output** on
+  the desktop and the monitor active, and loses its pictures: the system took the driver's
+  swapchain away about five seconds before it said the display was off, and assigned another as
+  it woke, measured. A request to keep the display on holds it on but does not wake it; input
+  does ([05 §2](05-host.md)).
 - An update of the driver: the host closes its handle when the driver asks to be removed, and
   opens it again when the driver is back. *Amended 2026-10-16, at W3.3's build:* **this is not
   optional.** A restart of the device while a handle on it stayed open was refused, and from then
@@ -245,7 +250,21 @@ into targets of its own, by measurement.
   queued behind the fence of a picture published just before the driver's process ended, five
   times, or its device was restarted, twenty times, finished every time; restarted, the output
   was gone in 160 to 206 ms.
+  *Amended 2026-10-16, at W3.5's review:* **the controller does this for every user** -- the
+  host's display, `lowlatd display hold`, an application's third half: it registers for its
+  handle's notifications and closes the handle when the driver is asked to be removed, the
+  monitors bound to it going with it, as they would with the driver; it closes it too when a call
+  finds the driver gone, its process ended, which leaves the handle reaching nothing. Every call
+  after answers that the driver is absent, and a new open is a new handle, so what was bound to
+  the old one is never taken for the new one's. The host then opens one and plugs its display
+  again, also while its stream waits for a display ([05 §2](05-host.md)).
 - A GPU reset reassigns every swapchain; no monitor departs during one.
+  *Measured 2026-10-16, at W3.5's review:* **the GPU's driver restarted, the system assigned the
+  next swapchain on the same GPU by itself**, under the GPU's new identity, 3.5 s after the last
+  was lost twice and 17.5 s once -- the first restart since boot, the GPU itself back that late
+  -- with no new preference from the driver, so the driver names none. For about 1.5 s
+  meanwhile the monitor's output was listed under the integrated GPU; the monitor stayed plugged
+  and active, and its name stayed while the panels' changed.
 
 ### §1.9 The controller, and people
 

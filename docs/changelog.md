@@ -3,6 +3,33 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.5 reviewed: lifecycle and no monitor
+
+### Decided
+- **The controller follows its driver**, for every user ([11 §1.8](11-drivers.md)): it closes its
+  handle when the driver is asked to be removed -- an open handle refuses the removal an update
+  needs, which then waits for a reboot -- and when a call finds the driver gone; every call after
+  answers that the driver is absent, and a new open is a new handle.
+- **The host's own display follows its driver**: opened and plugged again whenever it went, also
+  while a stream waits for a display, so an update, a restart or the driver's end costs the
+  guests a rebuild ([05 §2](05-host.md)).
+- **A display listed under a GPU without the encoder is waited for** within the wait for a
+  display, rather than refused at once.
+- **A setting wakes a sleeping display as a stream starts**, with one injected pointer move of no
+  distance, **off by default**: a guest's first input wakes it otherwise.
+- The logoff and the remote desktop connection are checked with the service (W2.5), each a change
+  of the console's session; the host's end and a new host's start are checked here.
+
+### Measured
+- The GPU's driver restarted three times under a monitor of the display driver: the system put
+  the monitor back on the same GPU by itself, under its new identity, 3.5 s after the old
+  swapchain was lost twice and 17.5 s once; for about 1.5 s meanwhile the display was listed
+  under the integrated GPU, where a rebuilding stream would have refused it.
+- A display asleep kept its output and lost its pictures, the swapchain taken away about five
+  seconds before the display was said to be off; the stream's request to keep it on did not wake
+  it, and one injected move of no distance woke it in 170 ms ([11 §1.8](11-drivers.md),
+  corrected).
+
 ## 2026-10-16 - W3.4 built and checked: the pointer from the display driver
 
 ### Added

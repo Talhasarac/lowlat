@@ -524,6 +524,13 @@ once, here.
   without it the host's own display read from its driver would draw the text cursor dark grey
   where the duplication draws it with a halo. The duplication, which reports such a pointer
   monochrome, is unchanged.
+  *Amended 2026-10-16, at W3.5's review:* **keeping the display awake holds it on but does not
+  wake it.** A display that slept on its timeout before a guest arrived stays asleep under the
+  stream's request, measured, and gives no pictures -- the system takes a virtual display's
+  away while it sleeps -- until input wakes it: one injected pointer move of no distance woke it
+  in 170 ms. So **a setting wakes the display as a stream starts, with that move, off by
+  default**: a connection lights nothing at the desk by itself, and a guest's first input wakes
+  the display otherwise.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -798,6 +805,10 @@ once, here.
   *Added 2026-10-15, at W2.3's review:* the attention chord. The host asks the service, which
   makes the system's call for the secure screen, since the system takes it from a service alone;
   `lowlatd install` lets services make it and `uninstall` puts back the setting it found.
+  *Added 2026-10-16, at W3.5's review:* also a remote desktop connection to the machine, which
+  moves the console to another session as a logoff does; and with each, the host's own display
+  back with the new host -- the display side of both, which W3.5 checks as the host's end and a
+  new host's start.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1256,6 +1267,41 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   driver restarted, the display asleep, the lock screen, the secure attention screen and an
   elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
   Checked by each once while streaming.
+  *Reviewed 2026-10-16, before its build.* Nothing has held a picture since W3.3's review, so the
+  first check is the host killed mid-stream and started again. **The logoff and the remote
+  desktop connection move to W2.5**: each is a change of the console's session, which only the
+  service follows, and for the display either is the host's end and a new host's start, checked
+  here; the boot with no monitor stays the gate's. Read in the code: the host keeps its
+  controller's handle for its life and never closes it when the driver is asked to be removed,
+  which an update needs -- an open handle refuses the removal, and the update then waits for a
+  reboot ([11 §1.8](11-drivers.md)); a handle left by a driver whose process ended is kept for
+  good, so the host's display never comes back; and a stream that lost the host's display waits
+  for one without plugging it again. So **the controller follows its driver**, for every user:
+  it closes its handle when the driver is asked to be removed or has gone, the monitors bound to
+  it going with it, and every call after answers that the driver is absent, a new open being a
+  new handle; and **the host's own display follows its driver**, opened and plugged again
+  whenever it went, also while the stream waits for a display, so an update, a restart or the
+  driver's end costs the guests a rebuild rather than the session. Probed on the development
+  machine: the GPU's driver restarted three times under a monitor of the driver, the system put
+  the monitor back on the GPU by itself, on the GPU's new identity, 3.5 s after the old swapchain
+  was lost twice and 17.5 s once -- the first restart since boot, the GPU itself back that late
+  -- so the driver names no GPU again. **But for about 1.5 s mid-restart the system lists the
+  display under the integrated GPU**, and the panels under its software renderer, where a stream
+  rebuilding -- it sees its device lost within a second -- refuses the display as one without its
+  encoder and ends the guests: **a display found under a GPU without the encoder is waited for**
+  within the display wait, as one that went, and refused only past it. **A display asleep keeps
+  its output and loses its pictures**: the system took the driver's swapchain away about five
+  seconds before saying the display was off, and gave one back as it woke; the stream's request
+  kept a display on past its timeout but did not wake one, and one injected pointer move of no
+  distance woke it, which a setting off by default does as a stream starts (W2's decisions,
+  amended). Checked by: the host killed mid-stream and started again; the driver updated
+  mid-stream, through with no reboot owed and the guest kept; the driver's process ended once;
+  the GPU's driver restarted, the guest kept; a guest arriving at a display asleep with the
+  setting off and on, and the display held awake while streaming; the lock screen and its unlock
+  typed through the guest, the secure attention screen and an elevation prompt; the host's end,
+  the update and the GPU's restart again with the panels' cables out; the machine asleep with the
+  host idle and its display plugged, and streaming after it wakes; both bars. The update's close
+  broken leaves the device waiting for a reboot, so it is broken only at the user's word.
 
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
@@ -1289,6 +1335,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.5 reviewed: the logoff and the remote desktop connection moved to W2.5; the
+  controller closes its handle when its driver is asked to be removed or goes, for every user;
+  the host's own display follows its driver, also while a stream waits for a display; a display
+  listed under a GPU without the encoder is waited for, as the system lists one there while a
+  GPU's driver restarts; a setting, off by default, wakes a sleeping display as a stream starts.
 - 2026-10-16: W3.4 built, checked and ticked: the pointer the same to the byte from the driver
   as from the duplication, the text cursor by the monochrome rule; the secure desktop keeping
   the hardware cursor, the pointer's read following the input onto it; the host's own display

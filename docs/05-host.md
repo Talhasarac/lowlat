@@ -52,6 +52,13 @@ Rules:
   restart also renumbers every output while the monitors stay, so an output asked for by name
   is followed by the monitor it showed. A program taking the display in exclusive fullscreen at
   another mode is a resolution change, and is followed both ways.
+  *Added 2026-10-16, at W3.5's review:* **a display listed under a GPU without the encoder is
+  waited for**, within the wait for a display, rather than refused at once: while a GPU's driver
+  restarts, Windows lists a virtual display under another GPU for about a second and a half, and
+  the panels under its software renderer, which is just when a stream that saw its device lost
+  rebuilds. And **the host's own display is plugged again while the stream waits** for a
+  display, so its driver updated, restarted or ended under a stream costs a rebuild rather than
+  the guests ([11 §1.8](11-drivers.md)).
 - The acquire timeout is one frame interval. A timeout is not an error; it means the screen
   did not change, and the correct response is to skip the iteration rather than to encode a
   duplicate.
@@ -113,6 +120,13 @@ Rules:
   conversion is queued the host checks that the driver has not acquired as many newer pictures as
   the swapchain has buffers, less one -- the system writes a buffer again only then -- and
   converts the latest instead when it has, counted.
+- **On Windows a display asleep is woken by input, not by the stream** (*added 2026-10-16, at
+  W3.5's review*). A stream holds the display on while it lives, but a display that slept before
+  a guest arrived stays asleep under that request and gives no pictures -- a virtual one loses
+  its driver's swapchain meanwhile, its output staying on the desktop, so nothing is rebuilt --
+  until input wakes it, measured. A guest's first input does; a setting, off by default, has the
+  stream wake it as it starts with one injected pointer move of no distance, which woke it in
+  170 ms.
 - **Dirty-rectangle awareness is deferred.** It is a real optimization for desktop work and it
   interacts with the reference chain in ways that need measurement first.
 
