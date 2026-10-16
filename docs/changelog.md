@@ -50,8 +50,8 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - **The lock screen and the secure attention screen are drawn on the primary display alone**: a
   guest watching the host's own display beside a lit panel sees black while they are up
   ([05 §2](05-host.md)); as the only display, the guest sees them.
-- No elevation prompt can be raised on the development machine, whose administrators elevate
-  with no prompt.
+- An elevation prompt's dialog is drawn on the primary display alone too, the other displays
+  showing its dimmed backdrop; answered through the guest, its stream switched to the panel.
 
 ## 2026-10-16 - W3.5 reviewed: lifecycle and no monitor
 

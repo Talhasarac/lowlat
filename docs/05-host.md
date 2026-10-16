@@ -133,7 +133,9 @@ Rules:
   alone** (*found 2026-10-16, at W3.5's checks*). A guest watching another display -- the host's
   own beside a lit panel -- sees black while they are up, though the stream goes on, follows the
   input onto them, and the guest's keys reach them; with the host's own display the only one, or
-  the primary, the guest sees them and unlocks the machine by typing.
+  the primary, the guest sees them and unlocks the machine by typing. An elevation prompt is
+  drawn the same way, its dialog on the primary alone, though every other display shows its
+  dimmed backdrop rather than black.
 - **On Windows a display asleep is woken by input, not by the stream** (*added 2026-10-16, at
   W3.5's review*). A stream holds the display on while it lives, but a display that slept before
   a guest arrived stays asleep under that request and gives no pictures -- a virtual one loses

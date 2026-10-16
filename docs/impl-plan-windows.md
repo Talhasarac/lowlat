@@ -1330,9 +1330,9 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   check broken once where it can be without a reboot; both bars. **Owed**: a guest on another
   machine through the GPU's restart and on the lock screen, its unlock typed through it, and the
   secure attention screen; the host's end, the update and the GPU's restart with the panels'
-  cables out; the machine asleep with the host idle. **No elevation prompt can be raised on the
-  development machine**: its administrators elevate with no prompt, so none reaches the secure
-  desktop.
+  cables out; the machine asleep with the host idle. **No elevation prompt could be raised on the
+  development machine** as it was set: its administrators elevated with no prompt, so none
+  reached the secure desktop.
   *Checked with a person 2026-10-16*, an established client on a laptop over the LAN driving the
   host's own display at the laptop's 2880x1800. The GPU's driver restarted with the panel lit:
   the rebuild landed in the integrated GPU's listing, waited it out and went on in about 3 s, the
@@ -1347,7 +1347,10 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   on the host's display, the stream reading it again on the GPU's new identity and the guest
   connecting again -- its session had ended while the machine slept. A reset of the display stack
   from the keyboard put the display's saved mode back, which the host put right in a tenth of a
-  second. The elevation prompt is left to a machine that raises one.
+  second. **An elevation prompt**, once the person turned prompting on: the stream followed the
+  input onto it; the host's display beside the lit panel showed the prompt's dimmed backdrop, its
+  dialog drawn on the primary alone; the guest switched its stream to the panel, answered the
+  prompt through it, and switched back.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1383,8 +1386,8 @@ on the LAN and one on a Windows machine:
 - 2026-10-16: W3.5 checked with a person and ticked: a guest on a laptop through the GPU's
   restart, the lock screen and the secure attention screen, with both panels' cables out the host's
   end, the update and the GPU's restart, and the machine's sleep; the secure screens black on the
-  host's display while it is a secondary. No elevation prompt can be raised on the development
-  machine.
+  host's display while it is a secondary; an elevation prompt answered through the guest, its
+  dialog drawn on the primary alone.
 - 2026-10-16: W3.5 built, not ticked: the controller follows its driver, the host's own display
   follows it and the stream's wait plugs it again and waits out a display under a GPU without the
   encoder; `wake_display`; the stream's spin after a driver update found live and fixed. Checked
