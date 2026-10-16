@@ -26,7 +26,10 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
   system's code: a panic ends the driver's host process, which the system starts again.
 - A host process of its own, never shared with another driver, so the process the host takes
   handles from holds this driver alone; raised in priority, since its wake lies on every frame's
-  path (measured with and without).
+  path (measured with and without). *Amended 2026-10-16:* the setup's high-priority setting
+  chooses a shared pool meant for input drivers, and a driver with a process of its own has none:
+  the process runs at normal priority, measured. Whether the frame thread is raised, through the
+  system's multimedia scheduling, is decided by measurement under load.
 - The floor is Windows 10 1903, the first release whose display class lets a driver name the GPU
   to render on.
 - Its log goes to the debugger stream: the driver's host process has no console and no file it
@@ -37,13 +40,18 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
 | Interface | Who opens it | What it carries |
 |---|---|---|
 | control | any interactive user, administrators, the system account | a plug, bound or kept, at a slot asked for or any; an unplug; a replug with a mode; the list; a reload of the file; the version |
-| frames | the system account alone | the section, the buffers and the fences of §1.6 |
+| frames | anyone the device admits may ask; only the system account can use the answer | the section, the buffers and the fence of §1.6 |
 
-**The frame interface is a screen-capture channel**, refused at open to any caller but the system
-account, since one device carries one access list. Plugging a display asks no more than a person
-at the desk may do, so the control interface is open to any interactive user, and ownership
-(§1.3) keeps one user's monitors from another's requests. Both are answered on the display
-class's own request path.
+**The frame interface is a screen-capture channel, and the handles are what limit it.** Its
+answer is a set of handle values in the driver's own process, which only a process allowed to take
+handles from that process can use -- the system account, or an administrator who turns on the
+debugging privilege and could find them there unasked. So the driver answers anyone the device
+admits, one device carries one access list for both interfaces, and nothing the driver does waits
+on a reader. (*Amended 2026-10-16*: first written as refused at open to any caller but the system
+account; that check would have guarded only what the handles already guard.) Plugging a
+display asks no more than a person at the desk may do, so the control interface is open to any
+interactive user, and ownership (§1.3) keeps one user's monitors from another's requests. Both
+are answered on the display class's own request path.
 
 ### §1.3 Monitors, and how long they live
 
@@ -126,22 +134,21 @@ to them never re-signs the driver. The display is standard dynamic range, and ev
 eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)):
 
 - **Per swapchain**, the driver shares each distinct buffer once, read-only, with a fence of the
-  device the swapchain was given, and publishes their handles in a section the host maps. The
-  host takes the handles from the driver's process and keeps a view per buffer until the
-  swapchain is replaced.
-- **Per picture**, the driver acquires, notes the time, signals the fence, publishes the buffer
-  with its sequence and frame number, and finishes the frame at once; then it waits on three
-  things together -- the host's release reaching that sequence, the swapchain's end, and a bound
-  -- before it acquires again, which is when the system may write that buffer next.
-- **The host claims a sequence before reading it**, waits for the fence on its device, converts
-  into the encoder's input and releases the sequence: after the conversion, not after the encode.
-- **At the bound** the driver lets go of an unclaimed picture, which the host then skips, and of
-  a claimed one too, counting it. The bound sits well inside a frame period, since a held buffer
-  holds back the compositor, and is set by measurement.
-- **The driver reads the host's release on the processor only** and never waits for it on the
-  device, so a host that dies cannot stall the display. **The swapchain's end ends a hold at
-  once**: a frame held across a monitor's departure stalls the system's teardown until its
-  watchdog ends the driver.
+  device the swapchain was given, and publishes their handles in a section of its own. The host
+  takes the section, the handles and an event the driver sets at each publish from the driver's
+  process, and keeps a view per buffer until the swapchain is replaced. **A swapchain has three
+  buffers, used in turn** (measured); the count is read per swapchain, not assumed.
+- **Per picture**, the driver acquires, notes the time, signals the fence, publishes the picture
+  -- its buffer, sequence and frame number -- and finishes it at once. **Nothing waits on the
+  host.** The system writes a buffer again only for the third composition after it, so a picture
+  stays intact for about three refreshes after its acquire -- 24 ms at 120 a second, measured --
+  where the host converts within half a millisecond.
+- **The host takes the latest picture**, waits for the fence on its device and converts into
+  the encoder's input; after queuing the conversion it checks the driver's sequence, and when the
+  driver has acquired as many newer pictures as the swapchain has buffers less one, the buffer may
+  have been written again, so the latest is converted instead, and counted.
+- **A still desktop's last picture stays readable**: an acquire that finds nothing new leaves the
+  driver the buffer it has, so the latest picture is never written again while it is the latest.
 - **A picture's time is the driver's acquire.** The time the system attaches to a frame is when
   it should be shown, which lies ahead of the hand-over.
 - A frame repeating the last frame number is no new picture, and the system's marker for a still
@@ -149,8 +156,13 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
   clock keeps the stream's pace.
 - Each acquired buffer carries a reference the driver releases at its next acquire.
 
-If the system's buffer will not open in the host, or holding it costs more than it saves, the
-driver converts into targets of its own, then copies, by measurement.
+*Rewritten 2026-10-16, at W3.3's review.* The driver first held each buffer, acquiring no other,
+until the host released it or a bound inside a frame period passed. Measured, the system's own
+cycle keeps a picture intact six times longer than that bound, and the hold added only the
+driver's dependence on the host: a release fence, a claim, a picture held across a monitor's
+departure, and a later next picture whenever the host was slow. The buffer opens in another
+process as it is, with no keyed mutex; were a later system's not to, the driver would convert
+into targets of its own, by measurement.
 
 ### §1.7 The GPU, and the pointer
 
@@ -220,7 +232,9 @@ program and gone with its holder, a kept one back at its saved mode and place af
 restarted and again after a reboot, the file's settings changed. **The host's own display is
 built and checked live** (W3.2, 2026-10-16): plugged by the host, bound to it, held at its mode,
 sized at an owner's join and streamed through the system's duplication of it. The
-pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
+pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built. *The hand-over probed
+2026-10-16, at W3.3's review*: the system's buffer shared, opened and read by the system account's
+own device in another process, three buffers in turn, a picture intact about three refreshes.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

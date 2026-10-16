@@ -837,8 +837,21 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   finishes the frame as soon as the signal is queued, then holds the buffer -- acquiring no
   other -- until the host's release fence passes. It reads the host's fence on the processor
   only and never waits for it on the device, so a host that dies cannot stall the display.
+  *Amended 2026-10-16, at W3.3's review:* **the driver never waits for the host.** A swapchain
+  hands the driver three buffers in turn, measured, and the system writes a buffer again only for
+  the third composition after it, so a picture stays intact for about three refreshes after the
+  driver acquires it -- 24 ms at 120 a second -- where the host converts within half a
+  millisecond. The driver acquires, signals, publishes and finishes, as it would with nobody
+  reading; the release fence and the hold are gone. The host converts the latest picture and,
+  after queuing the conversion, checks that the driver has not acquired as many newer pictures as
+  the swapchain has buffers less one; when it has, the buffer may have been written again, so the
+  latest is converted instead, and counted. A still desktop's last picture stays the driver's
+  until a newer one is acquired, so it is never written again while it is the latest.
 - **The hold is bounded well inside a frame period**, since a held buffer holds back the
   compositor. Past the bound the driver releases the buffer anyway and counts it.
+  *Replaced 2026-10-16, at W3.3's review:* nothing is held (above); the system's own cycle of
+  buffers keeps a picture intact while the host reads it, six times longer than the bound would
+  have.
 - **The driver converts nothing.** Formats, depth, full chroma and scaling stay the host's,
   so changing them never re-signs the driver. As everywhere, the display is standard dynamic
   range only, so every buffer is eight-bit BGRA.
@@ -882,6 +895,12 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   display asks no more than a person at the desk may do, and ownership keeps one user's monitors
   from another's requests -- while **the frames are never in it** ([06 §13](06-api.md)): the
   driver's frame interface admits the system account alone, checked when it is opened.
+  *Amended 2026-10-16, at W3.3's review:* what limits the frames is the handles. The answer to a
+  request for a monitor's frames is a set of handle values in the driver's own process, which only
+  a process allowed to take handles from it can use -- the system account, or an administrator
+  who turns on the debugging privilege, who could find them there unasked. So the driver answers
+  anyone the device admits, and nothing it does waits on whoever reads; a check at open would
+  have guarded only what the handles already guard.
 - **The host's display is configured like an output.** Whether a stream may plug it is settled
   at start; its name, `virtual`, and its size and refresh are live. Zero lets the host decide:
   the size an owner states as it joins an empty room, within the largest picture that guest
@@ -932,6 +951,14 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   ahead of it. A buffer's reference is released at the next acquire. If the system's buffer
   will not open in the host, or the hold costs more than it saves, the driver converts into
   targets of its own, then copies, by measurement.
+  *Amended 2026-10-16, at W3.3's review:* everything is the driver's -- the section, the buffers'
+  handles, the fence and an event set at each publish -- and the host takes them from the
+  driver's process, so nothing is ever placed in it. Per frame the driver acquires, notes the
+  time, signals the fence, publishes the latest picture -- its buffer, sequence and frame number
+  -- and finishes; nothing is claimed and nothing waits on the host, and with no hold there is
+  none to end at a monitor's departure. The host takes the latest picture, waits for the fence on
+  its device, converts, and checks the sequence after, as above. The buffer opens in the host as
+  it is: no keyed mutex, read across processes, measured.
 - **Signing.** In development the driver and its catalogue are signed with a test certificate
   the machine trusts: a user-mode driver needs neither test mode nor a signature from the
   system's vendor. Releases are signed by a signing service for open-source projects, from CI's
@@ -1097,9 +1124,32 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   fences, the claim, the hold and its bound, a view per buffer, the frame's time; the Windows
   display's second source. Checked by the gate's comparison, run offline first, and by each part
   broken and seen to fail: no wait on the fence, no release, a claimed frame past the bound.
+  *Reviewed 2026-10-16, before its build* (the decisions above, amended): a probe answered what
+  the design rested on, on the development machine. The system's buffer is eight-bit BGRA, read
+  by a shader, shared by an NT handle and with no keyed mutex, so a D3D11 reader in another process
+  opens it as it is; a swapchain has three, used in turn, at 2560x1440 at 120 and 1920x1080 at 60
+  alike. A reader as the system account took the buffers and the fence out of the driver's process,
+  opened them on a device of its own on the GPU that renders them, and read 1,790 pictures in
+  fifteen seconds, each the one published and none torn, with the wait on the fence and without:
+  on one GPU with the scheduling in its driver, the reads ran after the composition either way, so
+  that the wait is needed cannot be shown here, and it stays. The driver's acquire to the reader
+  seeing the picture took 0.013 ms at the median, to four pixels read back 0.39 ms. Read late on
+  purpose, every picture was intact up to 24 ms after its acquire at 120 a second and none from
+  25 ms -- the buffer written again for the third composition after it -- and at a 60 Hz mode none
+  was wrong up to 30 ms. Hence no hold (above). **The duplication stays the host's path through
+  this step**: the direct source is built into the Windows display and run by the hardware tests
+  and the comparison, as the system account, and becomes the host's own display's source at W3.4.
+  Its checks become: the publication model-checked; the freshness check broken by a stalled
+  reader, which then converts a later picture; the driver's process killed and its device
+  restarted mid-stream, twenty times each, the host never stuck behind its wait on the fence; two
+  readers at once; a user's process given nothing it can use. No release, bound or claim exists to
+  break.
 - [ ] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
   driver, position and show state as in W2. Checked by each kind of shape, one larger than the
   wire's 256, and the visibility while the system draws the pointer itself.
+  *Amended 2026-10-16, at W3.3's review:* with its pointer, the host's own display reads the
+  direct frame whenever the driver answers, and duplicates it otherwise, so W3.5's checks and the
+  gate stream it; before this step its pictures would carry no pointer.
 - [ ] **W3.5 lifecycle and no monitor**: a host killed mid-hold, the driver updated, the GPU's
   driver restarted, the display asleep, the lock screen, the secure attention screen and an
   elevation prompt, a logoff, a remote desktop connection, and a machine with no monitor.
@@ -1126,11 +1176,22 @@ on the LAN and one on a Windows machine:
   and for the direct frame, with the hold's distribution and how often its bound fires; the
   direct frame becomes the host's path only at or below the duplication at every rate and
   percentile, else the duplication stays the path and the numbers are recorded;
+  *amended 2026-10-16, at W3.3's review:* with no hold, how often a picture is converted again for
+  coming too late in its place; for both sources, the blackout at the lock screen and at an
+  elevation prompt, from the switch to the first picture of the new desktop; the 240 Hz leg with
+  the host's display as the primary, unsaved and held, since the compositor's clock is the
+  primary's; and the GPU scheduling mode recorded, every measurement so far having had it in the
+  driver;
 - the test-signed package installing silently with no test mode; CI building the driver; both
   CI jobs and the Linux bar.
 
 ## Change log
 
+- 2026-10-16: W3.3 reviewed: the driver never waits for the host -- a probe found the system's
+  buffer shared with no keyed mutex and read across processes, three buffers in turn, and a
+  picture intact for about three refreshes, so the hold, the release fence and the claim go; the
+  frames limited by who can take handles from the driver's process; the duplication the host's
+  path until W3.4; the gate's comparison without a hold to measure.
 - 2026-10-16: W3.2 built and checked: the host's own display plugged, held, sized at an owner's
   join and named `virtual`; an output lit only with a monitor behind it, since the last cable
   pulled leaves its output on the desktop; the pace and the deadlines' refresh at the

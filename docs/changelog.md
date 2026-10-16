@@ -3,6 +3,37 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.3 reviewed: the driver never waits for the host
+
+### Decided
+- **No hold** ([impl-plan-windows.md](impl-plan-windows.md) W3, [11 §1.6](11-drivers.md)): the
+  display driver acquires, signals, publishes and finishes each picture as it would with nobody
+  reading; the host converts the latest picture and checks after queuing that the buffer cannot
+  have been written again, else converts the latest instead and counts it. The release fence, the
+  bound and the claim are gone, and with them the driver's dependence on the host.
+- **The frames are limited by the handles** ([11 §1.2](11-drivers.md)): the answer to a request
+  for a monitor's frames is handle values in the driver's own process, usable only by a process
+  allowed to take handles from it, so the driver answers anyone the device admits.
+- **The duplication stays the host's path through W3.3**; the direct frame becomes the host's own
+  display's source at W3.4, once it has a pointer, and the gate's comparison decides whether it
+  stays. No configuration selects it.
+
+### Measured
+- On the development machine, a probe build of the driver and a reader as the system account in
+  another session: the system's buffer is eight-bit BGRA, read by a shader, shared by an NT handle
+  with no keyed mutex; three per swapchain, used in turn, at 2560x1440 at 120 and 1920x1080 at 60.
+  The buffers and the fence taken from the driver's process opened on the reader's own device;
+  1,790 pictures read in fifteen seconds, each the one published and none torn, with the wait on
+  the fence and without (on one GPU with the scheduling in its driver, the reads ran after the
+  composition either way). The driver's acquire to the reader seeing it 0.013 ms at the median,
+  to four pixels read back 0.39 ms. Read late on purpose, every picture intact up to 24 ms after
+  its acquire at 120 a second and none from 25 ms; at a 60 Hz mode none wrong up to 30 ms.
+
+### Corrected
+- [11 §1.1](11-drivers.md): the driver's process was said to be raised in priority. The setting
+  that asks for it chooses a shared pool meant for input drivers and does nothing for a driver
+  with a process of its own; the process runs at normal priority, measured.
+
 ## 2026-10-16 - W3.2 built: the host's own display, the pace at the compositor's clock
 
 ### Added
