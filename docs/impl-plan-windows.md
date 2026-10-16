@@ -910,6 +910,14 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   it beside that, so a request by name survives a renumbering, and reading the configuration
   back says `virtual` while it is captured. Off Windows the fields are accepted and nothing is
   plugged, and `virtual` is refused.
+  *Amended 2026-10-16, at W3.2's build:* **lit means a monitor behind the output.** The last
+  monitor's cable pulled leaves its output active and part of the desktop, composed for nobody,
+  and no event marks it -- a DisplayPort and an HDMI panel alike, measured -- so the stream kept
+  serving a still picture and the setting never found nothing lit. The monitor leaves only the
+  list of monitors under the output, so an output counts as lit only with a monitor listed
+  behind it: where outputs are read, and in the stream's check each second that its display is
+  still there. A virtual display lists its monitor as a panel does. Any monitor's arrival clears
+  the dead output.
 - **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
   once, with a fence of its device, and publishes their handles in a section the host maps; the
   host takes the handles from the driver's process and keeps a view per buffer until the
@@ -1029,7 +1037,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   reboot**, a kept monitor an unelevated shell made came back at its slot, mode and place:
   plugged again by the driver from the file at its start, arranged by the system from its
   store.
-- [ ] **W3.2 the host's display, and desktop duplication of any virtual display**: the setting,
+- [x] **W3.2 the host's display, and desktop duplication of any virtual display**: the setting,
   the name, the live mode, the owner's size at join, `lowlatd`'s relay; the device on the GPU
   that renders an indirect output. Checked by the host streaming its own display through desktop
   duplication -- the baseline -- and two other vendors' virtual displays.
@@ -1045,6 +1053,46 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   the compositor's clock under a 144 and a 240 Hz mode, settled again when only the refresh
   changes, and a ceiling below the clock taking each picture as it lands; a turn of the host's
   display refused.
+  *Built and checked live 2026-10-16.* The host's own display lives with the stream's thread: plugged at the host's start where the
+  configuration names it, or allows it and nothing is lit -- asked again each second while
+  nobody is seated and at every build -- bound to the host, in the highest free slot; held at the
+  mode the host wants, put back whenever the system has it at another; and sized as a guest
+  arrives into an empty room, before that guest's first picture is built, the guest's
+  declaration travelling with its seat. Its name is `virtual` wherever outputs are listed or
+  asked for. The pace is the lowest of the rate asked, the output's mode and the compositor's
+  clock, which is also the refresh the deadlines sit on, and a change of either is a rebuild; the
+  rate asked is kept apart from the pace, so a rebuild settles again from it rather than from
+  what the last display allowed. `lowlatd` turns the setting on (`--no-virtual-fallback` turns it
+  off), passes a guest's rate to the host's display unbounded, since the display follows it,
+  relays a guest's size into the display's setting and refuses a turn of it, and tells the guests
+  a new rate. **The controller puts a mode again when the system takes it back**: a monitor
+  plugged again is restored to its set's saved arrangement as its arrival completes, which came
+  after the mode was put -- more than three seconds after while a program presented on the
+  display, measured -- and a bound monitor's unsaved mode did not survive it. **An output is lit
+  only with a monitor behind it** (the amendment above), since the last cable pulled leaves its
+  output on the desktop. Checked on the development machine: the display plugged by name with the panels lit 26 to 118 ms after the
+  host started, in slot 15, streamed at 120 a second with each picture handed over 0.08 ms after
+  its composition at the median, and gone when the host stopped; an owner's 2560x1440 put 163 ms
+  before the first picture, which was already that size; 3420x2148, which no monitor lists, put
+  by a replug in 201 ms, and in 622 ms with a program presenting on the display; a guest's rate
+  re-moding the display in 109 to 116 ms, the stream rebuilt behind it; a mode set from outside
+  the host put back in 119 ms; asking 144 of the display paced at 120, the compositor's clock, and
+  the guests told 120; asking 60, each picture taken 0.9 ms after its composition at the median
+  and 1.4 at p95, where 8.3 was measured with the deadlines on the mode; an established host's own
+  display at 144 paced at 120; the default `lowlatd` with the panels lit plugging nothing; the C#
+  host at minor 27; the new checks each broken once and seen to fail, nineteen of them; both
+  bars. **At the desk**, an established client on a laptop through `lowlatd`: its owner's
+  1366x768 put 179 ms after the declaration, the first picture at that size; the settings
+  panel's 1920x1080, 2560x1440 and 1366x768 each put 121 to 127 ms after the request, the
+  picture at the new size 331 to 335 ms after it; two turns refused with a line, nothing
+  rebuilt. The setting with the last panel's cable pulled while streaming: the stream left the
+  output with nothing behind it 0.96 s after the pull, the host's display was plugged 113 ms
+  later and streamed 0.27 s after that, about 1.35 s from the pull to the picture; the panel
+  plugged back, the host's display stayed and its saved 60 Hz, put back by the arrival, was put
+  to the asked 30 in 154 ms. Before the rule the same pull froze the picture until a monitor
+  arrived. Nothing lit cannot be made from software here -- the system refuses a desktop with no
+  output, and disabling a monitor's device leaves its output lit -- hence the cable. A program
+  leaving exclusive fullscreen takes the road a mode set from outside took, not checked again.
 - [ ] **W3.3 the direct frame**: the frame interface, the section, the shared buffers and
   fences, the claim, the hold and its bound, a view per buffer, the frame's time; the Windows
   display's second source. Checked by the gate's comparison, run offline first, and by each part
@@ -1083,6 +1131,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.2 built and checked: the host's own display plugged, held, sized at an owner's
+  join and named `virtual`; an output lit only with a monitor behind it, since the last cable
+  pulled leaves its output on the desktop; the pace and the deadlines' refresh at the
+  compositor's clock, the rate asked kept apart from the pace; the controller putting a mode
+  again after a replug; `lowlatd`'s setting, relay and new-rate notice; minor 27.
 - 2026-10-16: W3.2 reviewed: any virtual display streams through the duplication as built; the
   pace and the deadlines' refresh at the rate the desktop is composed at, amending W2's
   duplication decision; the host's display plugged at the host's start, in the highest free

@@ -109,7 +109,12 @@ an adapter's identifier changes across boots (§1.7).
   extends a set of monitors it has not seen and restores a set it saved, at once; a set it
   remembers with nothing saved it leaves dark. The controller then adds the monitor's path to
   the active ones, saved as a mode is. **A saved arrangement overrules the mode a plug asks
-  for**, so the controller reads the mode back and sets the one asked for.
+  for**, so the controller reads the mode back and sets the one asked for. *Amended 2026-10-16*:
+  the overruling can come after the mode was put -- a monitor plugged again is restored to its
+  set's arrangement as its arrival completes, more than three seconds after the mode while a
+  program presented on it, measured -- and a bound monitor's unsaved mode does not survive it, so
+  the controller puts the mode again whenever the system has the monitor at another, until its
+  bound.
 - **The host's display holds its mode** for as long as the host runs: another monitor's arrival
   and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
   puts its own back whenever the system's differs.
@@ -212,7 +217,9 @@ at 120; unplugged by a request and by its handle's end, a killed process's inclu
 built and checked live** (W3.1, 2026-10-15): kept and bound monitors from an unelevated shell
 and through the C interface, a mode set listed and unlisted, a bound monitor refused to another
 program and gone with its holder, a kept one back at its saved mode and place after the driver
-restarted and again after a reboot, the file's settings changed. The
+restarted and again after a reboot, the file's settings changed. **The host's own display is
+built and checked live** (W3.2, 2026-10-16): plugged by the host, bound to it, held at its mode,
+sized at an owner's join and streamed through the system's duplication of it. The
 pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's

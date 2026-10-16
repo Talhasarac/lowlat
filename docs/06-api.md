@@ -273,7 +273,9 @@ whole:
 | `bitrate_mbps` | yes | Re-bases the rate budget and reaches the encoder through the reconfigure the rate loop already performs every pass. No keyframe, no interruption ([00 §D8](00-overview.md)). |
 | `min_bitrate_mbps` | yes | The floor congestion control may not descend below, and it **moves down with the ceiling**: a ceiling lowered under a floor that stayed leaves every controller pinned at a rate the operator just asked not to exceed. |
 | `full_fps` | yes | Emit at `fps` even when the picture has not changed. **Clearing it is a permission, not an instruction** -- there is no damage signal here, so nothing yet skips a repeated picture, and continuing to send costs bitrate rather than being wrong. |
-| `output` | yes | The exception in cost rather than in kind: a picture from another output cannot be absorbed into a stream built for one, so it rebuilds around the new source for **one coded refresh** and every guest keeps its seat and its channel. |
+| `output` | yes | The exception in cost rather than in kind: a picture from another output cannot be absorbed into a stream built for one, so it rebuilds around the new source for **one coded refresh** and every guest keeps its seat and its channel. `virtual` is the host's own display, plugged when it is asked for and kept for the host's life (Windows alone; refused elsewhere, at the call). |
+| `virtual_width`, `virtual_height` | yes | The host's own display's size, both or neither (minor 27). **Zero lets the host decide**: the size an owner states as it joins an empty room, else the size the display has, 1920x1080 when first plugged, either within the largest picture that guest accepts. A size is put through the system's display configuration where the monitor lists it and by plugging the monitor again with it added where it does not; the stream follows as it follows any resize. Refused outside 640x480 to 7680x4320 rather than clamped. Read back as asked, which the display's own size is not: that is the picture's, on the status. |
+| `virtual_hz` | yes | The host's own display's refresh (minor 27). **Zero is the frame rate's ceiling**, `fps`, and 60 where that is zero too: a display composing faster than the stream takes pictures composes pictures nobody is sent. 24 to 480. |
 **A configuration nobody filled in is not a zeroed one.** Every enumerated field here is
 validated rather than clamped, so a structure the caller zeroed is a *valid* request for the
 first variant of each -- including the most aggressive congestion level -- and the boundary
@@ -293,6 +295,7 @@ Everything in `lowlat_host_config` outside that structure is settled at `lowlat_
 | `base_port`, `servers` | Bound and consulted per attempt; moving them under running guests moves nothing that is already connected. |
 | `max_guests` | Advertised capacity, read when a guest asks for a seat. |
 | `exclusive_pointer`, `exclusive_hold_ms` | The pointer arbiter is built once with them. The hold is **clamped rather than refused**: it is a comfort setting, and the nearest usable value beats a host that will not start.
+| `virtual_fallback` | Whether the host plugs its own display when nothing is lit (minor 27), checked at its start and again while it runs, and keeps it for as long as it runs. Lit is an output on the desktop with a monitor behind it: the last monitor's cable pulled leaves its output on the desktop with none, and that is nothing lit. **Off by default**, since it changes the machine; `lowlatd` turns it on. Windows alone has the display; elsewhere it is accepted and nothing is plugged. |
 
 <a name="quality"></a>
 **`lowlat_quality` names where a host sits between delay and picture**, and it is the only
@@ -1174,7 +1177,9 @@ display identity on one platform is an operating-system device path bounded at 2
 does not fit is truncated silently and then resolves to nothing, so the bound is set by the worst
 case rather than by what a machine happens to report today. (*Amended 2026-10-14*: Windows
 names a display `DISPLAYn` ([impl-plan-windows.md](impl-plan-windows.md) W2), so the long
-identity is a sound device's; the bound stands.)
+identity is a sound device's; the bound stands.) (*Amended 2026-10-16*: the host's own display
+is listed with the identity `virtual` and the system's `DISPLAYn` as its name, so a request by
+identity survives the system numbering its output again, as a replug or a driver restart does.)
 
 `lowlat_get_audio_outputs` lists what sound could be captured from. **The identity it returns is
 the monitor of an output, not the output**, because that is the device a host reads: it carries
@@ -1457,6 +1462,16 @@ appended to `lowlat_client_status`. Nothing moves, and a caller built against an
 gets the fields it knows. The host's microphone answer, which reached the application as an
 application message until this minor, is read by the library and raised as the event instead.
 
+**Minor 27** (2026-10-16) is the host's own display ([§3](#3-host), [§14](#14-verification-status)):
+`virtual_fallback` in `lowlat_host_config`, taking one of its reserved bytes, and
+`virtual_width`, `virtual_height` and `virtual_hz` appended to `lowlat_host_video_config`; the
+output name `virtual`. **Something moved, before the first major version**:
+`lowlat_host_video_config` sits inside `lowlat_host_config` ahead of the sound's half, so
+growing it moved that half, and a host application built against an earlier minor is refused at
+`lowlat_host_start` until it is built again -- refused, never misread, since every call checks
+the size of what it is given. Taken deliberately rather than kept by a call of its own; the host
+half carries no promise before 1.0, as the client half never has.
+
 **Minor 26** (2026-10-15) is the third half, the virtual displays, on Windows
 ([§3c](#3c-virtual-displays)): `lowlat_vdd` and its ten calls, `lowlat_vdd_plug_info`,
 `lowlat_vdd_monitor`, `lowlat_vdd_mode`, `lowlat_vdd_settings`, the `LOWLAT_VDD_*` constants,
@@ -1569,4 +1584,5 @@ starts rather than when a stream finds nothing lit, since a stream exists only o
 seated, and again whenever nothing is lit; the size at a join is clamped to that guest's largest
 picture; the enumeration lists the display as `virtual`, the system's name for it beside that,
 and reading the configuration back says `virtual` while it is captured; off Windows the fields
-are accepted, nothing is plugged, and `virtual` is refused.
+are accepted, nothing is plugged, and `virtual` is refused. *Built at W3.2 (minor 27), the
+host's display listed and asked for as `virtual`.*

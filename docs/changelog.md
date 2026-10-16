@@ -3,6 +3,76 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.2 built: the host's own display, the pace at the compositor's clock
+
+### Added
+- **The host's own display** ([impl-plan-windows.md](impl-plan-windows.md) W3.2,
+  [06 §3](06-api.md)): plugged at the host's start where the configuration names it as
+  `virtual`, or allows it with `virtual_fallback` and nothing is lit, asked again each second
+  while nobody is seated and at every build; bound to the host, in the highest free slot; held at
+  the mode the host wants; sized as an owner arrives into an empty room, before its first picture,
+  within that guest's largest picture; listed and asked for as `virtual`. Minor 27:
+  `virtual_fallback` and `virtual_width`, `virtual_height`, `virtual_hz`, the last three moving
+  the sound's half of `lowlat_host_config` (host applications rebuild).
+- `lowlatd`: the setting on, `--no-virtual-fallback`, `--output virtual`; a guest's size relayed
+  into the host's display's setting and a turn of it refused; a guest's rate passed to it
+  unbounded; the guests told a new rate as well as a new output.
+- The library's demo: `LOWLAT_RESOLUTION=WxH`, a size asked of the host's display.
+
+### Changed
+- **The pace and the deadlines' refresh are the compositor's clock**
+  ([05 §2](05-host.md)): the pace the lowest of the rate asked, the output's mode and the clock,
+  the deadlines on the clock, a change of either a rebuild; the rate asked is kept apart from the
+  pace, so a rebuild settles again from it rather than from what the last display allowed.
+- **An output is lit only with a monitor behind it**
+  ([impl-plan-windows.md](impl-plan-windows.md) W3's configuration decision): where outputs are
+  read and in the stream's check each second that its display is still there. The last monitor's
+  cable pulled left its output on the desktop, so the stream served a still picture until a
+  monitor arrived and `virtual_fallback` never found nothing lit; now the stream leaves it and
+  the host's display is plugged.
+
+### Fixed
+- **A mode put after a replug was lost**: the monitor's arrival restored its set's saved
+  arrangement after the mode was put, and an unsaved mode -- every bound monitor's -- did not
+  survive it. The controller now puts the mode again while the system takes it back, within its
+  bound ([11 §1.5](11-drivers.md)).
+- `lowlatd display` on Linux answered no command line with a refusal rather than its usage, and
+  the Linux build refused it as unused code.
+
+### Checked
+- On the development machine, the host as the system account with the library's demo as the
+  guest: the display plugged by name 26 to 118 ms after the host started, streamed at 120 a second
+  with a picture handed over 0.08 ms after its composition at the median, gone at the host's stop;
+  an owner's 2560x1440 put in 163 ms and its first picture at that size; 3420x2148, which no
+  monitor lists, by a replug in 201 ms, 622 ms with a program presenting on the display (more
+  than three seconds and lost, before the fix); a guest's rate re-moding the display in 109 to
+  116 ms; a mode set from outside put back in 119 ms; asking 144 paced at 120 and told; asking
+  60, a picture 0.9 ms after its composition at the median and 1.4 at p95 (8.3 with the deadlines
+  on the mode); an established host's own display at 144 paced at 120; the default `lowlatd` with
+  the panels lit plugging nothing; the C# host at minor 27; nineteen deliberate breaks caught.
+- At the desk, an established client on a laptop through `lowlatd`: its owner's 1366x768 put
+  179 ms after the declaration, the first picture at that size; the settings panel's 1920x1080,
+  2560x1440 and 1366x768 each put 121 to 127 ms after the request, the picture at the new size
+  331 to 335 ms after; two turns refused with a line. The setting with the last panel's cable
+  pulled while streaming: the dead output left 0.96 s after the pull, the host's display plugged
+  113 ms later and streamed 0.27 s after that; the panel plugged back, the host's display stayed,
+  the 60 Hz the arrival put back on it returned to the asked 30 in 154 ms.
+- The Windows bar on the final tree: fmt and clippy clean, tests 1302 passed, none failed (on an
+  earlier tree a port-mapping test unrelated to this step failed once,
+  `a_stop_while_an_answer_is_awaited_leaves_nothing`, and passed thirteen times after); the
+  Linux bar clean, tests 1319 passed with the two that need a `localhost` answering on both
+  families, which the test machine's lacks.
+
+### Found
+- **The last monitor's cable pulled leaves its output on the desktop**, active and composed for
+  nobody, with no event marking it -- a DisplayPort and an HDMI panel alike; with another
+  monitor lit the same pull removes the output. Only the list of monitors under the output
+  changes, and any monitor's arrival clears it. Nothing lit cannot be made from software: the
+  system refuses a desktop with no output, and disabling a monitor's device leaves its output lit.
+- Once, before the controller's fix, a kept monitor removed after two replugs left its path
+  active with no monitor behind it -- an empty area in the desktop -- until the system's saved
+  arrangement for the monitors connected was applied again. Not seen since, in two tries.
+
 ## 2026-10-16 - W3.2 reviewed: any virtual display streams as built, the pace at the composed rate
 
 ### Decided

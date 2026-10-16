@@ -67,6 +67,12 @@ lowlat-sim       deterministic simulator and network namespace fixtures (dev-dep
 lowlat-drivers   the device interfaces reached at runtime: the generated bindings,
                  the loaders, the display and the device context; shared by
                  encode and decode, nothing above the seam
+lowlat-vdd-proto what the display driver and its controller share: the control
+                 interface's requests and replies, each monitor's identity, the
+                 modes; no platform code, no allocation
+lowlat-vdd-ctl   the display driver's controller: plug, unplug, modes, the
+                 settings file; under the host's own display, the SDK's third
+                 half and lowlatd display
 lowlat-capture   frame trait plus synthetic source; real backends at Gate B
 lowlat-encode    NVENC, then FFmpeg software, then VAAPI
 lowlat-audio     sound capture, encode, and decode; no display stack, no vendor runtime
@@ -81,13 +87,8 @@ lowlat-sdk       the C ABI cdylib and its header; the host and the client are
                  its two halves, each a feature, and on Windows the virtual
                  displays a third
 lowlat-kessel    signaling client; async permitted; the SDK does not link it
-lowlat-vdd-proto what the display driver and its controller share: the control
-                 interface's requests and replies, each monitor's identity, the
-                 modes; no platform code, no allocation
 lowlat-vdd       the host's own display driver on Windows: a library the
                  system's driver host loads; nothing in the workspace links it
-lowlat-vdd-ctl   the display driver's controller: plug, unplug, modes, the
-                 settings file; under the SDK's third half and lowlatd display
 lowlatd          system service; the session helper and the tray are the same
                  binary in its second and third roles, over a Unix socket
 ```

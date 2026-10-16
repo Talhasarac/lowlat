@@ -101,7 +101,10 @@ what went (`mic`, `mic_dropped`), the host's answer (`mic_open`) and the calls
 it refused (`mic_refused`), and the host's change of answer is printed when it
 comes. `LOWLAT_HEVC`, `LOWLAT_10BIT` and `LOWLAT_444` are the preferences the
 attempt starts with, masked by what the decoder takes; Ctrl+Shift+C cycles
-them live. `LOWLAT_HANDLE` asks for pictures as device handles, which the
+them live. `LOWLAT_RESOLUTION=WxH` asks the host's display for that size, which
+a host sizing a display of its own takes from an owner arriving into an empty
+room; unset, the demo asks nothing of the person's monitor. `LOWLAT_HANDLE`
+asks for pictures as device handles, which the
 toolkit's renderer imports and draws with nothing copied through this
 process; only a decoder whose row says "handles" opens that way.
 
