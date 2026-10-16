@@ -89,6 +89,15 @@ Rules:
   twice the frames the display can present halves what each frame may spend and reaches the
   display's rate anyway. Zero from the device -- a mode it will not describe -- leaves the
   request standing, and a default stands when there is no request either.
+  *Amended 2026-10-16:* **on Windows a mode can overstate how often its display presents.** The
+  desktop is composed on the compositor's one clock, which on Windows 10 is the primary
+  display's: a virtual display at 144 or 240 under a 120 Hz primary was handed 120 compositions
+  a second, measured. So the rate is the lowest of the request, the mode and the clock the
+  compositor reports, read again at every change of the captured display's mode -- its refresh
+  included -- and the refresh the deadlines take their phase from is that clock too. With the
+  mode's period there instead, a ceiling of 60 or 90 took each picture 4.6 to 6.2 ms after its
+  composition at the median, where a panel whose mode is its clock takes it within a
+  millisecond.
 - **Dirty-rectangle awareness is deferred.** It is a real optimization for desktop work and it
   interacts with the reference chain in ways that need measurement first.
 

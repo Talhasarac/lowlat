@@ -461,6 +461,10 @@ once, here.
   output under the GPU that renders it, as that GPU's own -- seen with the host's own display --
   not on an adapter of its own, so the premise above does not hold for it. Whether the stream
   as built takes such an output is W3.2's first check.
+  *Answered 2026-10-16, at W3.2's review:* it does. The host's own display and an established
+  host's own virtual display were each streamed by the stream as built: both outputs listed
+  under the GPU that renders them, the device made there, its encoder opened, and 120 pictures
+  a second delivered.
 - **NVENC alone, on the capture's D3D11 device.** The encoder keeps its register-once submit and
   poll and binds its device through D3D11 rather than CUDA. AMD's and Intel's encoders are
   deferred: on the development machine only the NVIDIA card drives a display, so either would
@@ -502,6 +506,18 @@ once, here.
   past the deadline that sees no composition for a refresh is the present of an unchanged
   picture, so a still desktop ticks once a refresh, as a display's vblank would. Ten-bit full
   chroma is granted: its round trip through the library's decoder agreed.
+  *Amended 2026-10-16, at W3.2's review:* **the rate a display presents at is the rate its
+  desktop is composed at**, which on Windows 10 is one clock for every output -- the primary
+  display's -- whatever an output's mode says. A virtual display at 144 or 240 was handed 120
+  compositions a second under a 120 Hz primary, and the stream, which said it paced at 144,
+  sent 120 while sizing each frame's budget for 144 and telling its guest 144. So the pace is
+  the lowest of the ceiling, the output's mode and the clock the compositor reports, settled
+  again at every change of the captured output's mode -- its refresh included, which re-made
+  the duplication and settled nothing before -- and the refresh the deadlines take their phase
+  from is that clock too. A ceiling below it is honoured, as `fps` always was: with the mode's
+  period under the deadlines, a ceiling of 60 or 90 on that display took each picture 4.6 to
+  6.2 ms after its composition at the median, against under a millisecond on a panel whose
+  mode is its clock.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -880,6 +896,20 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   system's database of arrangements -- a saved arrangement that only the virtual display can
   satisfy holds a later boot waiting for the driver -- and a mode it does not list is a replug
   with that mode added first, since a monitor's modes are fixed when it arrives.
+  *Amended 2026-10-16, at W3.2's review:* the display is plugged when the host starts -- the
+  setting allowing it and nothing lit, or the configuration naming it -- and again whenever
+  nothing is lit while the host runs, never on the first guest's arrival, since a stream exists
+  only once a guest is seated; on a thread of the host's own, since the controller's calls wait
+  for the system. It takes the highest free slot, so it keeps one identity and never takes an
+  application's first free one. The size at a join, stated or kept, is clamped to that guest's
+  largest picture and put before that guest's first picture; an established client states its
+  own screen's size, so the join usually replugs the display with a mode no monitor lists.
+  **The display holds its mode**: another monitor's arrival and a program leaving exclusive
+  fullscreen each put a saved mode back on it, measured, so the host puts its own back
+  whenever the system's differs. The enumeration lists it as `virtual`, the system's name for
+  it beside that, so a request by name survives a renumbering, and reading the configuration
+  back says `virtual` while it is captured. Off Windows the fields are accepted and nothing is
+  plugged, and `virtual` is refused.
 - **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
   once, with a fence of its device, and publishes their handles in a section the host maps; the
   host takes the handles from the driver's process and keeps a view per buffer until the
@@ -905,6 +935,11 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
 - **Desktop duplication of any virtual display** (W2's gap, corrected above): the device is made
   on the GPU that renders the output -- for the host's own display the one the driver reports,
   and for another vendor's whichever the encoder accepts, measured first.
+  *Amended 2026-10-16, at W3.2's review:* nothing to build. The system lists a virtual display's
+  output under the GPU that renders it, so the device W2 makes on the output's adapter is
+  already that GPU's -- seen for the host's own display and an established host's own, each
+  streamed as built. A virtual display rendered on a GPU without the encoder this host builds
+  stays refused, as any output there is.
 - **A kept monitor's arrangement is saved in the system's own store** (*added 2026-10-15, at
   W3.1's review*). A kept monitor is arranged like any monitor -- the system's own extend of a
   set it has not seen saves it, a person's settings save it, and the controller's activation and
@@ -998,6 +1033,18 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   the name, the live mode, the owner's size at join, `lowlatd`'s relay; the device on the GPU
   that renders an indirect output. Checked by the host streaming its own display through desktop
   duplication -- the baseline -- and two other vendors' virtual displays.
+  *Reviewed 2026-10-16, before its build* (the decisions above, and the pace in W2's): the first
+  check passed -- the stream as built takes the host's own display and an established host's
+  own -- so the device half is nothing to build, and an established host's own display stands
+  for the other vendors' here, a second one left to the gate. Checked as well: the display
+  plugged by name with the panels lit, and by the setting with them taken out of the topology;
+  an owner's stated size, listed and not, at the first picture with no blink, a second guest's
+  ignored, one past that guest's largest picture clamped; the live size and refresh through the
+  library and through `lowlatd`'s relay, the blink measured; the saved mode put back by another
+  monitor's arrival and by a program leaving exclusive fullscreen, each restored; the pace at
+  the compositor's clock under a 144 and a 240 Hz mode, settled again when only the refresh
+  changes, and a ceiling below the clock taking each picture as it lands; a turn of the host's
+  display refused.
 - [ ] **W3.3 the direct frame**: the frame interface, the section, the shared buffers and
   fences, the claim, the hold and its bound, a view per buffer, the frame's time; the Windows
   display's second source. Checked by the gate's comparison, run offline first, and by each part
@@ -1036,6 +1083,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-16: W3.2 reviewed: any virtual display streams through the duplication as built; the
+  pace and the deadlines' refresh at the rate the desktop is composed at, amending W2's
+  duplication decision; the host's display plugged at the host's start, in the highest free
+  slot, sized at an owner's join within that guest's limit, holding its mode, listed as
+  `virtual`.
 - 2026-10-15: W3.1 checked after a reboot, a kept monitor back at its slot, mode and place;
   ticked.
 - 2026-10-15: W3.1 reviewed and built, checked live but for the reboot: a kept monitor's

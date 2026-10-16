@@ -269,7 +269,7 @@ whole:
 
 | Field | Live | Why |
 |---|---|---|
-| `fps` | yes | A **ceiling** over the display's own rate, not a target, and **clamped to it**: a rate above what the display presents is one the loop will not reach while still being the number the encoder's per-frame budget is divided by. Zero asks for the display's own rate. Changes the pacing from the next frame. |
+| `fps` | yes | A **ceiling** over the display's own rate, not a target, and **clamped to it**: a rate above what the display presents is one the loop will not reach while still being the number the encoder's per-frame budget is divided by. Zero asks for the display's own rate. Changes the pacing from the next frame. (*Amended 2026-10-16*: on Windows the display's own rate is the rate its desktop is composed at, which a mode can overstate, [05 §2](05-host.md).) |
 | `bitrate_mbps` | yes | Re-bases the rate budget and reaches the encoder through the reconfigure the rate loop already performs every pass. No keyframe, no interruption ([00 §D8](00-overview.md)). |
 | `min_bitrate_mbps` | yes | The floor congestion control may not descend below, and it **moves down with the ceiling**: a ceiling lowered under a floor that stayed leaves every controller pinned at a rate the operator just asked not to exceed. |
 | `full_fps` | yes | Emit at `fps` even when the picture has not changed. **Clearing it is a permission, not an instruction** -- there is no damage signal here, so nothing yet skips a repeated picture, and continuing to send costs bitrate rather than being wrong. |
@@ -1563,4 +1563,10 @@ application's to relay, as on any display, and here the application relays it in
 settings. The virtual monitors an application plugs for itself go through the library's third
 half, the controller, each bound to the handle that plugged it or kept until removed
 ([11 §1.3](11-drivers.md)); the host's display is bound to the host. *The third half was built
-at W3.1 (minor 26, [§3c](#3c-virtual-displays)).*
+at W3.1 (minor 26, [§3c](#3c-virtual-displays)).* *Reviewed 2026-10-16
+([impl-plan-windows.md](impl-plan-windows.md) W3.2):* the display is plugged when the host
+starts rather than when a stream finds nothing lit, since a stream exists only once a guest is
+seated, and again whenever nothing is lit; the size at a join is clamped to that guest's largest
+picture; the enumeration lists the display as `virtual`, the system's name for it beside that,
+and reading the configuration back says `virtual` while it is captured; off Windows the fields
+are accepted, nothing is plugged, and `virtual` is refused.

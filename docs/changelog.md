@@ -3,6 +3,49 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-16 - W3.2 reviewed: any virtual display streams as built, the pace at the composed rate
+
+### Decided
+- **The pace is the rate the desktop is composed at** ([impl-plan-windows.md](impl-plan-windows.md)
+  W2, [05 §2](05-host.md)): the lowest of the ceiling, the output's mode and the clock the
+  compositor reports, settled again at every change of the captured output's mode, its refresh
+  included; the deadlines take their phase from that clock too. A ceiling below it is honoured.
+- **The host's own display** (W3): plugged when the host starts -- the setting allowing it and
+  nothing lit, or named -- and again whenever nothing is lit while it runs; the highest free
+  slot; an owner's size clamped to that guest's largest picture and put before its first
+  picture; its mode held against the system putting a saved one back; listed as `virtual`; off
+  Windows nothing is plugged and `virtual` is refused.
+
+### Measured
+- The stream as built on the development machine, H.264 at 1920x1080 with a guest on the same
+  machine: the host's own display and an established host's own virtual display each built on
+  the GPU that renders them and delivered 120 pictures a second; composition to the
+  duplication's hand-over 0.04-0.09 ms at the median, 0.075-0.52 at p95; the conversion 0.05 ms
+  on the device; the encode 1.0-1.2 ms at the median.
+- At a 144 or a 240 Hz mode under the 120 Hz primary, 120 pictures a second, while the stream
+  said 144 and told its guest 144; a refresh change re-made the duplication and left the pace
+  where it was. The compositor reported 120.001 Hz, to an unelevated process and to the system
+  account alike.
+- Ceilings of 60 and 90 on the host's own display at 144: exactly 60 and 90 a second, each
+  picture taken 4.6 to 6.2 ms after its composition at the median; the same 60 on a 120 Hz panel:
+  0.8 ms. The host's own display at a 60 Hz mode with no ceiling: 8.3 ms at p95, a composition
+  late.
+- The hand-over varied with the mode, in one session: at the primary's own rate about 0.5 ms at
+  p95, at 144 or 60 about 0.13, at 240 unsteady. Recorded for the gate's comparison.
+- Another monitor's arrival put a saved 3840x2160 at 60 back on the host's own display 0.1 s after
+  it was set to 1920x1080 at 120.
+- Established clients state their own screen's size as they join -- 3420x2148, 1920x1080,
+  2454x1220, 2296x1080 and 3840x2160 among them -- and no largest picture.
+
+### Found
+- The library's demo switched outputs endlessly against a host with several: it moved on at every
+  configuration message, which the host sends whenever its capture changes. It now moves only
+  when its own chord asked.
+
+### Corrected
+- [impl-plan-windows.md](impl-plan-windows.md) W2: whether the stream as built takes a virtual
+  display's output was W3.2's first check; it does.
+
 ## 2026-10-15 - W3.1: the controller
 
 ### Decided

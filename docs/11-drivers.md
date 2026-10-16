@@ -65,7 +65,9 @@ display away mid-session. Ownership by handle removes a monitor exactly when its
 the serial in its EDID -- derives from the slot and never changes, so the system keeps each
 display's resolution, position and scale across a replug and a reboot. The EDID is generated once
 per slot, or is a real monitor's dumped EDID given in the file (§1.4), its serial patched per
-slot. **Each monitor is reported as a DisplayPort monitor**, as its EDID says.
+slot. **Each monitor is reported as a DisplayPort monitor**, as its EDID says. The host's own
+display takes the highest free slot, so it keeps one identity and never takes an application's
+first free one.
 
 ### §1.4 What persists
 
@@ -108,6 +110,9 @@ an adapter's identifier changes across boots (§1.7).
   remembers with nothing saved it leaves dark. The controller then adds the monitor's path to
   the active ones, saved as a mode is. **A saved arrangement overrules the mode a plug asks
   for**, so the controller reads the mode back and sets the one asked for.
+- **The host's display holds its mode** for as long as the host runs: another monitor's arrival
+  and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
+  puts its own back whenever the system's differs.
 
 ### §1.6 Pictures
 
