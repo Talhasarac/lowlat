@@ -3,6 +3,37 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - W3.7 built: the review's fixes
+
+### Changed
+- **The virtual displays' answers** (minor 30, [06 §3c](06-api.md)): `lowlat_vdd_plug` and
+  `lowlat_vdd_set_mode` fill `out` on `LOWLAT_ERR_VDD_NOT_READY` with the monitor as it stands,
+  so a plug that asked for no slot learns its slot; `lowlat-vdd` and `lowlatd display` name it.
+
+### Fixed
+- **A plug the system's display configuration refused stayed plugged**, and when marked to come
+  back, came back at every start of the driver; it is unplugged again with its line in the file.
+- **An unplug whose file could not be written brought the monitor back** at the driver's next
+  start: the line is now removed before the monitor.
+- **Another vendor's virtual display counted as a real one** when deciding whether an
+  arrangement may be saved, if it reported DisplayPort or HDMI; the kernel's word on its adapter
+  decides ([11 §1.5](11-drivers.md)).
+- The driver handed the system a monitor's description by the address of the value holding it,
+  right only by the compiler's choice of layout; it hands over the bytes themselves.
+- The driver counted pictures skipped with a plain comparison of frame numbers, which wrap; it
+  counts across the wrap.
+
+### Checked
+- On the development machine: the driver's process admits its own identity alone, so another
+  service of the account it runs as is refused it ([11 §1.2](11-drivers.md)); a panel on HDMI read
+  as real and this driver's DisplayPort display as virtual by its adapter; after the driver was
+  installed again, a monitor's name read back by the system; an unplug held by a busy file leaving
+  the monitor and its line in place, and with the old order reproducing the fault. Each fix's own
+  test broken once. The refused plug's unplugging is built but could not be forced here.
+- The Windows bar: fmt and clippy clean, tests 1364 passed, none failed; the Linux bar clean,
+  tests 1373 passed with the two that need a `localhost` answering on both families, which the
+  test machine's lacks.
+
 ## 2026-10-17 - W3.6 built: the controller on its own
 
 ### Added

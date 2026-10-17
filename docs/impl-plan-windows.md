@@ -5,7 +5,8 @@
 the day the host's own virtual display (W3) was added with its frame hand-off decided; W3 was
 planned at its own interview on 2026-10-15, and its first step, the driver and its package,
 built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3.6 -- the
-controller as a program of its own -- is built, and W3's gate waits for W2.5.
+controller as a program of its own -- and W3.7 -- the review's fixes -- are built, and W3's gate
+waits for W2.5.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1030,6 +1031,11 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   EDID's name holds. A different EDID is a different monitor to the system, so the driver that
   brings the name makes every slot a new monitor once, the arrangements saved for the old ones
   left behind.
+- **Nothing of a refused request stays behind, and a wait past its bound names what it left**
+  (*added 2026-10-17, at W3.7's review*). A plug the system's display configuration refuses is
+  unplugged again, its line in the file with it; an unplug removes the line before the monitor;
+  and the status past the bound names the monitor's slot, the library handing back the monitor
+  as it stands (minor 30), so a plug that asked for no slot learns which it got.
 
 ### Steps
 
@@ -1410,6 +1416,32 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   every update has. Both bars: on Windows tests 1362 passed, none failed; on Linux 1372 passed
   with the two that need a `localhost` answering on both families, and off Windows `lowlat-vdd`
   refuses while `lowlatd display` answers as it did.
+- [x] **W3.7 the review's fixes**: a reading of the driver's process's access list; the save's
+  test of a virtual display by its adapter; a monitor's description handed over from its own
+  bytes; the pictures skipped counted across the frame number's wrap; and the controller's
+  answers as the last decision above says (minor 30). Checked by each fix's own test broken once,
+  the access list and the adapters read on the development machine, and the driver with the
+  fixes installed over the one it replaces.
+  *Reviewed 2026-10-17, before its build* (the last decision above, added at it). The access
+  list was read before anything was built, since it could have changed the frame channel's
+  design: the driver's process admits its own identity alone, administrators may only query it,
+  and the account it runs as is not in the list, so another service of that account is refused
+  it -- the frame channel's guard is the debugging privilege, as [11 §1.2](11-drivers.md) said.
+  *Built and checked 2026-10-17:* the adapter's kernel type made readable by its identity and
+  the save's test a function of each active path, tested with another vendor's virtual display
+  reporting DisplayPort and broken by leaving the kernel's word out; read live, a panel on HDMI
+  real and this driver's DisplayPort display virtual by its adapter. The description's address
+  taken from its bytes, and the system read the monitor's name through it after the driver was
+  installed again. The wrap's arithmetic a function of the shared crate's, tested across the top
+  and broken by one comparison. The controller's not-ready status names its slot; the library
+  fills `out` with the monitor as it stands, checked by a status made up for a monitor really
+  plugged and broken by not filling; an unplug held by a busy file left the monitor and its line
+  both in place and, with the old order, unplugged the monitor and left its line -- the bug
+  itself, reproduced; the refused plug's unplugging is built but could not be forced, the system
+  here showing a plugged monitor before the plug returns. The header regenerated at minor 30 and
+  every ABI gate green. The driver installed over the one it replaces in about a second, no
+  reboot owed. Both bars: on Windows tests 1364 passed, none failed; on Linux 1373 passed with
+  the two that need a `localhost` answering on both families.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1454,6 +1486,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-17: W3.7 reviewed, built, checked and ticked: the driver's process's access list read (no
+  other account admitted); a virtual display told by its adapter for the save; the monitor's
+  description from its own bytes; the frame number's wrap; the controller's refusals leaving
+  nothing behind and its not-ready status naming the slot (minor 30).
 - 2026-10-17: W3.6 reviewed, built, checked and ticked: the program `lowlat-vdd` beside
   `lowlatd display` through one module; the library's third half built alone and gated as an
   application links it; the driver's files `lowlat-idd` and the names a person sees

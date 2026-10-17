@@ -2,7 +2,8 @@
 
 **Status:** planned 2026-10-15, at W3's interview; the display's driver and its package built
 the same day (W3.0), and its controller (W3.1); W3.2 to W3.5 built and checked 2026-10-16, and
-the controller as a program of its own (W3.6) built 2026-10-17; W3's gate to come. Built by
+the controller as a program of its own (W3.6) and the review's fixes (W3.7) built 2026-10-17;
+W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -74,6 +75,11 @@ display asks no more than a person at the desk may do, so the control interface 
 interactive user, and ownership (§1.3) keeps one user's monitors from another's requests. Both
 are answered on the display class's own request path.
 
+*Measured 2026-10-17, at W3.7:* the driver's process admits its own identity alone, in full;
+administrators may only query it, and nothing below the system's integrity level may read or
+write it. The account it runs as is not in its access list, so another service of that account
+is refused it too. The system account opens it through the debugging privilege, as above.
+
 ### §1.3 Monitors, and how long they live
 
 A monitor lives one of two ways, chosen when it is plugged:
@@ -129,7 +135,9 @@ an adapter's identifier changes across boots (§1.7).
   in the system's database of arrangements, as any monitor's is, so it comes back after a reboot
   where it was; a bound monitor's never is. **An arrangement in which only virtual displays would
   be active is never saved**: one that only a virtual display can satisfy holds a later boot
-  waiting for the driver.
+  waiting for the driver. *Amended 2026-10-17, at W3.7:* a display counts as virtual when the
+  kernel calls its adapter a virtual display's, whatever connection its driver reports --
+  another vendor's virtual display reports DisplayPort or HDMI as readily as this one.
 - **A mode not listed is a replug of that monitor alone**, with the mode added first, then set
   once the replacement is ready. A request for a monitor being plugged again is refused as busy,
   and asked again (*corrected 2026-10-17*: first written as coalesced into one more, which was
@@ -306,6 +314,12 @@ The controller is the driver's control interface from user mode, behind the libr
 system, within about three seconds**: a plug until the monitor is active at its mode, a mode
 until it is current, an unplug until the monitor has gone; past the bound a status of its own
 says the monitor is plugged and the system has not finished. Calls on one handle take turns.
+*Amended 2026-10-17, at W3.7:* that status names the monitor's slot, and a plug or a mode
+answering it hands back the monitor as it stands. **Nothing of a refused request stays behind**:
+a plug the system's display configuration refuses is unplugged again, its line in the file with
+it, as one whose line could not be written already was. And an unplug removes the line first,
+so a monitor the driver then fails to unplug stays plugged but no longer comes back, where the
+other order brought a removed one back at the driver's next start.
 
 `lowlatd display` drives the same controller, so a person with no program of their own manages
 displays from a shell: `list`; `add WxH[@Hz] [--restore] [--slot N]`; `hold WxH[@Hz] [--slot
@@ -362,7 +376,14 @@ application links it, its check failing with another half forced in and with thi
 the driver packaged and signed under its new names, its date in UTC, and installed over the
 driver it replaces in 1.2 s with no reboot owed, a kept monitor plugged again by the new one and
 read by the system as "LowlatDisplay" on "Lowlat Virtual Display". The old library stays in the
-system's folder for user-mode drivers, loaded by nothing.
+system's folder for user-mode drivers, loaded by nothing. **The review's fixes are built**
+(W3.7, 2026-10-17): the driver's process found to admit no other account (§1.2); a virtual
+display reporting DisplayPort read as virtual by its adapter, live beside a panel read as real
+(§1.5); a monitor's description handed over from its own bytes and read back by the system;
+the pictures skipped counted across the frame number's wrap; an unplug held by a busy file
+leaving the monitor and its line both in place, and failing with the old order (§1.9). The
+unplugging of a refused plug is built but could not be forced: the system here shows a plugged
+monitor before a plug returns.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

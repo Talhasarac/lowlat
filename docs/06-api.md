@@ -980,10 +980,16 @@ does.
   a plug returns once the monitor is active at its mode, a mode once it is current, an unplug
   once the monitor has gone -- within about three seconds, past which `LOWLAT_ERR_VDD_NOT_READY`
   says the monitor is plugged and the system has not finished, and `lowlat_vdd_get_monitor` says
-  where it stands. Calls on one handle take turns.
+  where it stands. Calls on one handle take turns. *Since minor 30* a plug or a mode answering
+  `LOWLAT_ERR_VDD_NOT_READY` fills `out` with the monitor as it stands, so a plug that asked for
+  no slot learns its slot; **a plug the system's display configuration refuses
+  (`LOWLAT_ERR_VDD_DISPLAY_CONFIG`) is unplugged again**, its return line with it; and an unplug
+  removes a kept monitor's return line before the monitor, so one the driver then fails to
+  unplug no longer comes back, where a removed one would have.
 - **A kept monitor's arrangement is saved in the system's own store**, as any monitor's is, so it
-  comes back after a reboot where it was -- unless only virtual displays would be active. A bound
-  monitor's never is.
+  comes back after a reboot where it was -- unless only virtual displays would be active, a
+  display counting as virtual when its adapter is a virtual display's, whatever connection it
+  reports. A bound monitor's never is.
 - **A mode the monitor does not list is set by plugging it again** with the mode added first:
   the same slot and identity, a blink rather than a new display.
 - **The list is of slots**, two-call as [§6](#6-enumeration)'s, and `lowlat_vdd_get_monitor`
@@ -1505,6 +1511,11 @@ half carries no promise before 1.0, as the client half never has.
 `lowlat_host_config`, taking its last reserved byte. Nothing moves, and a caller built against
 an earlier minor leaves it zero, off. The third half's handle now follows its driver
 ([§3c](#3c-virtual-displays)): a behaviour, not a symbol.
+
+**Minor 30** (2026-10-17) is the virtual displays' answers ([§3c](#3c-virtual-displays)):
+`lowlat_vdd_plug` and `lowlat_vdd_set_mode` fill `out` on `LOWLAT_ERR_VDD_NOT_READY` with the
+monitor as it stands, and a plug the system refuses is unplugged again. No layout changes; a
+caller may read `out` after `LOWLAT_ERR_VDD_NOT_READY` only from this minor on.
 
 **Minor 29** (2026-10-17) is the relay's carrier ([§3b](#3b-client)): `relay_carrier`
 appended to `lowlat_client_config`, and the `lowlat_relay_carrier` enumeration. Nothing moves, and
