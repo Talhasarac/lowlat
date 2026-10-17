@@ -17,11 +17,11 @@ use lowlat_core::control::CONTROL_CHANNEL;
 use lowlat_core::endpoint::Endpoint;
 use lowlat_core::envelope::{Cipher, Envelope};
 use lowlat_core::init::Init;
-use lowlat_core::relay::{Relay, State as RelayState};
+use lowlat_core::relay::{Carrier, Relay, State as RelayState};
 use lowlat_core::send::{SendRing, SendSlot};
 use lowlat_core::session::Session;
 use lowlat_core::stun::canonical;
-use lowlat_net::{Running, Shell, Socket, Wake};
+use lowlat_net::{Running, Shell, Socket, Stream, Wake};
 use lowlat_portmap::{Reader, confirmed};
 use std::sync::atomic::Ordering;
 
@@ -38,9 +38,17 @@ use crate::{
 /// How often the loop trickles reflexive candidates, in passes.
 const REPORT_EVERY: u32 = 16;
 
+/// What the attempt's datagrams travel on: the socket the seam opened, or a
+/// stream to the relay at this address, which the thread opens beside the
+/// wake it owns (docs/03-connectivity.md 7.4).
+pub(crate) enum Leg {
+    Socket(Socket),
+    Stream(SocketAddr),
+}
+
 /// Everything the thread is handed at spawn.
 pub(crate) struct Attached {
-    pub socket: Socket,
+    pub leg: Leg,
     pub servers: Vec<SocketAddr>,
     /// The host candidates the seam raises as the thread starts. A reflexive
     /// answer that repeats one is not raised again.
@@ -102,7 +110,7 @@ fn attach_send<'a>(
 
 pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
     let Attached {
-        socket,
+        leg,
         servers,
         hosts,
         relay,
@@ -205,11 +213,27 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
                 &relay.password,
                 relay_seed,
                 0.0,
-            ),
+            )
+            .over(relay.carrier),
         ),
         None => Endpoint::new(conn, session),
     };
-    let mut shell = Shell::new(socket, wake, endpoint);
+    // The stream's connect begins here, with the relay's setup: its five
+    // seconds count the connect, and nothing is sent before it completes.
+    let mut shell = match leg {
+        Leg::Socket(socket) => Shell::new(socket, wake, endpoint),
+        Leg::Stream(server) => match Stream::connect(server, wake) {
+            Ok(stream) => Shell::over_stream(stream, endpoint),
+            Err(error) => {
+                lowlat_common::log_warn!("client: the relay's stream did not open, err={error}");
+                telemetry.state.store(2, Ordering::Relaxed);
+                emit.send(Event::Ended {
+                    outcome: Outcome::RelayUnreachable,
+                });
+                return;
+            }
+        },
+    };
     let _ = epoch.set(shell.base());
     let mut driver = Driver::new(init, units, packets, emit.clone(), Arc::clone(&telemetry));
     let mut reported: Vec<SocketAddr> = Vec::new();
@@ -263,11 +287,12 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
         }) {
             Ok(turn) => turn,
             Err(error) => {
-                lowlat_common::log_warn!("client: the transport stopped, err={error}");
+                let outcome = stopped(&mut shell);
+                lowlat_common::log_warn!(
+                    "client: the transport stopped, err={error} outcome={outcome:?}"
+                );
                 telemetry.state.store(2, Ordering::Relaxed);
-                emit.send(Event::Ended {
-                    outcome: Outcome::TransportFailed,
-                });
+                emit.send(Event::Ended { outcome });
                 return;
             }
         };
@@ -417,9 +442,28 @@ fn mapped_candidate(addr: SocketAddr) -> Event {
     }
 }
 
+/// What a loop that stopped ends the session with. Over a stream to the
+/// relay its end, reset or stall is the relay's: unreachable while the relay
+/// was still being set up, lost once it was ready (docs/03-connectivity.md
+/// 9). Anything else is the transport's.
+fn stopped(shell: &mut Shell<'_, Session<'_>>) -> Outcome {
+    match shell.endpoint().relay() {
+        Some(relay) if relay.carrier() == Carrier::Stream => {
+            if relay.state() == RelayState::Setup {
+                Outcome::RelayUnreachable
+            } else {
+                Outcome::RelayLost
+            }
+        }
+        _ => Outcome::TransportFailed,
+    }
+}
+
 /// Release the relay's allocation on the way out, rather than hold a relay
 /// port until it expires. After everything else, so a departure goes out
-/// through the relay before the relay is let go.
+/// through the relay before the relay is let go. Over a stream the release
+/// is written in that last pass and the stream closed after it, with the
+/// shell.
 fn release(shell: &mut Shell<'_, Session<'_>>) {
     let Some(relay) = shell.endpoint().relay_mut() else {
         return;

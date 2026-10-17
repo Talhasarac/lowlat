@@ -389,16 +389,19 @@ fn a_write_the_socket_cannot_take_finishes_later() {
         "room handed out while a write is unfinished"
     );
 
+    // The socket comes back with the bytes, held open past the last drain:
+    // a peer gone at once would end the stream before the write's completion
+    // is collected.
     let reader = thread::spawn(move || {
         let mut socket = socket;
         let mut wire = vec![0u8; staged];
         socket.read_exact(&mut wire).unwrap();
-        wire
+        (wire, socket)
     });
     pump(&mut stream, Duration::from_secs(20), |_, stream| {
         !stream.writing()
     });
-    let wire = reader.join().unwrap();
+    let (wire, _socket) = reader.join().unwrap();
     let filler = channel(1200, 0x5A);
     assert_eq!(wire.len() % filler.len(), 0);
     assert!(
@@ -437,7 +440,7 @@ fn a_burst_past_the_staging_goes_in_one_call() {
         let (mut socket, _) = listener.accept().unwrap();
         let mut wire = vec![0u8; total];
         socket.read_exact(&mut wire).unwrap();
-        wire
+        (wire, socket)
     });
     pump(&mut stream, Duration::from_secs(5), |_, stream| {
         stream.connected()
@@ -457,7 +460,7 @@ fn a_burst_past_the_staging_goes_in_one_call() {
         stream.wait(10.0).unwrap();
         offer(&mut stream, &mut left, &filler);
     }
-    let wire = reader.join().unwrap();
+    let (wire, _socket) = reader.join().unwrap();
     assert!(
         wire.chunks(filler.len()).all(|chunk| chunk == filler),
         "the bytes arrived altered"

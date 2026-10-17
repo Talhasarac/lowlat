@@ -43,25 +43,40 @@ pub struct StreamArrival {
     pub data: Segment,
 }
 
-/// One connection and when each direction's last delivery is due, so that
-/// nothing written later passes it.
+/// One direction of a connection: when its last delivery is due, so that
+/// nothing written later passes it, and until when it is stopped.
+#[derive(Debug, Default)]
+struct Direction {
+    last_us: u64,
+    stopped_until_us: u64,
+}
+
+/// One connection, both ways.
 #[derive(Debug)]
 pub(crate) struct Leg {
     client: HostId,
     client_addr: SocketAddr,
     listener: HostId,
     server: SocketAddr,
-    toward_listener_us: u64,
-    toward_client_us: u64,
+    toward_listener: Direction,
+    toward_client: Direction,
     open: bool,
 }
 
 impl Leg {
-    fn last_us(&mut self, toward_listener: bool) -> &mut u64 {
+    fn direction(&self, toward_listener: bool) -> &Direction {
         if toward_listener {
-            &mut self.toward_listener_us
+            &self.toward_listener
         } else {
-            &mut self.toward_client_us
+            &self.toward_client
+        }
+    }
+
+    fn direction_mut(&mut self, toward_listener: bool) -> &mut Direction {
+        if toward_listener {
+            &mut self.toward_listener
+        } else {
+            &mut self.toward_client
         }
     }
 }
@@ -92,8 +107,8 @@ impl Sim {
             client_addr,
             listener,
             server: to,
-            toward_listener_us: 0,
-            toward_client_us: 0,
+            toward_listener: Direction::default(),
+            toward_client: Direction::default(),
             open: true,
         });
         Some(StreamId(self.legs.len() - 1))
@@ -104,9 +119,10 @@ impl Sim {
         self.stream_send_within(stream, from, bytes, usize::MAX);
     }
 
-    /// The same, from a sender that holds at most `depth` undelivered writes
-    /// per stream and drops past it, as a relay behind a stalled client
-    /// does. Whether the write was taken.
+    /// The same, from a sender that holds at most `depth` writes behind a
+    /// stopped stream and drops past it, as a relay behind a stalled client
+    /// does. **What is in flight is not a queue**: a stream that moves takes
+    /// every write, a burst included. Whether the write was taken.
     pub fn stream_send_within(
         &mut self,
         stream: StreamId,
@@ -117,13 +133,19 @@ impl Sim {
         let Some(toward_listener) = self.direction_from(stream, from) else {
             return false;
         };
-        let backlog = self
-            .stream_queue
-            .iter()
-            .filter(|d| d.stream == stream && d.toward_listener == toward_listener)
-            .count();
-        if backlog >= depth {
-            return false;
+        let stopped = self
+            .legs
+            .get(stream.0)
+            .is_some_and(|leg| self.now_us < leg.direction(toward_listener).stopped_until_us);
+        if stopped {
+            let held = self
+                .stream_queue
+                .iter()
+                .filter(|d| d.stream == stream && d.toward_listener == toward_listener)
+                .count();
+            if held >= depth {
+                return false;
+            }
         }
         self.put(stream, toward_listener, Segment::Bytes(bytes.to_vec()));
         true
@@ -157,8 +179,9 @@ impl Sim {
             }
         }
         if let Some(leg) = self.legs.get_mut(stream.0) {
-            let last = leg.last_us(toward_listener);
-            *last = (*last).max(until);
+            let direction = leg.direction_mut(toward_listener);
+            direction.last_us = direction.last_us.max(until);
+            direction.stopped_until_us = direction.stopped_until_us.max(until);
         }
     }
 
@@ -212,9 +235,9 @@ impl Sim {
         let Some(leg) = self.legs.get_mut(stream.0) else {
             return;
         };
-        let last = leg.last_us(toward_listener);
-        let at_us = due.max(*last);
-        *last = at_us;
+        let direction = leg.direction_mut(toward_listener);
+        let at_us = due.max(direction.last_us);
+        direction.last_us = at_us;
         self.seq = self.seq.wrapping_add(1);
         self.stream_queue.push(Delivery {
             at_us,
@@ -327,15 +350,22 @@ mod tests {
         );
     }
 
-    /// A sender that holds a bounded queue per stream takes writes until that
-    /// many are undelivered and drops the rest; once the stop ends and they
-    /// are delivered, it takes writes again.
+    /// A sender that holds a bounded queue per stream takes every write while
+    /// the stream moves -- a burst in flight is not a queue -- and behind a
+    /// stop takes writes until that many are held and drops the rest; once
+    /// the stop ends and they are delivered, it takes writes again.
     #[test]
     fn a_bounded_sender_drops_past_its_depth_behind_a_stall() {
         let mut sim = Sim::new(1);
         let client = sim.add_host(public(10, 5000), &[]);
         let server = sim.add_host(public(20, 3478), &[]);
         let stream = sim.connect(client, public(20, 3478)).unwrap();
+        let burst: Vec<bool> = (0..8u8)
+            .map(|index| sim.stream_send_within(stream, server, &[index], 5))
+            .collect();
+        assert!(burst.iter().all(|taken| *taken), "a moving stream refused");
+        assert_eq!(bytes(&delivered(&mut sim, 50.0)).len(), 8);
+
         sim.stall(stream, server, 500.0);
         let taken: Vec<bool> = (0..8u8)
             .map(|index| sim.stream_send_within(stream, server, &[index], 5))

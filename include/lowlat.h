@@ -49,7 +49,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 28
+#define LOWLAT_ABI_MINOR 29
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -874,6 +874,19 @@ typedef enum lowlat_nat_mapping {
     /// A public port per destination address and port.
     LOWLAT_NAT_MAPPING_ADDRESS_AND_PORT_DEPENDENT = 6,
 } lowlat_nat_mapping;
+
+/// What the client's leg to its relay travels on (minor 29).
+///
+/// The relay's allocation and its leg to the host are datagrams either way;
+/// only the client's own leg changes. **The last rung, not a quality
+/// option**: over TCP a relay's stalls become the session's resends. The
+/// library never moves from one to the other by itself.
+typedef enum lowlat_relay_carrier {
+    /// Datagrams. The default.
+    LOWLAT_RELAY_CARRIER_UDP = 0,
+    /// One stream to the relay, for a network that carries no datagrams.
+    LOWLAT_RELAY_CARRIER_TCP = 1,
+} lowlat_relay_carrier;
 
 /// One client, as the application holds it.
 ///
@@ -1783,6 +1796,11 @@ typedef struct lowlat_client_config {
     /// cleared when it is done with it.
     char relay_username[LOWLAT_RELAY_CREDENTIAL_MAX];
     char relay_password[LOWLAT_RELAY_CREDENTIAL_MAX];
+    /// What the leg to the relay travels on (minor 29), one of
+    /// `lowlat_relay_carrier`: UDP, the default and what a caller whose
+    /// size stops short of this field gets, or TCP, which needs a relay. Any
+    /// other value is refused.
+    uint32_t relay_carrier;
 } lowlat_client_config;
 
 /// A whole pad at one moment, for `lowlat_client_send_pad_state`. Sticks

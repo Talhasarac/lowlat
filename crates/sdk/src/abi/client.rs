@@ -406,10 +406,30 @@ pub struct lowlat_client_config {
     /// cleared when it is done with it.
     pub relay_username: [c_char; LOWLAT_RELAY_CREDENTIAL_MAX],
     pub relay_password: [c_char; LOWLAT_RELAY_CREDENTIAL_MAX],
+    /// What the leg to the relay travels on (minor 29), one of
+    /// [`lowlat_relay_carrier`]: UDP, the default and what a caller whose
+    /// size stops short of this field gets, or TCP, which needs a relay. Any
+    /// other value is refused.
+    pub relay_carrier: u32,
 }
 
 /// The longest relay username or password this boundary carries.
 pub const LOWLAT_RELAY_CREDENTIAL_MAX: usize = 128;
+
+/// What the client's leg to its relay travels on (minor 29).
+///
+/// The relay's allocation and its leg to the host are datagrams either way;
+/// only the client's own leg changes. **The last rung, not a quality
+/// option**: over TCP a relay's stalls become the session's resends. The
+/// library never moves from one to the other by itself.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum lowlat_relay_carrier {
+    /// Datagrams. The default.
+    LOWLAT_RELAY_CARRIER_UDP = 0,
+    /// One stream to the relay, for a network that carries no datagrams.
+    LOWLAT_RELAY_CARRIER_TCP = 1,
+}
 
 /// The configuration's size before the relay was appended: the least a
 /// caller may pass, and what a caller built against an older header passes.
@@ -1151,6 +1171,12 @@ fn configured(cfg: &lowlat_client_config) -> Option<::lowlat_client::Config> {
             }
         }
     }
+    use ::lowlat_client::config::Carrier;
+    let carrier = match cfg.relay_carrier {
+        x if x == lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_UDP as u32 => Carrier::Datagram,
+        x if x == lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_TCP as u32 => Carrier::Stream,
+        _ => return None,
+    };
     // A relay needs a credential, and one whose name resolves: the first
     // IPv4 address it has, the family most paths carry, and no other when
     // the attempt is IPv4 only.
@@ -1165,11 +1191,13 @@ fn configured(cfg: &lowlat_client_config) -> Option<::lowlat_client::Config> {
                 .copied()?;
             let username = taken(&cfg.relay_username).filter(|text| !text.is_empty())?;
             let password = taken(&cfg.relay_password).filter(|text| !text.is_empty())?;
-            Some(::lowlat_client::config::Relay::new(
-                server, username, password,
-            ))
+            Some(::lowlat_client::config::Relay::new(server, username, password).over(carrier))
         }
     };
+    // A stream to no relay is a carrier for nothing.
+    if relay.is_none() && carrier == Carrier::Stream {
+        return None;
+    }
     Some(::lowlat_client::Config {
         video: video_of(&cfg.video),
         raw_audio: cfg.raw_audio,
@@ -3994,6 +4022,7 @@ mod tests {
             relay: [0; LOWLAT_SERVER_MAX],
             relay_username: [0; LOWLAT_RELAY_CREDENTIAL_MAX],
             relay_password: [0; LOWLAT_RELAY_CREDENTIAL_MAX],
+            relay_carrier: lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_UDP as u32,
         };
         let mut ours = lowlat_credentials {
             size: core::mem::size_of::<lowlat_credentials>() as u32,
@@ -4108,6 +4137,83 @@ mod tests {
         );
         put(&mut cfg.relay_password, "password");
         assert_eq!(attempt(&cfg), LOWLAT_OK);
+        unsafe { lowlat_client_destroy(handle) };
+    }
+
+    /// The relay's carrier is read only where the caller's size reaches it,
+    /// so a caller built against the header before it reaches its relay over
+    /// UDP whatever lies past its structure; TCP reaches the attempt's
+    /// configuration; a value that is no carrier is refused, and so is a
+    /// stream to no relay.
+    #[test]
+    fn the_relay_carrier_is_read_only_where_the_size_reaches_and_needs_a_relay() {
+        use ::lowlat_client::config::Carrier;
+        let mut handle: *mut lowlat_client = core::ptr::null_mut();
+        let info = no_decoder();
+        assert_eq!(
+            unsafe { lowlat_client_create(&raw const info, &raw mut handle) },
+            LOWLAT_OK
+        );
+        // SAFETY: plain data, for which zero is the default.
+        let mut cfg: lowlat_client_config = unsafe { core::mem::zeroed() };
+        let mut ours = lowlat_credentials {
+            size: core::mem::size_of::<lowlat_credentials>() as u32,
+            port: 0,
+            reserved: 0,
+            ufrag: [0; LOWLAT_ICE_MAX],
+            pwd: [0; LOWLAT_ICE_MAX],
+            fingerprint: [0; LOWLAT_FINGERPRINT_MAX],
+            aes256: [0; LOWLAT_ICE_MAX],
+        };
+        let mut attempt = |cfg: &lowlat_client_config| {
+            let status = unsafe {
+                lowlat_client_new_attempt(
+                    handle,
+                    cfg,
+                    c"carrier".as_ptr(),
+                    lowlat_transport::LOWLAT_TRANSPORT_BUD as u32,
+                    &raw mut ours,
+                )
+            };
+            unsafe { lowlat_client_end_connection(handle) };
+            status
+        };
+        put(&mut cfg.relay, "203.0.113.1:3478");
+        put(&mut cfg.relay_username, "user");
+        put(&mut cfg.relay_password, "password");
+
+        // An older caller: the carrier's bytes are garbage it never set.
+        cfg.relay_carrier = 7;
+        cfg.size =
+            u32::try_from(core::mem::offset_of!(lowlat_client_config, relay_carrier)).unwrap();
+        assert_eq!(
+            attempt(&cfg),
+            LOWLAT_OK,
+            "a field past the caller's size was read"
+        );
+
+        cfg.size = core::mem::size_of::<lowlat_client_config>() as u32;
+        assert_eq!(
+            attempt(&cfg),
+            LOWLAT_ERR_INVALID_ARGUMENT,
+            "a carrier that is none"
+        );
+        cfg.relay_carrier = lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_TCP as u32;
+        assert_eq!(attempt(&cfg), LOWLAT_OK);
+        let carrier = configured(&cfg).and_then(|config| config.relay.map(|relay| relay.carrier));
+        assert_eq!(carrier, Some(Carrier::Stream));
+        cfg.relay_carrier = lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_UDP as u32;
+        let carrier = configured(&cfg).and_then(|config| config.relay.map(|relay| relay.carrier));
+        assert_eq!(carrier, Some(Carrier::Datagram));
+
+        put(&mut cfg.relay, "");
+        assert_eq!(attempt(&cfg), LOWLAT_OK, "a direct attempt");
+        cfg.relay_carrier = lowlat_relay_carrier::LOWLAT_RELAY_CARRIER_TCP as u32;
+        assert_eq!(
+            attempt(&cfg),
+            LOWLAT_ERR_INVALID_ARGUMENT,
+            "a stream to no relay"
+        );
         unsafe { lowlat_client_destroy(handle) };
     }
 

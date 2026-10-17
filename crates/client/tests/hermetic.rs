@@ -38,14 +38,16 @@ use lowlat_core::conn::{self, Conn, Credentials};
 use lowlat_core::control::{self, CONTROL_CHANNEL, Control, op};
 use lowlat_core::endpoint::Endpoint;
 use lowlat_core::envelope::Envelope;
-use lowlat_core::relay::Relay as ClientRelay;
+use lowlat_core::relay::{Carrier, Relay as ClientRelay};
 use lowlat_core::send::{SendRing, SendSlot};
 use lowlat_core::session::Session;
+use lowlat_core::turn;
 use lowlat_core::video::{Codec, Rotation, VideoHeader};
 use lowlat_host::session::Negotiation;
 use lowlat_host::video::Packetiser;
 use lowlat_inject::event::{Device, Extents, Injector, Sink};
 use lowlat_sim::relay::Relay;
+use lowlat_sim::stream::{Segment, StreamId};
 use lowlat_sim::{HostId, Link, Nat, NatId, Sim};
 
 const LEFT: (&str, &str) = ("aaaaaaaa", "passwordforaaaaaaaaaaaaa");
@@ -752,6 +754,9 @@ struct Pair<D: Decoder> {
     /// handed the relayed address yet.
     relay: Option<Relay>,
     offered: bool,
+    /// The guest's stream to the relay, when it reaches it over one, and
+    /// what has arrived of a message not yet whole.
+    stream: Option<(StreamId, Vec<u8>)>,
 }
 
 impl Pair<Recorder> {
@@ -772,6 +777,7 @@ impl<D: Decoder> Pair<D> {
             guest,
             relay: None,
             offered: true,
+            stream: None,
         };
         pair.guest
             .endpoint
@@ -794,13 +800,61 @@ impl<D: Decoder> Pair<D> {
         let now = self.sim.now_ms();
         let mut wire = [0u8; lowlat_core::MAX_DATAGRAM];
         let mut scratch = [0u8; lowlat_core::MAX_DATAGRAM];
-        for (id, endpoint) in [
-            (self.host.id, &mut self.host.endpoint),
-            (self.guest.id, &mut self.guest.endpoint),
+        // Over a stream the guest's pass goes as one write, as the shell's
+        // staging sends it.
+        let mut write = Vec::new();
+        let stream = self.stream.as_ref().map(|(id, _)| *id);
+        for (id, endpoint, over) in [
+            (self.host.id, &mut self.host.endpoint, None),
+            (self.guest.id, &mut self.guest.endpoint, stream),
         ] {
             while let Some(result) = endpoint.get_output(now, &mut wire) {
                 let egress = result.expect("a malformed datagram was emitted");
-                self.sim.send(id, egress.to, 64, &wire[..egress.len]);
+                if over.is_some() {
+                    write.extend_from_slice(&wire[..egress.len]);
+                } else {
+                    self.sim.send(id, egress.to, 64, &wire[..egress.len]);
+                }
+            }
+        }
+        if let Some(stream) = stream
+            && !write.is_empty()
+        {
+            self.sim.stream_send(stream, self.guest.id, &write);
+        }
+        while let Some(arrival) = self.sim.next_stream_arrival() {
+            if arrival.host != self.guest.id {
+                if let Some(relay) = self.relay.as_mut() {
+                    relay.receive_stream(&mut self.sim, &arrival);
+                }
+                continue;
+            }
+            // Found by the core's own framer, as the shell finds them.
+            let (Some((_, held)), Segment::Bytes(bytes)) = (self.stream.as_mut(), arrival.data)
+            else {
+                continue;
+            };
+            held.extend_from_slice(&bytes);
+            let server = self
+                .guest
+                .endpoint
+                .relay()
+                .expect("a relay attempt")
+                .server();
+            while let Ok(Some(frame)) = turn::frame(held) {
+                if held.len() < frame.wire {
+                    break;
+                }
+                if !frame.reserved {
+                    let _ = self.guest.endpoint.process_input(
+                        &held[..frame.len],
+                        server,
+                        None,
+                        now,
+                        &mut scratch,
+                    );
+                }
+                held.drain(..frame.wire);
             }
         }
         while let Some(arrival) = self.sim.next_arrival() {
@@ -870,6 +924,11 @@ impl Pair<Recorder> {
     /// a translator no punch crosses, and a relay attempt. The host knows
     /// nothing of the relay.
     fn relayed(seed: u64, link: Link) -> Self {
+        Self::relayed_over(seed, link, Carrier::Datagram)
+    }
+
+    /// The same, the guest reaching the relay over `carrier`.
+    fn relayed_over(seed: u64, link: Link, carrier: Carrier) -> Self {
         let mut sim = Sim::new(seed).with_link(link);
         let public = |last| IpAddr::V4(Ipv4Addr::new(203, 0, 113, last));
         let router =
@@ -893,7 +952,8 @@ impl Pair<Recorder> {
                 "password",
                 [0x5E; 16],
                 0.0,
-            ),
+            )
+            .over(carrier),
         );
         let client = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 9, 10)), 5000);
         let guest = Guest::at(
@@ -903,12 +963,19 @@ impl Pair<Recorder> {
             endpoint,
             Recorder::default(),
         );
+        let stream = (carrier == Carrier::Stream).then(|| {
+            let id = sim
+                .connect(guest.id, SocketAddr::new(public(2), 50_085))
+                .expect("the relay's port is forwarded");
+            (id, Vec::new())
+        });
         let mut pair = Self {
             sim,
             host,
             guest,
             relay: Some(relay),
             offered: false,
+            stream,
         };
         pair.guest
             .endpoint
@@ -1182,6 +1249,32 @@ fn a_session_is_clean_through_the_relay() {
     assert!(
         pair.guest.telemetry.path_relayed.load(Ordering::Relaxed),
         "the status would not say the path is relayed"
+    );
+    session_is_clean_in(pair, clean(), false);
+}
+
+/// The same session with the client's leg one stream to the relay, the
+/// relay's leg to the host datagrams as before: as clean as over datagrams,
+/// and every message of the client's having crossed the stream.
+#[test]
+fn a_session_is_clean_through_the_relay_over_a_stream() {
+    let mut pair = Pair::relayed_over(0x5E1A_7ED1, clean(), Carrier::Stream);
+    pair.run_for(2000.0);
+    assert!(
+        pair.established(),
+        "the pair did not establish through the relay over a stream"
+    );
+    let relayed = pair.guest.endpoint.relay().and_then(ClientRelay::relayed);
+    assert_eq!(
+        pair.host.endpoint.path(),
+        relayed,
+        "the host's path is not the relayed address"
+    );
+    let counts = pair.relay.as_ref().expect("a relay").counts.clone();
+    assert!(counts.stream_in > 0, "nothing crossed the stream");
+    assert_eq!(
+        counts.stream_errors, 0,
+        "the relay lost the stream's framing"
     );
     session_is_clean_in(pair, clean(), false);
 }

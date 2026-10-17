@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU16;
 
 use lowlat_core::init::{self, Init};
+pub use lowlat_core::relay::Carrier;
 pub use lowlat_decode::Caps;
 use zeroize::Zeroizing;
 
@@ -243,6 +244,10 @@ pub struct Relay {
     pub server: SocketAddr,
     pub username: Zeroizing<String>,
     pub password: Zeroizing<String>,
+    /// What the leg to the relay travels on: datagrams, or one stream for a
+    /// network that carries none (docs/03-connectivity.md 7.4). The relay's
+    /// own leg to the host is datagrams either way.
+    pub carrier: Carrier,
 }
 
 impl Relay {
@@ -251,7 +256,15 @@ impl Relay {
             server,
             username: Zeroizing::new(username.to_owned()),
             password: Zeroizing::new(password.to_owned()),
+            carrier: Carrier::Datagram,
         }
+    }
+
+    /// The same relay, reached over `carrier`.
+    #[must_use]
+    pub fn over(mut self, carrier: Carrier) -> Self {
+        self.carrier = carrier;
+        self
     }
 }
 
@@ -259,6 +272,7 @@ impl fmt::Debug for Relay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Relay")
             .field("server", &self.server)
+            .field("carrier", &self.carrier)
             .finish_non_exhaustive()
     }
 }

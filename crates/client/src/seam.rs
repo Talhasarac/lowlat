@@ -23,7 +23,7 @@ use lowlat_decode::software;
 use lowlat_net::{Guest, Wake};
 use lowlat_portmap::Mapper;
 
-use crate::config::{Backend, Caps, Config, Decoding, FrameKind, Mapping, Port, Video};
+use crate::config::{Backend, Caps, Carrier, Config, Decoding, FrameKind, Mapping, Port, Video};
 use crate::driver::{Telemetry, Units};
 use crate::event::{Arrival, Ask, DecoderStage, Error, Event, LEAVE_GRACE_MS, Peer, Transport};
 use crate::frames::{Frames, Held};
@@ -717,23 +717,40 @@ impl Client {
         if let Some(probing) = self.probing.take() {
             probing.finish();
         }
-        // The handle's own port when it holds one, lent for the attempt;
-        // otherwise bound here, the walk stepping past a port that is taken.
-        let lent = self
-            .held
+        // **A stream to the relay takes no datagram socket**: the handle keeps
+        // its port, and the gateway is not asked about it.
+        let stream_to = attempt
+            .config
+            .relay
             .as_ref()
-            .and_then(|held| held.lock().unwrap_or_else(PoisonError::into_inner).take());
-        let socket = match lent {
-            Some(socket) => socket,
-            None => lowlat_net::Socket::open_or_any_port(self.port).map_err(|_| Error::Io)?,
-        };
-        let bound = socket.local_addr().map_err(|_| Error::Io)?.port();
-        // A port taken by something else walked the bind up, and the mapping
-        // follows it; and the gateway is looked at again for the attempt.
-        if let Some(mapper) = &self.mapper {
-            mapper.set_port(bound);
-            mapper.refresh();
-        }
+            .filter(|relay| relay.carrier == Carrier::Stream)
+            .map(|relay| relay.server);
+        let (leg, bound) =
+            match stream_to {
+                Some(server) => (crate::shell::Leg::Stream(server), None),
+                None => {
+                    // The handle's own port when it holds one, lent for the
+                    // attempt; otherwise bound here, the walk stepping past a port
+                    // that is taken.
+                    let lent = self.held.as_ref().and_then(|held| {
+                        held.lock().unwrap_or_else(PoisonError::into_inner).take()
+                    });
+                    let socket = match lent {
+                        Some(socket) => socket,
+                        None => lowlat_net::Socket::open_or_any_port(self.port)
+                            .map_err(|_| Error::Io)?,
+                    };
+                    let bound = socket.local_addr().map_err(|_| Error::Io)?.port();
+                    // A port taken by something else walked the bind up, and the
+                    // mapping follows it; and the gateway is looked at again for
+                    // the attempt.
+                    if let Some(mapper) = &self.mapper {
+                        mapper.set_port(bound);
+                        mapper.refresh();
+                    }
+                    (crate::shell::Leg::Socket(socket), Some(bound))
+                }
+            };
         let wake = Wake::new().map_err(|_| Error::Io)?;
         let shell_wake = wake.handle().map_err(|_| Error::Io)?;
 
@@ -750,17 +767,16 @@ impl Client {
         }
         // Gathered before the session thread starts, which is handed them: a
         // reflexive answer that repeats one is not offered again.
-        let hosts: Vec<SocketAddr> = if attempt.config.relay.is_none() {
-            lowlat_net::host_addresses(attempt.config.shared_address_space)
+        let hosts: Vec<SocketAddr> = match bound.filter(|_| attempt.config.relay.is_none()) {
+            Some(bound) => lowlat_net::host_addresses(attempt.config.shared_address_space)
                 .into_iter()
                 .map(|ip| SocketAddr::new(ip, bound))
                 .filter(|addr| attempt.config.admits(*addr))
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
+            None => Vec::new(),
         };
         let args = crate::shell::Attached {
-            socket,
+            leg,
             servers: attempt
                 .config
                 .servers
@@ -802,8 +818,9 @@ impl Client {
         let thread = Guest::spawn(wake, move |wake, running| {
             crate::shell::run(args, wake, running);
             // The attempt's socket closed with its loop: the port is taken
-            // back at once, before anything else can bind it in between.
-            if let Some(held) = held {
+            // back at once, before anything else can bind it in between. A
+            // stream's attempt took none.
+            if let (Some(held), Some(bound)) = (held, bound) {
                 retake(&held, bound);
             }
         })
