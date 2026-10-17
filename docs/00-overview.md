@@ -74,7 +74,8 @@ lowlat-vdd-proto what the display driver and its controller share: the control
 lowlat-vdd-ctl   the display driver's controller: plug, unplug, modes, the
                  settings file, a monitor's frame page taken from the driver;
                  under the host's own display, the SDK's third half and
-                 lowlatd display
+                 lowlatd display; its commands are also a program of their
+                 own, lowlat-vdd
 lowlat-capture   frame trait plus synthetic source; real backends at Gate B
 lowlat-encode    NVENC, then FFmpeg software, then VAAPI
 lowlat-audio     sound capture, encode, and decode; no display stack, no vendor runtime
@@ -90,7 +91,8 @@ lowlat-sdk       the C ABI cdylib and its header; the host and the client are
                  displays a third
 lowlat-kessel    signaling client; async permitted; the SDK does not link it
 lowlat-vdd       the host's own display driver on Windows: a library the
-                 system's driver host loads; nothing in the workspace links it
+                 system's driver host loads, lowlat_idd.dll; nothing in the
+                 workspace links it
 lowlatd          system service; the session helper and the tray are the same
                  binary in its second and third roles, over a Unix socket
 ```

@@ -3,6 +3,48 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - W3.6 built: the controller on its own
+
+### Added
+- **`lowlat-vdd`**, the display driver's controller as a program of its own
+  ([11 §1.9](11-drivers.md)): the commands `lowlatd display` takes -- list, add, hold, remove,
+  mode, modes, gpu, pointer, edid -- through the same code, for a machine that runs no host.
+- **A library carrying the virtual displays alone** ([06 §3c](06-api.md)): `lowlat.dll` built
+  with neither the host nor the client, the C interface for an application that wants displays
+  and nothing else. The ABI's gates build one in a target directory of its own and link a program
+  against it as an application does.
+
+### Changed
+- **The driver's files are named `lowlat-idd`** ([11 §1.1](11-drivers.md)): `lowlat_idd.dll`,
+  `lowlat-idd.inf`, `lowlat-idd.cat`, so the program and the driver never write one debug symbols
+  file. The device's hardware ID and service are unchanged; `scripts/vdd-install.ps1 -Remove`
+  finds the driver's packages under either name.
+- **The names a person sees** are capitalized: the adapter "Lowlat Virtual Display", the provider
+  "Lowlat", and each monitor's EDID name "LowlatDisplay" ([11 §1.3](11-drivers.md)). The driver
+  that brings the EDID makes every slot a new monitor to the system once.
+
+### Fixed
+- The driver's package was dated with the local date, a day ahead of UTC for hours after local
+  midnight east of Greenwich, when the verifier refused it; it is dated in UTC, as its version
+  already was.
+- `lowlatd display modes remove` said "removeed", and that displays plugged after would list the
+  mode it removed.
+- The Windows plan and 11: stale statuses, the frame thread's priority, and requests during a
+  replug said to be coalesced where they are refused as busy.
+
+### Checked
+- On the development machine: every command through `lowlat-vdd` and `lowlatd display` alike on
+  the installed driver, the same lines from both, an unlisted mode by a replug included; the
+  library's gate failing with the client half forced in and with no half at all; the driver and
+  the program built together with no collision; the package signed, catalogued and valid, dated
+  in UTC; installed over the driver it replaces in 1.2 s with no reboot owed, a kept monitor
+  plugged again by the new driver and read by the system as "LowlatDisplay" on "Lowlat Virtual
+  Display". The old library stays in the system's folder for user-mode drivers, loaded by
+  nothing.
+- The Windows bar: fmt and clippy clean, tests 1362 passed, none failed; the Linux bar clean,
+  tests 1372 passed with the two that need a `localhost` answering on both families, which the
+  test machine's lacks.
+
 ## 2026-10-17 - C11 built: the relay over TCP
 
 ### Added

@@ -1,7 +1,9 @@
 # 11 - Drivers
 
 **Status:** planned 2026-10-15, at W3's interview; the display's driver and its package built
-the same day (W3.0), and its controller (W3.1); the rest planned. Built by [impl-plan-windows.md](impl-plan-windows.md) W3,
+the same day (W3.0), and its controller (W3.1); W3.2 to W3.5 built and checked 2026-10-16, and
+the controller as a program of its own (W3.6) built 2026-10-17; W3's gate to come. Built by
+[impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
 On Windows the host carries drivers of its own where the system offers no interface for what a
@@ -47,6 +49,12 @@ interface is the library's third half ([06](06-api.md)); the host's side of the 
   to render on.
 - Its log goes to the debugger stream: the driver's host process has no console and no file it
   may write.
+- *Added 2026-10-17, at W3.6:* **its files are named `lowlat-idd`** -- the library
+  `lowlat_idd.dll`, its setup information and catalogue `lowlat-idd.inf` and `lowlat-idd.cat` --
+  while the device keeps its hardware ID `Root\lowlat-vdd` and its service, and the controller's
+  program is `lowlat-vdd` (§1.9): a program's debug symbols take its name with underscores, so a
+  library of the same name would share one file with it. A person sees the adapter as "Lowlat
+  Virtual Display", from the provider "Lowlat".
 
 ### §1.2 Two interfaces
 
@@ -90,6 +98,11 @@ slot. **Each monitor is reported as a DisplayPort monitor**, as its EDID says. T
 display takes the highest free slot, so it keeps one identity and never takes an application's
 first free one.
 
+*Amended 2026-10-17, at W3.6:* the generated EDID names each monitor **"LowlatDisplay"**, the
+thirteen characters its name field holds, where it said "lowlat" before. A different EDID is a
+different monitor to the system, so the driver that brought the name made every slot a new
+monitor once, with nothing of the old one's arrangement.
+
 ### §1.4 What persists
 
 One file, `%ProgramData%\lowlat\display\displays.conf`, in a folder of its own, holds what
@@ -118,10 +131,11 @@ an adapter's identifier changes across boots (§1.7).
   be active is never saved**: one that only a virtual display can satisfy holds a later boot
   waiting for the driver.
 - **A mode not listed is a replug of that monitor alone**, with the mode added first, then set
-  once the replacement is ready. Requests during a replug are coalesced into one more, and a
-  replug waits until the old monitor's swapchain is torn down. Such a mode is not kept; a custom
-  mode is. Updating a live monitor's list in place leaves the system's cached modes stale, so it
-  is not done.
+  once the replacement is ready. A request for a monitor being plugged again is refused as busy,
+  and asked again (*corrected 2026-10-17*: first written as coalesced into one more, which was
+  never built), and a replug waits until the old monitor's swapchain is torn down. Such a mode
+  is not kept; a custom mode is. Updating a live monitor's list in place leaves the system's
+  cached modes stale, so it is not done.
 - The adapter asks the system for the smallest mode that holds the desktop, without which a
   monitor is sometimes refused.
 - **A mode asks for no display bandwidth.** The adapter declares no budget, and the system keeps
@@ -300,6 +314,12 @@ WxH[@Hz]`; and the file's settings, `modes [add|remove WxH@Hz]`, `gpu [auto|VVVV
 `pointer [hardware|drawn]` and `edid [FILE|none]`. A display a person adds is kept, since a
 command's process ends with it. A tray is later.
 
+*Added 2026-10-17, at W3.6:* **the program `lowlat-vdd` takes the same commands**, through the
+same code, for a machine that runs no host; and a library built with the third half alone is the
+C interface for an application that wants displays and nothing else ([06 §3c](06-api.md)). Both
+ship with the host. A package of their own, with a command that installs the driver, waits for
+a release signature ([07 §10](07-platforms.md)).
+
 ## §2 Input
 
 **Deferred.** A HID device of the host's own for the guests' mice, keyboards and pads, whose input
@@ -319,14 +339,15 @@ program and gone with its holder, a kept one back at its saved mode and place af
 restarted and again after a reboot, the file's settings changed. **The host's own display is
 built and checked live** (W3.2, 2026-10-16): plugged by the host, bound to it, held at its mode,
 sized at an owner's join and streamed through the system's duplication of it. The
-pictures' hand-over (§1.6) and reading the pointer (§1.7) are not built. *The hand-over probed
+pictures' hand-over (§1.6) and reading the pointer (§1.7) were not built yet. *The hand-over probed
 2026-10-16, at W3.3's review*: the system's buffer shared, opened and read by the system account's
 own device in another process, three buffers in turn, a picture intact about three refreshes.
 **The hand-over is built and checked offline** (W3.3, 2026-10-16): the page, its publication
 model-checked, the host's display reading it as a second source, the freshness check and a
 still desktop's picture each shown working and broken, the driver's process ended and its device
 restarted mid-stream stranding nothing, two readers at once both served, the frame thread left at
-normal priority by measurement; the host's display streams it from W3.4. **The pointer from
+normal priority by measurement (*amended 2026-10-17*: raised since, §1.1); the host's display
+streams it from W3.4. **The pointer from
 the driver is built and checked** (W3.4, 2026-10-16): published beside the pictures and
 model-checked, each kind drawn as the duplication draws it, read on whatever desktop takes the
 input, the secure one included; the host's own display read straight from the driver as the
@@ -334,7 +355,14 @@ system account, and duplicated as any other user. **The lifecycle is built and c
 (W3.5, 2026-10-16): a controller's handle follows its driver away and an update goes through
 under a running host with no reboot owed; the host's own display comes back after its host,
 its driver or its GPU went, after the display slept and after the machine slept, beside a panel
-and as the machine's only display.
+and as the machine's only display. **The controller as a program of its own is built** (W3.6,
+2026-10-17): every command through `lowlat-vdd` and `lowlatd display` alike on the installed
+driver, the same lines from both; a library of the third half alone built and linked as an
+application links it, its check failing with another half forced in and with this one left out;
+the driver packaged and signed under its new names, its date in UTC, and installed over the
+driver it replaces in 1.2 s with no reboot owed, a kept monitor plugged again by the new one and
+read by the system as "LowlatDisplay" on "Lowlat Virtual Display". The old library stays in the
+system's folder for user-mode drivers, loaded by nothing.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

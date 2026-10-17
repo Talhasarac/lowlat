@@ -954,6 +954,15 @@ lowlat_status lowlat_vdd_debug_panic(lowlat_vdd *vdd);
 without it the open answers `LOWLAT_ERR_VDD_ABSENT`, and a driver of another version
 `LOWLAT_ERR_VDD_VERSION`, since the two ship together.
 
+**A library carrying this half alone** (*added 2026-10-17*) is the C interface for an
+application that wants virtual displays and nothing else: built with neither of the other
+halves -- `cargo build -p lowlat-sdk --release --no-default-features --features vdd` -- it holds
+the shared calls of [§2](#2-lifecycle) and these, about 330 KB against about 5 MB for the whole
+library, and `lowlat_features` answers `LOWLAT_FEATURE_VDD` alone. An application built against
+it defines `LOWLAT_NO_HOST` and `LOWLAT_NO_CLIENT` before including the header and links its
+import library. The ABI's gates build one and link a program against it the way an application
+does.
+
 - **A monitor is bound or kept** (`LOWLAT_VDD_BOUND`, `LOWLAT_VDD_KEPT`). A bound one is its
   handle's: only that handle unplugs or re-modes it, and the handle's close -- or its process's
   end, however it ends -- unplugs it. A kept one belongs to no handle, any handle may re-mode or

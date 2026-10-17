@@ -4,7 +4,8 @@
 (W1) was planned at its interview the same day, and the host's (W2) at its own on 2026-10-14,
 the day the host's own virtual display (W3) was added with its frame hand-off decided; W3 was
 planned at its own interview on 2026-10-15, and its first step, the driver and its package,
-built the same day.
+built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3.6 -- the
+controller as a program of its own -- is built, and W3's gate waits for W2.5.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1011,6 +1012,24 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   in the machine, the driver names the first hardware GPU in the system's high-performance order,
   at its start and before any monitor. The host never names one: it builds on the GPU each
   swapchain reports, the encoder following the display.
+- **The controller is a program of its own too** (*added 2026-10-17, at W3.6's review*).
+  `lowlat-vdd` takes the commands `lowlatd display` takes, both through one implementation in the
+  controller's crate, for a machine that runs no host. **The library's third half built alone is
+  the C interface to the virtual displays**: the same library and header with neither of the
+  other halves, for an application that wants displays and nothing else; nothing new crosses the
+  boundary. Both are built and checked here and ship with the host. A package of their own, with
+  a command that installs the driver, waits for the release signature, without which a package
+  loads on no other machine.
+- **The driver's files are named `lowlat-idd`** (*added at W3.6's review*): the library
+  `lowlat_idd.dll`, its setup information and catalogue `lowlat-idd.inf` and `lowlat-idd.cat`. A
+  program's debug symbols take its name with underscores, so a driver library named after the
+  program would share one file with it. The device keeps its hardware ID and its service, since a
+  new hardware ID gives an installed machine a second device.
+- **The names a person sees** (*added at W3.6's review*): the adapter "Lowlat Virtual Display",
+  its provider "Lowlat", and each monitor "LowlatDisplay", which fills the thirteen characters an
+  EDID's name holds. A different EDID is a different monitor to the system, so the driver that
+  brings the name makes every slot a new monitor once, the arrangements saved for the old ones
+  left behind.
 
 ### Steps
 
@@ -1203,7 +1222,10 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   for it. **The frame thread stays at normal priority** ([11 §1.1](11-drivers.md)): under one
   busy loop per logical processor, raised through the system's multimedia scheduling it acquired
   one picture in twenty 1.4 to 1.6 ms later than the median, where at normal priority nineteen in
-  twenty came within 0.09 ms. Found: an update restarts the other virtual displays' devices too,
+  twenty came within 0.09 ms. *Amended 2026-10-17:* **raised after all**, to the highest priority
+  of its class: that measurement timed the acquire, and the fence's signal after it ran late
+  beside busy threads of its own priority (the gate's comparison below, [11 §1.1](11-drivers.md)).
+  Found: an update restarts the other virtual displays' devices too,
   and one held open by its own software leaves the update waiting for a reboot, this driver
   restarted onto the new one all the same ([11 §1.8](11-drivers.md)).
 - [x] **W3.4 the pointer from the hardware cursor**: shape, hotspot and visibility from the
@@ -1351,6 +1373,43 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   input onto it; the host's display beside the lit panel showed the prompt's dimmed backdrop, its
   dialog drawn on the primary alone; the guest switched its stream to the panel, answered the
   prompt through it, and switched back.
+- [x] **W3.6 the controller on its own**: the controller's commands as the program `lowlat-vdd`
+  beside `lowlatd display`, one implementation of them; the library's third half built alone and
+  checked the way an application links it; the driver's files and the names a person sees as the
+  decisions above say; the package dated in UTC, as its version is. Checked by every command
+  through both programs on the installed driver, the library's check made to fail both ways, and
+  the renamed package installed over the driver it replaces.
+  *Reviewed 2026-10-17, before its build* (the last three decisions above, added at it). The
+  command line depended on the controller alone, so it moves into the controller's crate whole. A
+  library with the third half alone already built -- about 330 KB against about 5 MB for the
+  whole library, the shared calls and the third half's and nothing else -- though nothing built
+  or checked it. A program named `lowlat-vdd` beside the driver's library of the same name writes
+  one debug symbols file for both, the build warning of it, measured on a copy of the layout. And
+  the package's date was the local one, a day ahead of the version's UTC for hours after local
+  midnight east of Greenwich, which the verifier refuses as a date to come.
+  *Built and checked 2026-10-17:* `lowlat-vdd` and `lowlatd display` call one module of the
+  controller's crate, `lowlatd display` keeping its answer off Windows; the driver's library, its
+  setup information and catalogue renamed, the names capitalized, the EDID's name
+  "LowlatDisplay"; the package stamped with the UTC date. A gate among the library's builds a
+  library of the third half alone in a target directory of its own -- in the profile's it would
+  land on the object the other gates test -- requires every `lowlat_vdd_*` call the header
+  declares among its exports and nothing of the other halves, then links a C program against its
+  import library with the other halves hidden and runs it. Checked on the development machine:
+  every command through both programs on the installed driver, the same lines from both, an
+  unlisted mode by a replug included; the gate red with the client half forced in and with no
+  half at all, the parser's test and the EDID name's each broken once; the driver and the program
+  built together with no collision, their four files side by side; the package signed,
+  catalogued and valid, dated in UTC. Found and fixed: `modes remove` said "removeed", and that
+  displays plugged after would list the mode it removed. **Installed over the driver it
+  replaces**, with a kept monitor marked to come back plugged under the old one: the update
+  returned in 1.2 s, the driver's process carrying `lowlat_idd.dll` 11 ms after, no reboot owed;
+  the kept monitor plugged again by the new driver at its slot and mode; the system reading the
+  adapter as "Lowlat Virtual Display" from the provider "Lowlat" and the monitor's EDID name as
+  "LowlatDisplay", all thirteen characters. The old `lowlat_vdd.dll` stays in the system's
+  folder for user-mode drivers, which nothing loads; the store keeps every older package, as
+  every update has. Both bars: on Windows tests 1362 passed, none failed; on Linux 1372 passed
+  with the two that need a `localhost` answering on both families, and off Windows `lowlat-vdd`
+  refuses while `lowlatd display` answers as it did.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1395,6 +1454,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-17: W3.6 reviewed, built, checked and ticked: the program `lowlat-vdd` beside
+  `lowlatd display` through one module; the library's third half built alone and gated as an
+  application links it; the driver's files `lowlat-idd` and the names a person sees
+  capitalized, the EDID's "LowlatDisplay"; the package dated in UTC and installed over the old
+  driver, a kept monitor back under the new names; stale statuses corrected here and in 11.
 - 2026-10-17: the gate's comparison run offline from one reference (the compositor's vblank):
   the direct frame at or below the duplication at every percentile once the driver's frame
   thread was raised, milliseconds ahead under GPU load; the 240 Hz leg with the host's display as
