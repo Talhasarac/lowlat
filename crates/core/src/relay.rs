@@ -62,6 +62,17 @@ pub const MAX_PERMISSIONS: usize = 8;
 /// Channels: one for each address the path has followed the host to.
 const MAX_CHANNELS: usize = 4;
 
+/// What carries the relay's messages between the client and the relay. The
+/// allocation and the host's leg are datagrams either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carrier {
+    /// UDP: a request left unanswered is sent again.
+    Datagram,
+    /// TCP: the stream recovers its own loss, so a request goes once, and
+    /// channel data is padded to four bytes.
+    Stream,
+}
+
 /// Where the relay has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -115,7 +126,8 @@ struct Pending {
 }
 
 /// What a thing asking one request at a time sends now: its request again
-/// once that has waited long enough, or a new one once `due_ms` has come.
+/// once that has waited long enough, when the carrier `resends`, or a new
+/// one once `due_ms` has come.
 fn step(
     pending: &mut Option<Pending>,
     due_ms: f64,
@@ -123,9 +135,10 @@ fn step(
     ids: &mut Ids,
     first_wait_ms: f64,
     backoff: bool,
+    resends: bool,
 ) -> Option<TransactionId> {
     match pending {
-        Some(request) if now_ms - request.sent_ms >= request.wait_ms => {
+        Some(request) if resends && now_ms - request.sent_ms >= request.wait_ms => {
             request.sent_ms = now_ms;
             if backoff {
                 request.wait_ms *= 2.0;
@@ -147,8 +160,12 @@ fn step(
 }
 
 /// When `step` next has something to send.
-fn next_step_ms(pending: &Option<Pending>, due_ms: f64) -> f64 {
+fn next_step_ms(pending: &Option<Pending>, due_ms: f64, resends: bool) -> f64 {
     match pending {
+        // Nothing, until the answer: a re-send deadline armed for a request
+        // that is never sent again would fall due, stay due, and turn the
+        // loop's wait into a hot poll.
+        Some(_) if !resends => f64::INFINITY,
         Some(request) => request.sent_ms + request.wait_ms,
         None => due_ms,
     }
@@ -216,6 +233,7 @@ enum Ask {
 /// The relay one attempt allocates, and everything kept alive through it.
 pub struct Relay<'a> {
     server: SocketAddr,
+    carrier: Carrier,
     username: &'a str,
     password: &'a str,
     ids: Ids,
@@ -251,6 +269,7 @@ impl fmt::Debug for Relay<'_> {
         // The credential and the key are never rendered.
         f.debug_struct("Relay")
             .field("server", &self.server)
+            .field("carrier", &self.carrier)
             .field("state", &self.state)
             .field("relayed", &self.relayed)
             .field("destination", &self.destination)
@@ -273,6 +292,7 @@ impl<'a> Relay<'a> {
     ) -> Self {
         Self {
             server: stun::canonical(server),
+            carrier: Carrier::Datagram,
             username,
             password,
             ids: Ids { seed, counter: 0 },
@@ -296,10 +316,27 @@ impl<'a> Relay<'a> {
         }
     }
 
+    /// The same relay, reached over `carrier`. Before the first output.
+    pub fn over(mut self, carrier: Carrier) -> Self {
+        self.carrier = carrier;
+        self
+    }
+
     /// The relay's address. Everything from it is the relay's; everything
     /// to a peer goes to it.
     pub fn server(&self) -> SocketAddr {
         self.server
+    }
+
+    /// What carries the relay's messages.
+    pub fn carrier(&self) -> Carrier {
+        self.carrier
+    }
+
+    /// Whether a request left unanswered is sent again: over datagrams
+    /// only, since a stream recovers its own loss.
+    fn resends(&self) -> bool {
+        self.carrier == Carrier::Datagram
     }
 
     /// Where the relay has got to.
@@ -458,6 +495,7 @@ impl<'a> Relay<'a> {
         if !self.live() {
             return None;
         }
+        let resends = self.resends();
         // Until there is an allocation nothing else can be asked for.
         if self.relayed.is_none() {
             let tid = step(
@@ -467,6 +505,7 @@ impl<'a> Relay<'a> {
                 &mut self.ids,
                 ALLOCATE_RESEND_MS,
                 true,
+                resends,
             )?;
             return Some((Ask::Allocate, tid));
         }
@@ -477,6 +516,7 @@ impl<'a> Relay<'a> {
             &mut self.ids,
             RESEND_MS,
             false,
+            resends,
         ) {
             return Some((Ask::Refresh(LIFETIME_S), tid));
         }
@@ -491,6 +531,7 @@ impl<'a> Relay<'a> {
                 &mut self.ids,
                 RESEND_MS,
                 false,
+                resends,
             ) {
                 return Some((Ask::Permission(lease.target), tid));
             }
@@ -509,6 +550,7 @@ impl<'a> Relay<'a> {
                 &mut self.ids,
                 RESEND_MS,
                 false,
+                resends,
             ) {
                 return Some((Ask::Channel(number, lease.target), tid));
             }
@@ -544,9 +586,12 @@ impl<'a> Relay<'a> {
             return;
         }
         // A success counts only under our key: its integrity is what makes
-        // the relayed address and every grant the relay's word. A refusal
-        // carries none, and is admitted on an identifier nobody else knows.
-        if response.is_success() && !self.key.as_ref().is_some_and(|key| response.verify(key)) {
+        // the relayed address and every grant the relay's word. So does a
+        // refusal that names no code, which a deployed relay's stream listener
+        // sends with integrity. Any other refusal carries none, and is admitted
+        // on an identifier nobody else knows.
+        let keyed = response.is_success() || response.error_code() == Some(turn::NO_CODE);
+        if keyed && !self.key.as_ref().is_some_and(|key| response.verify(key)) {
             return;
         }
         let tid = response.transaction_id();
@@ -748,13 +793,14 @@ impl<'a> Relay<'a> {
             State::Ready(_) => self.expires_ms,
             State::Failed(_) | State::Released => return f64::INFINITY,
         };
+        let resends = self.resends();
         if self.relayed.is_none() {
-            soonest = soonest.min(next_step_ms(&self.allocating, f64::NEG_INFINITY));
+            soonest = soonest.min(next_step_ms(&self.allocating, f64::NEG_INFINITY, resends));
         } else {
-            soonest = soonest.min(next_step_ms(&self.refreshing, self.refresh_ms));
+            soonest = soonest.min(next_step_ms(&self.refreshing, self.refresh_ms, resends));
             for lease in self.permissions.iter().flatten() {
                 if !lease.refused {
-                    soonest = soonest.min(next_step_ms(&lease.pending, lease.due_ms));
+                    soonest = soonest.min(next_step_ms(&lease.pending, lease.due_ms, resends));
                 }
                 if self
                     .destination
@@ -769,7 +815,7 @@ impl<'a> Relay<'a> {
                 .flatten()
                 .filter(|lease| !lease.refused)
             {
-                soonest = soonest.min(next_step_ms(&lease.pending, lease.due_ms));
+                soonest = soonest.min(next_step_ms(&lease.pending, lease.due_ms, resends));
             }
         }
         (soonest - now_ms).max(0.0)
@@ -784,8 +830,8 @@ fn channel_number(index: usize) -> Option<u16> {
 mod tests {
     use super::*;
     use crate::turn::testing::{
-        allocated, challenge, channel_of, granted, kind_of, lifetime_of, nonce_of, peer_of,
-        refusal, signed, tid_of,
+        allocated, challenge, channel_of, granted, kind_of, lifetime_of, message, nonce_of,
+        peer_of, refusal, signed, tid_of,
     };
     use core::net::Ipv4Addr;
     use std::vec::Vec;
@@ -1266,5 +1312,107 @@ mod tests {
             assert!(!reachable(peer), "{peer}");
         }
         assert!(reachable(host(30)));
+    }
+
+    /// A stream recovers its own loss, so a request goes once: neither the
+    /// allocation's doubling re-sends nor any other's are sent, and nothing
+    /// arms a timer for them -- only setup's own deadline, which still ends it.
+    #[test]
+    fn nothing_is_resent_over_a_stream() {
+        let mut stream = relay().over(Carrier::Stream);
+        assert_eq!(kind_of(&one(&mut stream, 0.0)), ALLOCATE);
+        for now in [
+            ALLOCATE_RESEND_MS,
+            2.0 * ALLOCATE_RESEND_MS,
+            RESEND_MS,
+            4_000.0,
+        ] {
+            assert!(drain(&mut stream, now).is_empty(), "sent again at {now} ms");
+            assert!(
+                (stream.next_timer_ms(now) - (SETUP_DEADLINE_MS - now)).abs() < 1e-9,
+                "a timer other than setup's at {now} ms"
+            );
+        }
+        stream.poll(SETUP_DEADLINE_MS);
+        assert_eq!(stream.state(), State::Failed(Failure::Unreachable));
+
+        // Over datagrams the same allocation is sent again.
+        let mut datagrams = relay();
+        let _ = one(&mut datagrams, 0.0);
+        assert_eq!(kind_of(&one(&mut datagrams, ALLOCATE_RESEND_MS)), ALLOCATE);
+    }
+
+    /// An answer awaited over a stream arms nothing: the next timer is the
+    /// next renewal, not a re-send whose deadline would fall due, stay due,
+    /// and turn the loop's wait into a hot poll. A late answer still counts.
+    #[test]
+    fn an_answer_awaited_over_a_stream_arms_no_timer() {
+        let mut relay = relay().over(Carrier::Stream);
+        ready(&mut relay, 0.0);
+        relay.permit(host(30).ip());
+        let request = one(&mut relay, 0.0);
+        assert_eq!(kind_of(&request), PERMISSION);
+        for now in [RESEND_MS, 10.0 * RESEND_MS] {
+            assert!(drain(&mut relay, now).is_empty(), "sent again at {now} ms");
+            // The relay's own machine was permitted at zero; its renewal is due.
+            assert!(
+                (relay.next_timer_ms(now) - (RENEW_MS - now)).abs() < 1e-9,
+                "at {now} ms"
+            );
+        }
+        answer(&mut relay, &granted(&request, None, &key()), 30_000.0);
+        assert!(relay.relayable(host(30)));
+    }
+
+    /// A stale nonce is answered with a new request, over a stream as over
+    /// datagrams: the old one was answered, and nothing is sent twice.
+    #[test]
+    fn a_stale_nonce_is_a_new_request_over_a_stream() {
+        let mut relay = relay().over(Carrier::Stream);
+        ready(&mut relay, 0.0);
+        relay.permit(host(30).ip());
+        let first = one(&mut relay, 100.0);
+        answer(
+            &mut relay,
+            &challenge(&first, 438, REALM, b"rotated"),
+            200.0,
+        );
+        let second = one(&mut relay, 200.0);
+        assert_eq!(kind_of(&second), PERMISSION);
+        assert_ne!(tid_of(&first), tid_of(&second));
+        assert_eq!(nonce_of(&second).as_deref(), Some(&b"rotated"[..]));
+    }
+
+    /// A deployed relay's stream listener refuses a permission with integrity
+    /// and no code. Verified under the key it is a refusal -- the address is
+    /// asked no more and nothing is relayed toward it; under another key it is
+    /// not the relay's word and changes nothing. Either carrier.
+    #[test]
+    fn a_refusal_that_names_no_code_refuses_only_under_the_key() {
+        for carrier in [Carrier::Datagram, Carrier::Stream] {
+            let mut relay = relay().over(carrier);
+            ready(&mut relay, 0.0);
+            relay.permit(host(30).ip());
+            let request = one(&mut relay, 0.0);
+            let refusal_under =
+                |key: &Key| message(kind_of(&request) | 0x0110, tid_of(&request), &[], Some(key));
+
+            answer(
+                &mut relay,
+                &refusal_under(&Key::long_term(USER, REALM, "other")),
+                0.0,
+            );
+            assert!(
+                relay.relayable(host(30)),
+                "{carrier:?}: a stranger's refusal was taken"
+            );
+            answer(&mut relay, &refusal_under(&key()), 0.0);
+            assert!(
+                !relay.relayable(host(30)),
+                "{carrier:?}: the refusal was not taken"
+            );
+            assert_eq!(relay.state(), State::Ready(relayed_addr()));
+            assert!(none_of(&mut relay, RESEND_MS, PERMISSION), "{carrier:?}");
+        }
     }
 }

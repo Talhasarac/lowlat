@@ -37,7 +37,7 @@ use crate::channel::Drops;
 use crate::conn::{self, Conn, Egress, Ttl};
 use crate::demux::{self, Datagram};
 use crate::error::{Error, Result};
-use crate::relay::{self, Relay};
+use crate::relay::{self, Carrier, Relay};
 use crate::session::{self, Health, Pressure, Session};
 use crate::stun;
 use crate::turn;
@@ -417,9 +417,11 @@ impl<'a, M: Media> Endpoint<'a, M> {
             Ok(len) => len,
             Err(error) => return Some(Err(error)),
         };
-        let framed = match channel {
-            Some(number) => turn::wrap_channel(out, number, len),
-            None => turn::wrap_indication(out, relay.indication_id(), to, len),
+        let framed = match (channel, relay.carrier()) {
+            (Some(number), Carrier::Datagram) => turn::wrap_channel(out, number, len),
+            // A stream finds the next message after the padding, or not at all.
+            (Some(number), Carrier::Stream) => turn::wrap_channel_padded(out, number, len),
+            (None, _) => turn::wrap_indication(out, relay.indication_id(), to, len),
         };
         Some(framed.map(|len| to_relay(relay, len)))
     }
@@ -879,6 +881,10 @@ mod tests {
 
         /// The client, relayed; the host, direct and none the wiser.
         fn client<'a>(arena: &'a mut Arena) -> Endpoint<'a> {
+            client_over(arena, Carrier::Datagram)
+        }
+
+        fn client_over<'a>(arena: &'a mut Arena, carrier: Carrier) -> Endpoint<'a> {
             let (conn, session) = parts(
                 arena,
                 (LEFT_UFRAG, LEFT_PWD),
@@ -888,7 +894,7 @@ mod tests {
             Endpoint::relayed(
                 conn,
                 session,
-                Relay::new(server(), USER, PASS, [0x5E; 16], 0.0),
+                Relay::new(server(), USER, PASS, [0x5E; 16], 0.0).over(carrier),
             )
         }
 
@@ -1408,6 +1414,67 @@ mod tests {
             assert!(relay.channel_messages > before);
             let (_, data) = unwrapped(&wire[..len]);
             assert_eq!(len, turn::CHANNEL_HEADER_LEN + data.len());
+        }
+
+        /// Over a stream, channel data is padded to four bytes, its length
+        /// field counting the datagram alone, and it still reaches the host:
+        /// unpadded, the stream would lose its framing at the next message.
+        #[test]
+        fn channel_data_is_padded_over_a_stream() {
+            let (mut client_arena, mut host_arena) = (Arena::new(), Arena::new());
+            let mut client = client_over(&mut client_arena, Carrier::Stream);
+            let mut host = host(&mut host_arena);
+            let mut relay = FakeRelay::new();
+            client.add_candidate(host_addr(), Kind::Direct).unwrap();
+            let now = offer(&mut client, &mut host, &mut relay);
+            let mut now = punch(&mut client, &mut host, &mut relay, now);
+            for _ in 0..4 {
+                through(&mut client, &mut host, &mut relay, host_addr(), now);
+                now += 10.0;
+            }
+            assert_eq!(relay.channels, [(turn::FIRST_CHANNEL, host_addr())]);
+
+            let (mut channel, mut padded) = (0, 0);
+            let mut wire = [0u8; 2048];
+            let mut scratch = [0u8; 2048];
+            for size in 1..=8_usize {
+                client
+                    .session()
+                    .send_message(CHANNEL, &[], &[0x33; 8][..size])
+                    .unwrap();
+                while let Some(result) = client.get_output(now, &mut wire) {
+                    let egress = result.unwrap();
+                    let sent = &wire[..egress.len];
+                    if sent[0] >> 6 != 0b01 {
+                        let _ = relay.carry(sent);
+                        continue;
+                    }
+                    channel += 1;
+                    assert_eq!(sent.len() % 4, 0, "channel data of {} bytes", sent.len());
+                    let (_, data) = unwrapped(sent);
+                    if sent.len() > turn::CHANNEL_HEADER_LEN + data.len() {
+                        padded += 1;
+                    }
+                    if let Carried::ToPeer(_, data) = relay.carry(sent) {
+                        let _ = host.process_input(&data, relayed_addr(), None, now, &mut scratch);
+                    }
+                }
+                now += 10.0;
+            }
+            assert!(channel >= 8, "only {channel} channel messages");
+            assert!(
+                padded > 0,
+                "no message needed padding, which proves nothing"
+            );
+            let mut out = [0u8; 64];
+            for size in 1..=8_usize {
+                let len = host
+                    .session()
+                    .take_message(CHANNEL, &mut out)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(&out[..len], &[0x33; 8][..size], "message {size}");
+            }
         }
 
         /// A relay attempt talks to the relay alone. A datagram from anywhere

@@ -60,6 +60,10 @@ pub const MAX_NONCE: usize = 128;
 pub const UNAUTHORIZED: u16 = 401;
 /// The nonce rotated; the answer carries the new one.
 pub const STALE_NONCE: u16 = 438;
+/// The code an answer of the error class is read with when it names none. A
+/// deployed relay's stream listener refuses that way, with integrity. Real
+/// codes run from 300 to 699, so this is never one of them.
+pub const NO_CODE: u16 = 0;
 
 /// The transport a relay is asked for, by protocol number: datagrams.
 const TRANSPORT_UDP: u8 = 17;
@@ -258,6 +262,75 @@ pub fn wrap_channel(out: &mut [u8], channel: u16, len: usize) -> Result<usize> {
     Ok(total)
 }
 
+/// [`wrap_channel`], padded to four bytes as a stream requires: the zeros go
+/// after the datagram, and the length field still counts the datagram alone.
+/// Unpadded, a stream loses its framing at the next message, and a deployed
+/// relay closes the connection.
+pub fn wrap_channel_padded(out: &mut [u8], channel: u16, len: usize) -> Result<usize> {
+    let total = wrap_channel(out, channel, len)?;
+    let padded = total.next_multiple_of(4);
+    out.get_mut(total..padded)
+        .ok_or(Error::BufferTooSmall)?
+        .fill(0);
+    Ok(padded)
+}
+
+/// One message at the head of a stream to the relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    /// What the message occupies on the stream, its padding included.
+    pub wire: usize,
+    /// The message itself, without the padding: what [`parse`] takes.
+    pub len: usize,
+    /// Channel data on a number the standard reserves, to be discarded whole.
+    pub reserved: bool,
+}
+
+/// The message a stream's next bytes begin, once there are enough of them to
+/// say: four for channel data, the first eight for a message, whose cookie is
+/// checked. `None` until then.
+///
+/// Each message is found from its own length -- a message's, or channel
+/// data's padded to four bytes -- so a read may end anywhere. Anything else
+/// ends the stream: a first byte that is neither, a foreign cookie, a length
+/// that is not whole words. Scanning untrusted bytes for the next plausible
+/// header is not recovery.
+pub fn frame(head: &[u8]) -> Result<Option<Frame>> {
+    match head.first().map(|byte| byte >> 6) {
+        None => Ok(None),
+        Some(0b00) => {
+            if head.len() < 8 {
+                return Ok(None);
+            }
+            if be32(head, 4)? != MAGIC_COOKIE {
+                return Err(Error::Malformed);
+            }
+            let body = usize::from(be16(head, 2)?);
+            if body % 4 != 0 {
+                return Err(Error::Malformed);
+            }
+            let len = HEADER_LEN + body;
+            Ok(Some(Frame {
+                wire: len,
+                len,
+                reserved: false,
+            }))
+        }
+        Some(0b01) => {
+            if head.len() < CHANNEL_HEADER_LEN {
+                return Ok(None);
+            }
+            let len = CHANNEL_HEADER_LEN + usize::from(be16(head, 2)?);
+            Ok(Some(Frame {
+                wire: len.next_multiple_of(4),
+                len,
+                reserved: be16(head, 0)? > LAST_CHANNEL,
+            }))
+        }
+        Some(_) => Err(Error::Malformed),
+    }
+}
+
 fn check_channel(channel: u16) -> Result<()> {
     if (FIRST_CHANNEL..=LAST_CHANNEL).contains(&channel) {
         Ok(())
@@ -375,10 +448,18 @@ fn parse_message(datagram: &[u8]) -> Result<Inbound<'_>> {
                 METHOD_CHANNEL_BIND => Method::ChannelBind,
                 _ => return Err(Error::Malformed),
             };
-            // An error that does not say which is refused here, rather than
-            // read as some default the caller would then act on.
+            // An error whose code cannot be read is refused here, rather than
+            // read as some default the caller would then act on. One that
+            // names no code at all, with integrity, is how a deployed relay's
+            // stream listener refuses: it is taken as a refusal naming none,
+            // and the caller, who holds the key, decides whether it is the
+            // relay's word. Without integrity it is refused here too.
             let error = match class {
-                CLASS_ERROR => Some(error.and_then(error_code).ok_or(Error::Malformed)?),
+                CLASS_ERROR => Some(match error {
+                    Some(value) => error_code(value).ok_or(Error::Malformed)?,
+                    None if integrity_at.is_some() => NO_CODE,
+                    None => return Err(Error::Malformed),
+                }),
                 _ => None,
             };
             Ok(Inbound::Response(Response {
@@ -429,7 +510,8 @@ impl<'a> Response<'a> {
         self.error.is_none()
     }
 
-    /// The code a refusal carries, or `None` for a success.
+    /// The code a refusal carries -- [`NO_CODE`] for one that names none --
+    /// or `None` for a success.
     pub fn error_code(&self) -> Option<u16> {
         self.error
     }
@@ -816,10 +898,19 @@ pub(crate) mod testing {
     }
 
     /// The datagram an indication or channel message from the client carries,
-    /// and the peer it is bound for when the framing names one.
+    /// and the peer it is bound for when the framing names one. Channel data
+    /// is cut at its length, as a relay cuts it, and any padding after must be
+    /// zeros.
     pub(crate) fn unwrapped(sent: &[u8]) -> (Option<SocketAddr>, Vec<u8>) {
         if sent[0] >> 6 == 0b01 {
-            return (None, sent[CHANNEL_HEADER_LEN..].to_vec());
+            let len = usize::from(u16::from_be_bytes([sent[2], sent[3]]));
+            let end = CHANNEL_HEADER_LEN + len;
+            assert!(sent.len() - end < 4, "more than padding after the data");
+            assert!(
+                sent[end..].iter().all(|&byte| byte == 0),
+                "padding not zero"
+            );
+            return (None, sent[CHANNEL_HEADER_LEN..end].to_vec());
         }
         assert_eq!(
             kind_of(sent),
@@ -1096,6 +1187,192 @@ mod tests {
         overlong.push(0);
         assert_eq!(parse(&overlong), Err(Error::Malformed));
         assert_eq!(parse(&unpadded[..8]), Err(Error::Malformed));
+    }
+
+    /// On a stream channel data is padded to four bytes: the zeros after the
+    /// datagram, the length field counting the datagram alone. It reads back
+    /// as itself, and a buffer with no room for the padding is refused.
+    #[test]
+    fn channel_data_on_a_stream_is_padded() {
+        let mut padded_some = 0;
+        for len in 0..9_usize {
+            let payload: Vec<u8> = (1..=len as u8).collect();
+            let mut out = [0xEE_u8; 32];
+            out[CHANNEL_HEADER_LEN..CHANNEL_HEADER_LEN + len].copy_from_slice(&payload);
+
+            let framed = wrap_channel_padded(&mut out, FIRST_CHANNEL, len).unwrap();
+            assert_eq!(
+                framed,
+                (CHANNEL_HEADER_LEN + len).next_multiple_of(4),
+                "{len}"
+            );
+            assert_eq!(&out[2..4], &(len as u16).to_be_bytes(), "{len}");
+            assert!(
+                out[CHANNEL_HEADER_LEN + len..framed]
+                    .iter()
+                    .all(|&b| b == 0),
+                "{len}: the padding is not zeros"
+            );
+            assert_eq!(
+                parse(&out[..framed]),
+                Ok(Inbound::Channel {
+                    number: FIRST_CHANNEL,
+                    data: &payload[..]
+                })
+            );
+            if framed > CHANNEL_HEADER_LEN + len {
+                padded_some += 1;
+            }
+        }
+        assert_eq!(padded_some, 6, "too few lengths needed padding to prove it");
+        assert_eq!(
+            wrap_channel_padded(&mut [0u8; 9], FIRST_CHANNEL, 5),
+            Err(Error::BufferTooSmall)
+        );
+    }
+
+    /// A stream carries messages back to back and a read ends anywhere. Each
+    /// message is found from its own length, once enough of it has arrived to
+    /// say, at every point the stream could be split.
+    #[test]
+    fn a_stream_is_framed_by_each_message_s_own_length() {
+        let peer = xor_address(peer_v4(), TID);
+        let mut messages = std::vec![
+            message(0x0108, &[], Some(&key())),
+            message(
+                0x0017,
+                &[(ATTR_XOR_PEER_ADDRESS, &peer), (ATTR_DATA, b"xyz")],
+                None
+            ),
+        ];
+        for len in 0..6_u16 {
+            let mut data = std::vec![0x40, 0x00];
+            data.extend_from_slice(&len.to_be_bytes());
+            data.extend((0..len).map(|byte| byte as u8));
+            messages.push(data);
+        }
+        let mut stream = Vec::new();
+        for message in &messages {
+            stream.extend_from_slice(message);
+            stream.resize(stream.len().next_multiple_of(4), 0);
+        }
+
+        for split in 0..=stream.len() {
+            let mut held: Vec<u8> = Vec::new();
+            let mut found: Vec<Vec<u8>> = Vec::new();
+            for read in [&stream[..split], &stream[split..]] {
+                held.extend_from_slice(read);
+                while let Some(frame) = frame(&held).unwrap() {
+                    if held.len() < frame.wire {
+                        break;
+                    }
+                    assert!(!frame.reserved);
+                    assert!(parse(&held[..frame.len]).is_ok(), "split {split}");
+                    found.push(held[..frame.len].to_vec());
+                    held.drain(..frame.wire);
+                }
+            }
+            assert!(held.is_empty(), "split {split}: {} bytes left", held.len());
+            assert_eq!(found, messages, "split {split}");
+        }
+    }
+
+    /// Channel data on a number the standard reserves is framed like any
+    /// other, so it can be skipped whole without losing the stream.
+    #[test]
+    fn a_reserved_channel_is_skipped_by_its_length() {
+        for first in [0x50_u8, 0x5F, 0x7F] {
+            let bytes = [first, 0x00, 0x00, 0x05, 1, 2, 3, 4, 5, 0, 0, 0];
+            assert_eq!(
+                frame(&bytes),
+                Ok(Some(Frame {
+                    wire: 12,
+                    len: 9,
+                    reserved: true
+                })),
+                "{first:#04x}"
+            );
+        }
+        assert!(!frame(&[0x4F, 0xFF, 0x00, 0x01]).unwrap().unwrap().reserved);
+    }
+
+    /// Too little to say is nothing yet. A first byte that is neither a
+    /// message nor channel data, a foreign cookie, or a length that is not
+    /// whole words ends the stream: nothing scans on for a plausible header.
+    #[test]
+    fn a_head_that_is_neither_ends_the_stream() {
+        let good = message(0x0108, &[], Some(&key()));
+        for len in 0..8 {
+            assert_eq!(frame(&good[..len]), Ok(None), "{len} bytes");
+        }
+        assert!(frame(&good).unwrap().is_some());
+        assert_eq!(frame(&[0x40, 0x00, 0x00]), Ok(None));
+        for first in [0x80_u8, 0xC0, 0xFF] {
+            assert_eq!(
+                frame(&[first, 0, 0, 0, 0, 0, 0, 0]),
+                Err(Error::Malformed),
+                "{first:#04x}"
+            );
+        }
+        let mut foreign = good.clone();
+        foreign[4] ^= 0xFF;
+        assert_eq!(frame(&foreign), Err(Error::Malformed));
+        let mut ragged = good.clone();
+        ragged[3] |= 0x01;
+        assert_eq!(frame(&ragged), Err(Error::Malformed));
+    }
+
+    /// The longest of each a stream can frame.
+    #[test]
+    fn the_longest_messages_a_stream_can_carry_are_framed() {
+        assert_eq!(
+            frame(&[0x40, 0x00, 0xFF, 0xFF]),
+            Ok(Some(Frame {
+                wire: 4 + 0x1_0000,
+                len: 4 + 0xFFFF,
+                reserved: false
+            }))
+        );
+        let mut head = message(0x0108, &[], None)[..8].to_vec();
+        head[2..4].copy_from_slice(&0xFFFC_u16.to_be_bytes());
+        assert_eq!(
+            frame(&head),
+            Ok(Some(Frame {
+                wire: HEADER_LEN + 0xFFFC,
+                len: HEADER_LEN + 0xFFFC,
+                reserved: false
+            }))
+        );
+    }
+
+    /// A deployed relay's stream listener refuses with integrity and no error
+    /// code. With integrity it is read as a refusal naming none, for the key's
+    /// holder to verify; without, an error that does not say which is refused.
+    #[test]
+    fn a_refusal_that_names_no_code_is_read_only_with_integrity() {
+        // As the relay sent it: a refused permission, integrity alone.
+        let captured: [u8; 44] = [
+            0x01, 0x18, 0x00, 0x18, 0x21, 0x12, 0xa4, 0x42, 0x02, 0xf8, 0x0d, 0xa6, 0x39, 0x39,
+            0xc0, 0xbe, 0xbc, 0x5b, 0xa2, 0xa5, 0x00, 0x08, 0x00, 0x14, 0xb8, 0x91, 0x1a, 0x13,
+            0x42, 0x12, 0xe5, 0x69, 0x50, 0xf6, 0x3a, 0x18, 0xec, 0x89, 0xd1, 0xeb, 0xc2, 0xdb,
+            0xfe, 0x9b,
+        ];
+        let key = key();
+        let signed = message(0x0118, &[], Some(&key));
+        for bytes in [&captured[..], &signed[..]] {
+            let refused = response(bytes);
+            assert_eq!(refused.method(), Method::CreatePermission);
+            assert!(!refused.is_success());
+            assert_eq!(refused.error_code(), Some(NO_CODE));
+            assert_eq!(refused.challenge(), None);
+            assert!(refused.is_authenticated());
+        }
+        assert!(response(&signed).verify(&key));
+        assert!(
+            !response(&captured).verify(&key),
+            "a stranger's integrity verified"
+        );
+        assert_eq!(parse(&message(0x0118, &[], None)), Err(Error::Malformed));
     }
 
     /// The largest framing there is: a floor-sized datagram from an IPv6 peer
