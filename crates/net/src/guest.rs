@@ -186,7 +186,7 @@ mod tests {
 
         let socket = Socket::open(0).unwrap();
         let mut shell = Shell::new(socket, wake, Endpoint::new(conn, session));
-        let _ = bound.send(shell.socket().local_addr().unwrap());
+        let _ = bound.send(shell.socket().unwrap().local_addr().unwrap());
 
         let woke_on_send = |turn: std::io::Result<crate::shell::Turn>| {
             turn.is_ok_and(|turn| turn.woke == crate::shell::Woke::Send)

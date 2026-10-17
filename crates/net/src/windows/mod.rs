@@ -16,14 +16,17 @@ mod io;
 mod qos;
 mod send;
 mod socket;
+mod stream;
 mod wake;
 
 pub(crate) use addrs::interface_v4;
 pub(crate) use io::Io;
 pub(crate) use send::{offload_send, offload_unsupported, pinned_send};
 pub use socket::Socket;
+pub(crate) use stream::StreamIo;
 pub use wake::{Wake, WakeHandle};
 
-/// Completion keys: which of the two things the port carries an entry is.
+/// Completion keys: which of the things the port carries an entry is.
 const KEY_RECV: usize = 1;
 const KEY_WAKE: usize = 2;
+const KEY_STREAM: usize = 3;

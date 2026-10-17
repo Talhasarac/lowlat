@@ -19,7 +19,7 @@
 //! deadline costs two wakes and fires a pass late, and a round trip measured
 //! against it reads short by up to a full wait.
 
-use core::net::SocketAddr;
+use core::net::{IpAddr, SocketAddr};
 use std::io;
 
 use lowlat_core::endpoint::{Endpoint, Media};
@@ -27,8 +27,9 @@ use lowlat_core::session::Session;
 
 use crate::send;
 use crate::socket::Socket;
+use crate::stream::Stream;
 use crate::sys::Io;
-use crate::wake::Wake;
+use crate::wake::{Wake, WakeHandle};
 
 /// Shortest wait. A sub-millisecond timeout is a hot poll wearing a timeout's
 /// clothes.
@@ -59,9 +60,11 @@ pub enum Woke {
 /// meant to be. Anything poll says about a descriptor sends the pass to it;
 /// only silence is skipped.
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct Ready {
-    pub(crate) socket: bool,
-    pub(crate) wake: bool,
+pub struct Ready {
+    /// The socket, or the relay's stream, has something to collect.
+    pub socket: bool,
+    /// The application enqueued work.
+    pub wake: bool,
 }
 
 /// What one pass did.
@@ -107,15 +110,97 @@ impl Stats {
     }
 }
 
-/// One guest's loop: a socket, a wake, and the endpoint they drive.
+/// What the loop's datagrams travel on: the attempt's socket, or one stream to
+/// the relay (docs/02-io-shell.md 5-6). Either one waits beside the wake.
+#[derive(Debug)]
+enum Carrier {
+    Datagram(Io),
+    Stream(Box<Stream>),
+}
+
+/// The datagrams the last drain handed out, from whichever carrier.
+enum Frames<D, S> {
+    Datagram(D),
+    Stream(S),
+}
+
+impl<'f, D, S> Iterator for Frames<D, S>
+where
+    D: Iterator<Item = (SocketAddr, Option<IpAddr>, &'f [u8])>,
+    S: Iterator<Item = (SocketAddr, Option<IpAddr>, &'f [u8])>,
+{
+    type Item = (SocketAddr, Option<IpAddr>, &'f [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Datagram(datagrams) => datagrams.next(),
+            Self::Stream(messages) => messages.next(),
+        }
+    }
+}
+
+impl Carrier {
+    fn wait(&mut self, timeout_ms: f64) -> io::Result<Ready> {
+        match self {
+            Self::Datagram(io) => io.wait(timeout_ms),
+            Self::Stream(stream) => stream.wait(timeout_ms),
+        }
+    }
+
+    fn take_wake(&mut self) -> io::Result<bool> {
+        match self {
+            Self::Datagram(io) => io.take_wake(),
+            Self::Stream(stream) => stream.take_wake(),
+        }
+    }
+
+    fn wake_handle(&self) -> io::Result<WakeHandle> {
+        match self {
+            Self::Datagram(io) => io.wake().handle(),
+            Self::Stream(stream) => stream.wake().handle(),
+        }
+    }
+
+    fn drain(&mut self) -> io::Result<usize> {
+        match self {
+            Self::Datagram(io) => io.drain(),
+            Self::Stream(stream) => stream.drain(),
+        }
+    }
+
+    fn saturated(&self) -> bool {
+        match self {
+            Self::Datagram(io) => io.saturated(),
+            Self::Stream(stream) => stream.saturated(),
+        }
+    }
+
+    fn frames(&self) -> impl Iterator<Item = (SocketAddr, Option<IpAddr>, &[u8])> {
+        match self {
+            Self::Datagram(io) => Frames::Datagram(io.iter()),
+            Self::Stream(stream) => Frames::Stream(stream.frames()),
+        }
+    }
+
+    fn mark(&mut self, to: SocketAddr) {
+        match self {
+            Self::Datagram(io) => io.mark(to),
+            // The stream reaches one destination, its relay.
+            Self::Stream(stream) => stream.mark(),
+        }
+    }
+}
+
+/// One guest's loop: a socket or a stream to the relay, a wake, and the
+/// endpoint they drive.
 ///
 /// Generic over the endpoint's media half, so the loop is written once and
 /// instantiated per transport; nothing here knows which one it is driving.
 #[derive(Debug)]
 pub struct Shell<'a, M: Media = Session<'a>> {
-    /// The socket, the wake and the receive storage, which the platform owns
-    /// together.
-    io: Io,
+    /// The socket or the stream, the wake and the receive storage, which the
+    /// platform owns together.
+    io: Carrier,
     endpoint: Endpoint<'a, M>,
     outbound: send::Batch,
     scratch: Box<[u8]>,
@@ -139,7 +224,23 @@ impl<'a, M: Media> Shell<'a, M> {
             socket.granted_send_buffer()
         );
         Self {
-            io: Io::new(socket, wake),
+            io: Carrier::Datagram(Io::new(socket, wake)),
+            endpoint,
+            outbound: send::Batch::new(),
+            scratch: vec![0u8; crate::socket::RECV_SLOT].into_boxed_slice(),
+            stats: Stats::default(),
+            base: lowlat_common::clock::Time::now(),
+            marked: None,
+        }
+    }
+
+    /// The same loop over one stream to the relay, for a relay attempt whose
+    /// network blocks UDP (docs/03-connectivity.md 7.4). The stream may still
+    /// be connecting; nothing is taken from the endpoint until it has.
+    pub fn over_stream(stream: Stream, endpoint: Endpoint<'a, M>) -> Self {
+        lowlat_common::log_info!("net: stream to the relay, server={}", stream.server());
+        Self {
+            io: Carrier::Stream(Box::new(stream)),
             endpoint,
             outbound: send::Batch::new(),
             scratch: vec![0u8; crate::socket::RECV_SLOT].into_boxed_slice(),
@@ -160,14 +261,17 @@ impl<'a, M: Media> Shell<'a, M> {
         &mut self.endpoint
     }
 
-    /// The socket, for its address and granted buffers.
-    pub fn socket(&self) -> &Socket {
-        self.io.socket()
+    /// The socket, for its address and granted buffers; `None` over a stream.
+    pub fn socket(&self) -> Option<&Socket> {
+        match &self.io {
+            Carrier::Datagram(io) => Some(io.socket()),
+            Carrier::Stream(_) => None,
+        }
     }
 
     /// A producer's end of the wake, for a thread that will enqueue work.
-    pub fn wake_handle(&self) -> io::Result<crate::wake::WakeHandle> {
-        self.io.wake().handle()
+    pub fn wake_handle(&self) -> io::Result<WakeHandle> {
+        self.io.wake_handle()
     }
 
     /// Wake accounting so far.
@@ -272,7 +376,7 @@ impl<'a, M: Media> Shell<'a, M> {
             }
             total += got;
             let mut refused = 0u64;
-            for (from, local, datagram) in self.io.iter() {
+            for (from, local, datagram) in self.io.frames() {
                 // A datagram that fails to parse or authenticate is dropped and
                 // the loop continues. Hostile and corrupt input is the normal
                 // case on a network, not an error path -- but it is counted,
@@ -295,6 +399,10 @@ impl<'a, M: Media> Shell<'a, M> {
 
     /// Stage and send everything the endpoint has ready.
     fn drain(&mut self, now_ms: f64) -> io::Result<usize> {
+        let io = match &mut self.io {
+            Carrier::Datagram(io) => io,
+            Carrier::Stream(stream) => return drain_stream(stream, &mut self.endpoint, now_ms),
+        };
         let mut sent = 0;
         loop {
             let room = self.outbound.stage();
@@ -316,18 +424,40 @@ impl<'a, M: Media> Shell<'a, M> {
                     // once more. A failure with all of it free is our defect,
                     // and the emission is dropped rather than retried.
                     if self.outbound.staged() > 0 {
-                        self.outbound.flush(self.io.socket())?;
+                        self.outbound.flush(io.socket())?;
                         continue;
                     }
                     break;
                 }
             };
-            self.outbound.commit(self.io.socket(), egress)?;
+            self.outbound.commit(io.socket(), egress)?;
             sent += 1;
         }
-        self.outbound.flush(self.io.socket())?;
+        self.outbound.flush(io.socket())?;
         Ok(sent)
     }
+}
+
+/// Stage everything the endpoint has ready into the stream's own staging and
+/// write it, a staging at a time. A relay attempt sends to the relay alone,
+/// and the core frames for a stream already, padding included.
+///
+/// **Nothing is taken while the stream cannot take it**: not before the
+/// connect completes, and not while an earlier write is unfinished; it waits
+/// in the core's own rings. The room handed out holds the largest datagram,
+/// so a failure to encode into it is our defect, and the emission is dropped
+/// rather than retried, as over datagrams.
+fn drain_stream<M: Media>(
+    stream: &mut Stream,
+    endpoint: &mut Endpoint<'_, M>,
+    now_ms: f64,
+) -> io::Result<usize> {
+    stream.send_from(|room| {
+        endpoint
+            .get_output(now_ms, room)?
+            .ok()
+            .map(|egress| egress.len)
+    })
 }
 
 #[cfg(test)]
@@ -407,7 +537,11 @@ mod tests {
     }
 
     fn loopback_of(shell: &Shell<'_>) -> SocketAddr {
-        let mut addr = shell.socket().local_addr().expect("addr");
+        let mut addr = shell
+            .socket()
+            .expect("a datagram shell")
+            .local_addr()
+            .expect("addr");
         addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST));
         addr
     }

@@ -30,7 +30,7 @@ pub(super) fn len_of<T>() -> i32 {
 /// The reference it takes is never given back: a library inside someone
 /// else's process cannot know when its last socket has closed, and the system
 /// releases it with the process.
-fn start() -> io::Result<()> {
+pub(super) fn start() -> io::Result<()> {
     static STARTED: OnceLock<i32> = OnceLock::new();
     let code = *STARTED.get_or_init(|| {
         // SAFETY: WSADATA is plain data the call fills in; zero is a valid

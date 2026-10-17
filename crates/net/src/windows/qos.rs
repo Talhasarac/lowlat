@@ -122,25 +122,9 @@ impl Marking {
             return;
         }
         self.to = Some(to);
-        let Some(api) = api() else {
-            lowlat_common::log_warn!("net: path left unmarked, qos=absent to={}", to);
+        let Some(api) = self.open(to) else {
             return;
         };
-        if self.handle.is_null() {
-            let version = Version { major: 1, minor: 0 };
-            let mut handle: HANDLE = core::ptr::null_mut();
-            // SAFETY: a version and a writable handle, which is what the call
-            // takes.
-            if unsafe { (api.create)(&raw const version, &raw mut handle) } == 0 {
-                lowlat_common::log_warn!(
-                    "net: path left unmarked, qos=refused to={} err={}",
-                    to,
-                    io::Error::last_os_error()
-                );
-                return;
-            }
-            self.handle = handle;
-        }
         if self.flow != 0 {
             // SAFETY: a flow this handle added on this socket, removed once.
             unsafe { (api.remove)(self.handle, socket.raw(), self.flow, 0) };
@@ -181,6 +165,67 @@ impl Marking {
         }
         self.flow = flow;
         lowlat_common::log_info!("net: path marked, to={} flow={}", to, flow);
+    }
+
+    /// Mark a connected stream's flow to `to`, once. Connected already, the
+    /// socket is accepted with no destination named and needs no connect of
+    /// its own. Never fails the session, as [`Marking::mark`] does not.
+    pub(super) fn mark_connected(&mut self, socket: SOCKET, to: SocketAddr) {
+        if self.to == Some(to) {
+            return;
+        }
+        self.to = Some(to);
+        let Some(api) = self.open(to) else {
+            return;
+        };
+        let mut flow: u32 = 0;
+        // SAFETY: an open handle and our own connected socket, so no
+        // destination is named; a flow id of zero asks for a new flow.
+        let added = unsafe {
+            (api.add)(
+                self.handle,
+                socket,
+                core::ptr::null(),
+                AUDIO_VIDEO,
+                NON_ADAPTIVE,
+                &raw mut flow,
+            )
+        };
+        if added == 0 {
+            lowlat_common::log_warn!(
+                "net: stream left unmarked, to={} err={}",
+                to,
+                io::Error::last_os_error()
+            );
+            return;
+        }
+        self.flow = flow;
+        lowlat_common::log_info!("net: stream marked, to={} flow={}", to, flow);
+    }
+
+    /// The service's calls and this marking's handle, opened on first use;
+    /// `None`, said once, where the service is missing or refuses one.
+    fn open(&mut self, to: SocketAddr) -> Option<&'static Api> {
+        let Some(api) = api() else {
+            lowlat_common::log_warn!("net: path left unmarked, qos=absent to={}", to);
+            return None;
+        };
+        if self.handle.is_null() {
+            let version = Version { major: 1, minor: 0 };
+            let mut handle: HANDLE = core::ptr::null_mut();
+            // SAFETY: a version and a writable handle, which is what the call
+            // takes.
+            if unsafe { (api.create)(&raw const version, &raw mut handle) } == 0 {
+                lowlat_common::log_warn!(
+                    "net: path left unmarked, qos=refused to={} err={}",
+                    to,
+                    io::Error::last_os_error()
+                );
+                return None;
+            }
+            self.handle = handle;
+        }
+        Some(api)
     }
 
     /// The flow on the destination marked last, zero for none.

@@ -49,6 +49,8 @@ pub mod shell;
 #[cfg(any(target_os = "linux", windows))]
 pub mod socket;
 #[cfg(any(target_os = "linux", windows))]
+pub mod stream;
+#[cfg(any(target_os = "linux", windows))]
 pub mod wake;
 
 pub use addrs::MAX_HOST_ADDRESSES;
@@ -60,5 +62,7 @@ pub use guest::{Guest, Running};
 pub use shell::{Shell, Stats, Turn, Woke};
 #[cfg(any(target_os = "linux", windows))]
 pub use socket::{DEFAULT_TTL, RECV_BATCH, RECV_SLOT, Socket};
+#[cfg(any(target_os = "linux", windows))]
+pub use stream::Stream;
 #[cfg(any(target_os = "linux", windows))]
 pub use wake::{Wake, WakeHandle};

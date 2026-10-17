@@ -52,7 +52,11 @@ fn shell(
 }
 
 fn loopback_of(shell: &Shell<'_, WebSession>) -> SocketAddr {
-    let mut addr = shell.socket().local_addr().expect("addr");
+    let mut addr = shell
+        .socket()
+        .expect("a datagram shell")
+        .local_addr()
+        .expect("addr");
     addr.set_ip(IpAddr::V6(Ipv6Addr::LOCALHOST));
     addr
 }

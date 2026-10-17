@@ -333,7 +333,10 @@ pub(crate) fn run(args: Attached, wake: Wake, running: &Running) {
         if !fresh.is_empty() {
             // What the answers so far say of the translation, once they can.
             let answers: Vec<_> = shell.endpoint().conn().answers().collect();
-            let port = shell.socket().local_addr().map_or(0, |local| local.port());
+            let port = shell
+                .socket()
+                .and_then(|socket| socket.local_addr().ok())
+                .map_or(0, |local| local.port());
             if let Some(observed) = crate::nat::attempt(&answers, &servers, port) {
                 crate::nat::publish(&nat, observed);
             }
