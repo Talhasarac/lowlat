@@ -746,6 +746,107 @@ fn the_static_library_links_alone_and_holds_a_panic() {
     }
 }
 
+/// **A library carrying the virtual displays alone links as an application
+/// links it** (06 section 3c): built with neither the host nor the client, it
+/// exports every `lowlat_vdd_*` entry point the header declares and nothing of
+/// the other halves, and a program with both hidden links its import library
+/// and reaches the third half.
+///
+/// **Built into a target directory of its own**, which no other gate reads:
+/// in the profile's own it would land on the object they test.
+#[cfg(windows)]
+#[test]
+fn a_library_of_the_third_half_alone_links_as_an_application_links_it() {
+    let profile = artifacts();
+    let target = profile.join("vdd-only-target");
+    // One argument: `cargo_into` adds its own after these.
+    let target_dir = format!("--target-dir={}", target.display());
+    let args = [
+        "build",
+        "--quiet",
+        "-p",
+        "lowlat-sdk",
+        "--no-default-features",
+        "--features",
+        "vdd",
+        target_dir.as_str(),
+    ];
+    let built = cargo_into(&profile, &args)
+        .output()
+        .expect("cargo builds the library of the third half alone");
+    assert!(
+        built.status.success(),
+        "the library of the third half alone could not be built:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let mut out = target;
+    if let Some(triple) = named_target(&profile) {
+        out.push(triple);
+    }
+    out.push(profile.file_name().expect("a profile directory"));
+    let object = out.join(OBJECT);
+
+    let exported = exports(&object);
+    let foreign: Vec<&String> = exported
+        .iter()
+        .filter(|name| name.starts_with("lowlat_host_") || name.starts_with("lowlat_client_"))
+        .collect();
+    assert!(
+        foreign.is_empty(),
+        "{} exports {foreign:?} of another half",
+        object.display()
+    );
+    let header =
+        std::fs::read_to_string(root().join("include/lowlat.h")).expect("the committed header");
+    let mut declared: Vec<&str> = header
+        .match_indices("lowlat_vdd_")
+        .filter_map(|(at, _)| {
+            let rest = header.get(at..)?;
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+            rest[end..].starts_with('(').then(|| &rest[..end])
+        })
+        .collect();
+    declared.sort_unstable();
+    declared.dedup();
+    assert!(
+        !declared.is_empty(),
+        "the header declares no lowlat_vdd_ function, so this check cannot have proven anything"
+    );
+    let missing: Vec<&&str> = declared
+        .iter()
+        .filter(|name| !exported.iter().any(|exported| exported == **name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} does not export {missing:?}",
+        object.display()
+    );
+
+    let dir = scratch("vdd-only");
+    let program = dir.join("vdd-only.exe");
+    let mut command = msvc("cl.exe");
+    command
+        .args(["/nologo", "/std:c11", "/W4", "/WX", "/I"])
+        .arg(root().join("include"))
+        .arg(root().join("crates/sdk/tests/c/vdd-only.c"))
+        .arg(format!("/Fo{}\\", dir.display()))
+        .arg(format!("/Fe{}", program.display()))
+        .args(["/link", "/WX"])
+        .arg(out.join("lowlat.dll.lib"));
+    if let Err(why) = run(command) {
+        panic!("a program does not link the library of the third half alone:\n{why}");
+    }
+    // Beside the program, so it loads this library and no other.
+    std::fs::copy(&object, dir.join(OBJECT)).expect("the library beside the program");
+    let ran = Command::new(&program).output().expect("the program runs");
+    assert!(
+        ran.status.success(),
+        "the program failed against the library of the third half alone:\n{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
 /// **Every exported symbol carries the prefix**, so an application built
 /// against a different version of this library fails to link rather than
 /// finding a function whose arguments have quietly moved.

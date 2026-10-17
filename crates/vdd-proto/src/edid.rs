@@ -51,9 +51,10 @@ const TEMPLATE: [u8; LEN] = [
     // Detailed timing: 1920x1080 at 60, 148.5 MHz, positive syncs.
     0x02, 0x3a, 0x80, 0x18, 0x71, 0x38, 0x2d, 0x40, 0x58, 0x2c, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x1e, //
-    // The name a person sees.
-    0x00, 0x00, 0x00, 0xfc, 0x00, b'l', b'o', b'w', b'l', b'a', b't', 0x0a, 0x20, 0x20, 0x20, 0x20,
-    0x20, 0x20, //
+    // The name a person sees: thirteen characters fill the field, so no line
+    // feed ends it.
+    0x00, 0x00, 0x00, 0xfc, 0x00, b'L', b'o', b'w', b'l', b'a', b't', b'D', b'i', b's', b'p', b'l',
+    b'a', b'y', //
     // Two descriptors left unused.
     0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, //
@@ -198,6 +199,22 @@ mod tests {
         };
         assert_eq!((letter(10), letter(5), letter(0)), ('L', 'W', 'L'));
         assert_eq!(packed >> 15, 0, "the top bit is clear");
+    }
+
+    /// **The name a person sees fills its descriptor**, in every slot's block:
+    /// the display name's tag and its thirteen characters, which leave no room
+    /// for the line feed a shorter name ends with.
+    #[test]
+    fn the_display_name_fills_its_descriptor() {
+        let own = Edid::generated();
+        for slot in [0, 15] {
+            let block = own.for_slot(slot);
+            let name = block.as_slice()[54..126]
+                .chunks(18)
+                .find(|descriptor| descriptor[..5] == [0x00, 0x00, 0x00, 0xfc, 0x00])
+                .map(|descriptor| &descriptor[5..]);
+            assert_eq!(name, Some(&b"LowlatDisplay"[..]), "slot {slot}");
+        }
     }
 
     #[test]

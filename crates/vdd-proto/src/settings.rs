@@ -276,8 +276,8 @@ impl Settings {
 
     fn write_to(&self, out: &mut Out<'_>) -> fmt::Result {
         out.write_str(
-            "# lowlat's virtual displays: written by `lowlatd display` and the\n\
-             # library's controller, read by the display driver when it starts.\n",
+            "# lowlat's virtual displays: written by `lowlat-vdd`, `lowlatd display`\n\
+             # and the library's controller, read by the display driver when it starts.\n",
         )?;
         match self.gpu {
             Some(gpu) => writeln!(out, "gpu {:04x}:{:04x}", gpu.vendor, gpu.device)?,

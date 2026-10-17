@@ -235,8 +235,8 @@ const fn wide<const N: usize>(text: &str) -> [u16; N] {
     out
 }
 
-static NAME: [u16; 16] = wide("lowlat");
-static MODEL: [u16; 32] = wide("lowlat virtual display");
+static NAME: [u16; 16] = wide("Lowlat");
+static MODEL: [u16; 32] = wide("Lowlat Virtual Display");
 
 /// Initialise the adapter, once per device: the device's first power-up.
 pub(crate) fn start_adapter(device: Handle<WDFDEVICE__>) -> NTSTATUS {

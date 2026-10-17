@@ -9,7 +9,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $kit = (& python.exe (Join-Path $root 'scripts\fetch-wdk.py')).Trim()
 $devcon = Join-Path $kit 'c\tools\10.0.26100.0\x64\devcon.exe'
 $hwid = 'Root\lowlat-vdd'
-$inf = Join-Path $root 'target\vdd-package\lowlat-vdd.inf'
+$inf = Join-Path $root 'target\vdd-package\lowlat-idd.inf'
 
 function Present {
     $found = & $devcon find $hwid
@@ -18,11 +18,12 @@ function Present {
 
 if ($Remove) {
     if (Present) { & $devcon remove $hwid }
-    # Every package of this driver in the store, by the name it was built as.
+    # Every package of this driver in the store, by either name it was built
+    # as: `lowlat-vdd.inf` before its files took the name `lowlat-idd`.
     $text = (pnputil /enum-drivers) -join "`n"
     $blocks = $text -split "`n\s*`n"
     foreach ($block in $blocks) {
-        if ($block -match 'Original Name:\s+lowlat-vdd\.inf' -and $block -match 'Published Name:\s+(oem\d+\.inf)') {
+        if ($block -match 'Original Name:\s+lowlat-[iv]dd\.inf' -and $block -match 'Published Name:\s+(oem\d+\.inf)') {
             pnputil /delete-driver $Matches[1] /uninstall /force
         }
     }

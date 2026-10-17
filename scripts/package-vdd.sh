@@ -38,25 +38,28 @@ done
 cargo build --manifest-path "$root/Cargo.toml" -p lowlat-vdd --release
 rm -rf "$out"
 mkdir -p "$out"
-cp "$root/target/release/lowlat_vdd.dll" "$out/"
+cp "$root/target/release/lowlat_idd.dll" "$out/"
 # The setup information in the system's own line endings.
 "$py" -c 'import sys; d = open(sys.argv[1], "rb").read().replace(b"\r\n", b"\n"); open(sys.argv[2], "wb").write(d.replace(b"\n", b"\r\n"))' \
-    "$root/crates/vdd/lowlat-vdd.inf" "$out/lowlat-vdd.inf"
+    "$root/crates/vdd/lowlat-idd.inf" "$out/lowlat-idd.inf"
 
 # A version that grows with every package, so an update replaces the driver.
+# Dated in UTC as the version is: stampinf's own `*` is the local date, which
+# east of Greenwich is a day ahead of UTC for hours after local midnight, and
+# infverif refuses a date still to come.
 version="0.1.$(date -u +%y%j).$(date -u +%H%M)"
-"$kit/bin/10.0.26100.0/x64/stampinf.exe" -f "$(win "$out/lowlat-vdd.inf")" -a amd64 -d '*' \
-    -v "$version" -u 2.25.0
-"$kit/tools/10.0.26100.0/x64/infverif.exe" /v "$(win "$out/lowlat-vdd.inf")"
+"$kit/bin/10.0.26100.0/x64/stampinf.exe" -f "$(win "$out/lowlat-idd.inf")" -a amd64 \
+    -d "$(date -u +%m/%d/%Y)" -v "$version" -u 2.25.0
+"$kit/tools/10.0.26100.0/x64/infverif.exe" /v "$(win "$out/lowlat-idd.inf")"
 
 sign() {
     "$sdkbin/signtool.exe" sign /q /fd SHA256 /s My /sha1 "$thumbprint" "$(win "$1")"
 }
 # The library first: the catalogue records its digest, which leaves its own
 # signature out.
-sign "$out/lowlat_vdd.dll"
+sign "$out/lowlat_idd.dll"
 "$kit/bin/10.0.26100.0/x86/Inf2Cat.exe" /driver:"$(win "$out")" \
     /os:10_19H1_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64
-sign "$out/lowlat-vdd.cat"
-"$sdkbin/signtool.exe" verify /q /pa /c "$(win "$out/lowlat-vdd.cat")" "$(win "$out/lowlat_vdd.dll")"
+sign "$out/lowlat-idd.cat"
+"$sdkbin/signtool.exe" verify /q /pa /c "$(win "$out/lowlat-idd.cat")" "$(win "$out/lowlat_idd.dll")"
 echo "packaged $version in $out"

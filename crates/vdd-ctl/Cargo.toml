@@ -13,6 +13,13 @@ authors.workspace = true
 # third half, `lowlatd display` and the host's own display drive the driver
 # through it. Built for Windows alone; elsewhere it is empty.
 
+# The controller as a program of its own (section 1.9): the commands `lowlatd
+# display` takes, for a machine that runs no host. Elsewhere it says there is
+# no driver.
+[[bin]]
+name = "lowlat-vdd"
+path = "src/main.rs"
+
 [target.'cfg(windows)'.dependencies]
 lowlat-common.workspace = true
 # The GPUs a person may name in the file.

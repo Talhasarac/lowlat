@@ -1,5 +1,5 @@
 ;
-; lowlat-vdd.inf - the host's own virtual display (docs/11-drivers.md).
+; lowlat-idd.inf - the host's own virtual display (docs/11-drivers.md).
 ;
 ; A user-mode indirect display driver. scripts/package-vdd.sh stamps the
 ; driver's version and the framework's into a copy of this file, catalogues
@@ -13,7 +13,7 @@ ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
 Class=Display
 ClassVer=2.0
 Provider=%ManufacturerName%
-CatalogFile=lowlat-vdd.cat
+CatalogFile=lowlat-idd.cat
 DriverVer=01/01/2026,0.0.0.0
 
 [Manufacturer]
@@ -25,7 +25,7 @@ DriverVer=01/01/2026,0.0.0.0
 %DeviceName%=LowlatVdd_Install, Root\lowlat-vdd
 
 [SourceDisksFiles]
-lowlat_vdd.dll=1
+lowlat_idd.dll=1
 
 [SourceDisksNames]
 1=%DiskName%
@@ -35,7 +35,7 @@ LowlatVdd_Files=12,UMDF
 
 ; Copied aside when the old one is in use, so an update needs no restart.
 [LowlatVdd_Files]
-lowlat_vdd.dll,,,0x00004000
+lowlat_idd.dll,,,0x00004000
 
 [LowlatVdd_Install.NT]
 CopyFiles=LowlatVdd_Files
@@ -73,13 +73,13 @@ UmdfHostProcessSharing=ProcessSharingDisabled
 
 [LowlatVdd_Umdf]
 UmdfLibraryVersion=$UMDFVERSION$
-ServiceBinary=%12%\UMDF\lowlat_vdd.dll
+ServiceBinary=%12%\UMDF\lowlat_idd.dll
 UmdfExtensions=IddCx0102
 
 [Strings]
-ManufacturerName="lowlat"
-DiskName="lowlat virtual display"
+ManufacturerName="Lowlat"
+DiskName="Lowlat Virtual Display"
 WudfRdDisplayName="Windows Driver Foundation - User-mode Driver Framework Reflector"
-DeviceName="lowlat virtual display"
+DeviceName="Lowlat Virtual Display"
 REG_MULTI_SZ=0x00010000
 REG_SZ=0x00000000

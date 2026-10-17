@@ -16,9 +16,13 @@
 //! monitor's is, so it comes back after a reboot at its mode and place --
 //! unless only virtual displays would be active, an arrangement that holds a
 //! later boot waiting for their driver. **A bound monitor's never is.**
+//!
+//! A person drives it from a shell through [`cli`]: the program `lowlat-vdd`
+//! and `lowlatd display` take the same commands.
 
 #![cfg(windows)]
 
+pub mod cli;
 mod device;
 mod display;
 mod file;

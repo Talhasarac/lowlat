@@ -11,6 +11,10 @@ authors.workspace = true
 # The host's own display driver: a library the system's user-mode driver host
 # loads (docs/11-drivers.md). Built for Windows alone; elsewhere it is empty.
 [lib]
+# The file the system loads is `lowlat_idd.dll`, not the package's own name:
+# the controller's program is `lowlat-vdd`, and a program's debug symbols take
+# its name with underscores, so the two would write one `lowlat_vdd.pdb`.
+name = "lowlat_idd"
 crate-type = ["cdylib"]
 # What can be tested without the driver host -- the requests, the identity, the
 # modes -- is lowlat-vdd-proto's and tested there. This crate is the glue the
