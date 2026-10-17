@@ -946,11 +946,12 @@ arrangement works at all, and three of its settings fail silently.
   to the machine. The relay's allocation range stays on the machine's side of the router: the
   host reaches a relayed address by local delivery to its own address, and nothing outside needs
   to reach the range.
-- **Forward it for TCP as well, where clients that cannot use UDP are to be reached** (C11,
-  planned; [03 §7.4](03-connectivity.md)). A relay listens for TCP on the same port unless told not
-  to; the router must forward both protocols, and nothing else changes -- the allocation and the
-  host's leg stay datagrams. Measured on such a machine, its TCP leg carried 14.4 Mbit/s as
-  cleanly as UDP.
+- **Forward it for TCP as well, where clients that cannot use UDP are to be reached** (C11;
+  [03 §7.4](03-connectivity.md)). A relay listens for TCP on the same port unless told not to; the
+  router must forward both protocols, and nothing else changes -- the allocation and the host's
+  leg stay datagrams. Measured on such a machine, its TCP leg carried 14.4 Mbit/s as cleanly as
+  UDP, and a ten-minute session with motion through it carried the host's full rate at UDP's
+  round trip.
 - **Configure no external address.** Without one the relay hands out the machine's own address,
   which is what the host reaches locally. With the router's public address configured, both
   legs hairpin through the router into a range nobody forwarded, and allocation and permission

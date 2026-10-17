@@ -77,12 +77,23 @@ What it is for:
   translator. **The long run is made twice, through a relay that binds channels and one that
   refuses them**, because a binding renews its address's permission too: a permission renewed
   late passed with a channel bound and stalled the media at 305 s without one.
-- **The relay over TCP** ([03 §7.4](03-connectivity.md), C11, planned): a stream leg -- ordered,
-  lossless, with scripted stalls and the relay's bounded queue that drops past its depth -- and the
-  relay's stream listener written from the specification as its datagram side was, so a stall and
-  the resends it sets off run in milliseconds and are counted. The counts are the cost being
-  documented, recorded rather than asserted; what is asserted is that the session survives a
-  half-second stall with a run dropped.
+- **The relay over TCP** ([03 §7.4](03-connectivity.md), C11, built 2026-10-17): a stream leg --
+  ordered, lossless, with scripted stops and a sender's bounded queue that drops past its depth
+  while the stream is stopped -- and the relay's stream listener written from the specification
+  as its datagram side was. **What a moving stream holds in flight is its send buffer's, not a
+  queue**: the first version counted it as one, and a session over it lost a keyframe's burst on
+  a clean link. The datagram runs are made over the stream too -- full-size datagrams in both
+  framings, each typed outcome -- and over the stream alone: eleven minutes across two permission
+  lifetimes and a nonce rotation with nothing re-sent, a half-second stop with a run dropped and the
+  session alive, a header that is neither, and the client's close freeing its allocation. **The
+  storm a stopping stream sets off is counted, not asserted**: a minute of the host's media with
+  stops as a deployed relay's, against the same minute without them, cost 666 more datagrams from
+  the host, 63 requests for missing fragments, 339 duplicates and 356 drops at the relay, and
+  doubled the host's round trip; every message still arrived. **The same relay stands behind a
+  real listener on loopback for the client's real loop**, so the stream's endings are judged where
+  they are decided: a refused connect and an end before the allocation end the attempt with the
+  relay unreachable, an end once it is ready with the relay lost, and a clean leave's release
+  reaches the relay before the stream closes.
 
 What it is not for: performance. The simulator has no realistic timing and any latency number
 from it is meaningless.
@@ -153,7 +164,7 @@ Every byte that arrives from the network is parsed by a fuzz target:
 - control messages and their bodies
 - connectivity check messages
 - relay framing, and every answer, indication and channel message a relay can send (C10); the
-  stream's framing, split anywhere (C11, planned)
+  stream's framing, split anywhere (C11)
 - **the pointer's picture** ([10 §7](10-client.md)): the PNG a host sends, taken apart,
   inflated and unfiltered by the client's own reader, seeded with six pictures an
   established host sent in a recorded session. Those six are also fixtures: each decodes
@@ -225,7 +236,9 @@ in this repository: a formatting check that reported success while examining zer
 Covered paths: receive, decrypt, dispatch, reassemble, packetize, encrypt, send, the input
 path end to end, and the relayed path both ways, as indications and as channel data -- with the
 count of what crossed asserted too, because the first version of that test passed with no
-channel data crossing at all. With C11 (planned), the relayed path over the stream as well.
+channel data crossing at all. With C11, the relayed path over the stream as well: the core's
+round in both carriers, its channel data checked padded on the way out, and the shell's stream
+both ways, messages staged, written, echoed, read and handed out.
 
 **The browser pipe is exempt and measured instead** ([02 §7](02-io-shell.md)). Its record
 layer and association allocate by design, so the assertion would only ever fail there; the

@@ -42,7 +42,9 @@ What works today, measured on one desktop (KDE Plasma on Wayland, Debian 13):
   reaches, through a relay on the host's own machine behind the one port its router forwards,
   with no part taken by the host; streamed that way for twelve minutes against an established
   host at 26 ms against 27 direct, and against this project's own host with a relay beside
-  it. The demo on the application toolkit, in C++20, is
+  it. Where UDP is blocked the same attempt reaches its relay over TCP: ten minutes through a
+  relay on the host's machine at the rate and round trip it has over UDP. The demo on the
+  application toolkit, in C++20, is
   [examples/client](examples/client).
 
 What does not, yet:

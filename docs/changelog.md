@@ -3,6 +3,44 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - C11 built: the relay over TCP
+
+### Added
+- **A relay attempt may reach its relay over TCP** ([03 §7.4](03-connectivity.md)):
+  `relay_carrier` in `lowlat_client_config` and `lowlat_relay_carrier` (minor 29,
+  [06 §3b](06-api.md)); a TCP attempt opens no datagram socket; a refused connect or an end before
+  the allocation is the relay unreachable, an end, reset or stall after it the relay lost; a clean
+  leave writes the release before the stream closes. The demo takes it from
+  `LOWLAT_RELAY_CARRIER`.
+- **The stream on the loop's wait** ([02 §5-§6](02-io-shell.md)), both platforms: messages found in
+  place and everything ahead of the stream's end handed out before it; a pass written a staging at
+  a time, nothing taken from the core while a write is unfinished, a write stalled five seconds
+  ending the stream; zero allocations per message both ways.
+- **The core over a stream**: channel data padded, each message framed from its length, nothing
+  re-sent and no timer armed by an awaited answer, a refusal that verifies but names no code read
+  as refused. Fuzzed.
+- **A stream leg in the simulator** and the relay's stream listener written from the
+  specification ([08 §4](08-testing.md)); the client's real loop against that relay on loopback.
+
+### Measured
+- **The live gate**, ten minutes each with motion, beside UDP through the same relay: through a
+  relay on the host's machine, TCP at UDP's rate (9.30 against 9.35 Mbit/s) and round trip (24
+  against 23 ms) with about ten times the recovery traffic; through a public relay service, the
+  host's rate down to 40 percent (port 3478) and a third (port 80) of its UDP rate, the round
+  trip's 95th percentile up 54 to 65 ms, about 2,000 timeout resends against none. Every session
+  held at 24 pictures a second ([impl-plan-client.md](impl-plan-client.md) Phase C11).
+- **The stream is marked on the wire**: every segment to the relay carried the audio-video class.
+- **The simulator's storm**: a minute of media with a deployed relay's stops against the same
+  minute without them -- 666 more datagrams from the host, 339 duplicates, 356 drops at the relay,
+  the round trip doubled, every message delivered.
+
+### Found while building
+- A sender's bounded queue that counts what a moving stream holds in flight drops a keyframe's
+  burst on a clean link: the simulator's bound now holds only behind a stop.
+- A stream's end read with more than a drain's worth of messages still held dropped the rest; a
+  staging that filled ended the pass with the core's output still waiting. Both fixed before the
+  stream landed.
+
 ## 2026-10-17 - C11 planned: the relay over TCP
 
 ### Decided

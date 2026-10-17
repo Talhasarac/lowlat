@@ -2,7 +2,8 @@
 
 **Status:** locked 2026-08-15; §7 rewritten 2026-09-23, when the relay moved from the host to
 the client ([00-overview.md](00-overview.md) D15), and built the same day (C10), whose live gate
-made §5's path both directions; the relay over TCP planned 2026-10-17 (C11, §7.4). Implemented
+made §5's path both directions; the relay over TCP planned and built 2026-10-17 (C11, §7.4), its
+live gate run through two relays the same day. Implemented
 by `lowlat-core` (state machines) and `lowlat-net` (sockets), per
 [00-overview.md](00-overview.md) D4.
 
@@ -477,13 +478,13 @@ unparseable connectivity messages and at the client as resends.)*
 - **No exchange with the relay blocks the reader.** A request is state and a deadline in the
   same stream the media arrives on; a reader that waits for one answer discards the media that
   arrives meanwhile.
-- **Over TCP nothing is re-sent** (C11, planned; §7.4). The stream recovers its own loss, so a
+- **Over TCP nothing is re-sent** (C11; §7.4). The stream recovers its own loss, so a
   request goes once, and one awaiting its answer arms no timer of its own -- a past re-send
   deadline left armed would turn into a hot poll. The deadlines that already end an attempt bound
   it: setup's, the allocation's lifetime, the path permission's. An unanswered bind leaves media
   on indications, and an unanswered permission for an address the path never takes costs nothing.
   A stale nonce is still a new request.
-- **A refusal that names no code is still a refusal** (C11, planned). A deployed relay's stream
+- **A refusal that names no code is still a refusal** (C11). A deployed relay's stream
   listener answers a refused permission with integrity and no error code; an answer of the error
   class that verifies under the key is read as refused, one that does not stays malformed.
 - **Failure is typed and final** (§9). No answer to the allocation, a refused allocation, or a
@@ -494,8 +495,8 @@ unparseable connectivity messages and at the client as resends.)*
 
 ### §7.4 Transport
 
-*Rewritten 2026-10-17, planned as C11 ([00 D15](00-overview.md)); until then the datagram
-transport was the whole of it.*
+*Rewritten 2026-10-17 and built the same day as C11 ([00 D15](00-overview.md)); until then the
+datagram transport was the whole of it.*
 
 **The client reaches its relay over UDP, or over TCP where UDP is blocked.** The carrier is the
 attempt's, set by the application. The allocation still asks for UDP, so the relayed address and
@@ -526,6 +527,14 @@ a byte-stream layer under the same framing -- for a network that admits nothing 
   resend timer and the receiver's requests fire into the stalled stream for what is already
   queued in it -- duplicates, late arrivals and loss bursts near 1 percent through the public
   service, none over UDP. So the stream is the last rung (§8), never a quality option.
+- **And with a session on it** (the live gate, 2026-10-17: ten minutes each, a host streaming
+  motion, each beside the same relay over UDP). Through the relay on the host's own machine the
+  stream carried UDP's rate (9.30 against 9.35 Mbit/s) at UDP's round trip (24 against 23 ms),
+  every picture whole; its cost was recovery traffic, about ten times UDP's (538 requests for
+  missing fragments, 833 resends), since a keyframe's burst that UDP passes at once queues behind
+  the stream's window. Through the public service the host's rate backed off to 40 percent of its
+  UDP rate on port 3478 and a third on port 80, the round trip's 95th percentile rose 54 to 65 ms,
+  and about 2,000 resends fired from the host's timeout where UDP had none; the picture held.
 - The relayed address is IPv4 either way.
 
 ## §8 Policy and the ladder
@@ -544,7 +553,7 @@ So the ladder is:
 2. The application, seeing a typed failure, may start a new attempt with a relay configured,
    which makes it a relay attempt (§7.2), or with mapping enabled.
 3. The application, seeing a relay attempt end with the relay unreachable, may make the same
-   attempt over TCP (§7.4, C11 planned) -- the last rung, for a network that blocks UDP.
+   attempt over TCP (§7.4, C11) -- the last rung, for a network that blocks UDP.
 
 An application that knows its host is reachable only through a relay may start with the relay
 attempt; nothing requires a failed direct attempt first. The active path is reported, relayed
@@ -660,6 +669,12 @@ integrity and no error code, held channel data of four bytes or less until the n
 and closed the connection on unpadded channel data. Sessions ran over TCP through both relays
 with an earlier implementation of the stream: established through each, with the costs §7.4
 states.
+
+**Built 2026-10-17 (C11), and confirmed live the same day** (§7.4): this implementation's stream
+reached both relays -- the relay ready 95 ms after the stream opened through the host's own relay,
+161 ms through the public service -- and held ten-minute sessions with a host streaming motion
+through each, at the costs §7.4 states; every segment the client sent to the relay carried the
+audio-video marking on the wire ([02 §5](02-io-shell.md)).
 
 **Confirmed against two browser families, 2026-09-12 and 2026-09-13:** the fixed controlled
 role against a full agent that is always controlling; sixteen pending answers under a check

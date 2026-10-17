@@ -665,16 +665,18 @@ with `LOWLAT_OUTCOME_RELAY_LOST`; nothing is retried. The credential is never lo
 library clears every copy it takes, and a clean leave releases the allocation once the
 departure has gone through it.
 
-**The relay's carrier** (minor 29, planned with C11; [03 §7.4](03-connectivity.md)):
+**The relay's carrier** (minor 29, 2026-10-17; [03 §7.4](03-connectivity.md)):
 `lowlat_client_config.relay_carrier`, one of `lowlat_relay_carrier` --
 `LOWLAT_RELAY_CARRIER_UDP` (0, the default, and what a caller whose size stops short of the field
 gets) or `LOWLAT_RELAY_CARRIER_TCP` (1) -- read only where the caller's size reaches it. Any other
 value, or TCP without a relay, is refused as an invalid argument. The allocation and the host's
 leg stay UDP either way, and nothing else changes for the application: the same candidate and
-readiness events, the same status and the same three outcomes, a TCP connect that fails being
-the relay unreachable and a stream that ends the relay lost. Named a carrier because
-`lowlat_transport` is already the session's. The library never moves from one carrier to the
-other by itself; the last rung is the application's ([03 §8](03-connectivity.md)).
+readiness events, the same status and the same three outcomes -- a TCP connect that fails, or a
+stream that ends before the relay is ready, being the relay unreachable, and a stream that ends,
+resets or takes no write for five seconds after it the relay lost. A TCP attempt opens no datagram
+socket: the handle keeps its port, and the gateway's mapping is not asked for. Named a carrier
+because `lowlat_transport` is already the session's. The library never moves from one carrier to
+the other by itself; the last rung is the application's ([03 §8](03-connectivity.md)).
 
 **The seam's types are shared.** `lowlat_candidate`, `lowlat_credentials`,
 `lowlat_transport`, `lowlat_event` and its bodies are declared for either half, so an
@@ -1495,7 +1497,7 @@ half carries no promise before 1.0, as the client half never has.
 an earlier minor leaves it zero, off. The third half's handle now follows its driver
 ([§3c](#3c-virtual-displays)): a behaviour, not a symbol.
 
-**Minor 29** (planned with C11) is the relay's carrier ([§3b](#3b-client)): `relay_carrier`
+**Minor 29** (2026-10-17) is the relay's carrier ([§3b](#3b-client)): `relay_carrier`
 appended to `lowlat_client_config`, and the `lowlat_relay_carrier` enumeration. Nothing moves, and
 a caller built against an earlier minor gets UDP.
 
