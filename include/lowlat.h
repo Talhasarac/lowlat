@@ -49,7 +49,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 29
+#define LOWLAT_ABI_MINOR 30
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -490,7 +490,8 @@ typedef enum lowlat_status {
     /// The system's display configuration refused the change.
     LOWLAT_ERR_VDD_DISPLAY_CONFIG = -609,
     /// The monitor is plugged and the system did not finish within the
-    /// bound; asking for the monitor says where it stands.
+    /// bound; asking for the monitor says where it stands. From minor 30 a
+    /// plug's or a mode's `out` holds it as it stands, its slot among it.
     LOWLAT_ERR_VDD_NOT_READY = -610,
     /// The settings file could not be read or written.
     LOWLAT_ERR_VDD_FILE = -611,
@@ -3613,12 +3614,15 @@ void lowlat_vdd_close(lowlat_vdd *vdd) LOWLAT_NOEXCEPT;
 ///
 /// @param[in] vdd The handle.
 /// @param[in] plug What to plug.
-/// @param[out] out The monitor as plugged; may be null.
+/// @param[out] out The monitor as plugged, or from minor 30 as it stands on
+/// `LOWLAT_ERR_VDD_NOT_READY`; may be null.
 /// @returns `LOWLAT_ERR_VDD_FULL` when every slot is taken,
-/// `LOWLAT_ERR_VDD_SLOT_TAKEN` when the slot asked for is, and
+/// `LOWLAT_ERR_VDD_SLOT_TAKEN` when the slot asked for is,
+/// `LOWLAT_ERR_VDD_DISPLAY_CONFIG` when the system's display configuration
+/// refused the monitor, which is then unplugged again, and
 /// `LOWLAT_ERR_VDD_NOT_READY` when the monitor is plugged and the system has
-/// not finished within the bound -- `lowlat_vdd_get_monitor` then says where
-/// it stands.
+/// not finished within the bound -- `out` then names its slot, and
+/// `lowlat_vdd_get_monitor` says where it stands later.
 ///
 /// @attention `vdd` came from `lowlat_vdd_open`; `plug` points at a filled
 /// `lowlat_vdd_plug_info`; `out` is null or points at a `lowlat_vdd_monitor` whose
@@ -3640,7 +3644,8 @@ lowlat_status lowlat_vdd_unplug(lowlat_vdd *vdd,
 /// it is current: through the system's display configuration when the monitor
 /// lists the mode, by plugging it again with the mode added when it does not.
 ///
-/// @param[out] out The monitor at its new mode; may be null.
+/// @param[out] out The monitor at its new mode, or from minor 30 as it stands
+/// on `LOWLAT_ERR_VDD_NOT_READY`; may be null.
 ///
 /// @attention `vdd` came from `lowlat_vdd_open`; `out` is null or points at a
 /// `lowlat_vdd_monitor` whose `size` is set.

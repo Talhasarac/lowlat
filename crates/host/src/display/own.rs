@@ -143,7 +143,7 @@ impl Own {
                 Err(Error::SlotTaken) => {}
                 // **Plugged, and the system has not finished.** The slot is
                 // the host's; the next look finds it shown and puts its mode.
-                Err(Error::NotReady) => {
+                Err(Error::NotReady(_)) => {
                     lowlat_common::log_warn!(
                         "display: the host's own display plugged in slot {slot}, the system has \
                          not shown it yet"

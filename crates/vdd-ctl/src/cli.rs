@@ -61,8 +61,8 @@ fn refused(error: Error) -> Fail {
         Error::Argument => "those options contradict each other".into(),
         Error::Busy => "that display is being plugged again; try again".into(),
         Error::Display(code) => format!("the system's display configuration refused ({code})"),
-        Error::NotReady => {
-            "the display is plugged but the system has not finished; `list` shows it".into()
+        Error::NotReady(slot) => {
+            format!("slot {slot} is plugged but the system has not finished; `list` shows it")
         }
         Error::File => {
             "the settings file could not be read or written (is the driver installed?)".into()

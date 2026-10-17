@@ -257,10 +257,8 @@ impl Sharing {
         };
         let snapshot = &mut self.snapshot;
         let repeat = self.last_frame == Some(frame);
-        if let Some(last) = self.last_frame
-            && frame > last.wrapping_add(1)
-        {
-            snapshot.gaps += u64::from(frame - last - 1);
+        if let Some(last) = self.last_frame {
+            snapshot.gaps += u64::from(frames::skipped(last, frame));
         }
         self.last_frame = Some(frame);
         snapshot.pictures += 1;

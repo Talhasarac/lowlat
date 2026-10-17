@@ -137,7 +137,7 @@ fn refused(error: Error) -> lowlat_status {
         Error::Mode | Error::Argument => LOWLAT_ERR_INVALID_ARGUMENT,
         Error::Busy => LOWLAT_ERR_VDD_BUSY,
         Error::Display(_) => LOWLAT_ERR_VDD_DISPLAY_CONFIG,
-        Error::NotReady => LOWLAT_ERR_VDD_NOT_READY,
+        Error::NotReady(_) => LOWLAT_ERR_VDD_NOT_READY,
         Error::File => LOWLAT_ERR_VDD_FILE,
         Error::Io(_) => LOWLAT_ERR_VDD_IO,
     }
@@ -186,6 +186,28 @@ unsafe fn fill(out: *mut lowlat_vdd_monitor, monitor: &Monitor) -> lowlat_status
     };
     put(&mut out.name, &monitor.name);
     LOWLAT_OK
+}
+
+/// A refusal's status. **On `LOWLAT_ERR_VDD_NOT_READY` the monitor is
+/// plugged** and the system has not finished, so `out`, when given and large
+/// enough, holds it as it stands (minor 30): its slot first of all, which a
+/// plug that asked for none has no other way to learn.
+///
+/// # Safety
+///
+/// `out` is null or points at a `lowlat_vdd_monitor` the caller owns.
+unsafe fn refused_into(
+    controller: &Controller,
+    error: Error,
+    out: *mut lowlat_vdd_monitor,
+) -> lowlat_status {
+    if let Error::NotReady(slot) = error
+        && let Ok(monitor) = controller.monitor(slot)
+    {
+        // A short `out` is left as it is: the status is the news.
+        let _ = unsafe { fill(out, &monitor) };
+    }
+    refused(error)
 }
 
 fn slot_of(slot: u32) -> Option<u8> {
@@ -276,12 +298,15 @@ unsafe fn entered(
 ///
 /// @param[in] vdd The handle.
 /// @param[in] plug What to plug.
-/// @param[out] out The monitor as plugged; may be null.
+/// @param[out] out The monitor as plugged, or from minor 30 as it stands on
+/// [`LOWLAT_ERR_VDD_NOT_READY`]; may be null.
 /// @returns [`LOWLAT_ERR_VDD_FULL`] when every slot is taken,
-/// [`LOWLAT_ERR_VDD_SLOT_TAKEN`] when the slot asked for is, and
+/// [`LOWLAT_ERR_VDD_SLOT_TAKEN`] when the slot asked for is,
+/// [`LOWLAT_ERR_VDD_DISPLAY_CONFIG`] when the system's display configuration
+/// refused the monitor, which is then unplugged again, and
 /// [`LOWLAT_ERR_VDD_NOT_READY`] when the monitor is plugged and the system has
-/// not finished within the bound -- [`lowlat_vdd_get_monitor`] then says where
-/// it stands.
+/// not finished within the bound -- `out` then names its slot, and
+/// [`lowlat_vdd_get_monitor`] says where it stands later.
 ///
 /// # Safety
 ///
@@ -317,7 +342,7 @@ pub unsafe extern "C" fn lowlat_vdd_plug(
             let mode = Mode::new(plug.width, plug.height, plug.refresh_hz);
             match controller.plug(mode, lifetime, plug.restore, slot) {
                 Ok(monitor) => fill(out, &monitor),
-                Err(error) => refused(error),
+                Err(error) => refused_into(controller, error, out),
             }
         })
     }
@@ -350,7 +375,8 @@ pub unsafe extern "C" fn lowlat_vdd_unplug(vdd: *mut lowlat_vdd, slot: u32) -> l
 /// it is current: through the system's display configuration when the monitor
 /// lists the mode, by plugging it again with the mode added when it does not.
 ///
-/// @param[out] out The monitor at its new mode; may be null.
+/// @param[out] out The monitor at its new mode, or from minor 30 as it stands
+/// on [`LOWLAT_ERR_VDD_NOT_READY`]; may be null.
 ///
 /// # Safety
 ///
@@ -372,7 +398,7 @@ pub unsafe extern "C" fn lowlat_vdd_set_mode(
             };
             match controller.set_mode(slot, Mode::new(width, height, refresh_hz)) {
                 Ok(monitor) => fill(out, &monitor),
-                Err(error) => refused(error),
+                Err(error) => refused_into(controller, error, out),
             }
         })
     }
@@ -594,5 +620,44 @@ pub unsafe extern "C" fn lowlat_vdd_debug_panic(vdd: *mut lowlat_vdd) -> lowlat_
         entered(vdd, |_| {
             panic!("deliberate panic, to prove the boundary contains one")
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn monitor_with_slot(slot: u32) -> lowlat_vdd_monitor {
+        // SAFETY: plain data, for which zero is a value.
+        let mut monitor: lowlat_vdd_monitor = unsafe { core::mem::zeroed() };
+        monitor.size = u32::try_from(size_of::<lowlat_vdd_monitor>()).expect("fits");
+        monitor.slot = slot;
+        monitor
+    }
+
+    /// **`NOT_READY` names the monitor in `out`** (minor 30), and no other
+    /// refusal touches it. The answer is made up here -- this machine's system
+    /// shows a plugged monitor at once, so a real one cannot be had on demand
+    /// -- and the monitor it names is real. Bound, so the handle's end takes
+    /// it away.
+    #[test]
+    #[ignore = "plugs a display on this machine's driver"]
+    fn not_ready_names_the_monitor_in_out() {
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1280, 720, 60), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        let mut out = monitor_with_slot(99);
+        // SAFETY: a live monitor of this minor's size.
+        let status =
+            unsafe { refused_into(&controller, Error::NotReady(monitor.slot), &raw mut out) };
+        assert_eq!(status, LOWLAT_ERR_VDD_NOT_READY);
+        assert_eq!(out.slot, u32::from(monitor.slot), "out not filled");
+        assert!(out.owned, "not this handle's");
+        let mut untouched = monitor_with_slot(99);
+        // SAFETY: as above.
+        let status = unsafe { refused_into(&controller, Error::Busy, &raw mut untouched) };
+        assert_eq!(status, LOWLAT_ERR_VDD_BUSY);
+        assert_eq!(untouched.slot, 99, "out filled for another refusal");
     }
 }

@@ -625,6 +625,14 @@ impl D3d11 {
         (status == 0).then_some(flags)
     }
 
+    /// Whether the adapter with this identity is a virtual display's, as the
+    /// kernel says -- the identity a display configuration's path names its
+    /// target's adapter by; `None` where the kernel does not say.
+    pub fn indirect(&self, luid: Luid) -> Option<bool> {
+        self.kernel_type(luid)
+            .map(|kind| kind.IndirectDisplayDevice() != 0)
+    }
+
     /// A device of the library's own on the adapter with this identity, with
     /// its video interfaces. Refused for an adapter not offered
     /// ([`Adapter::decodes_here`]).

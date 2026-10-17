@@ -199,6 +199,16 @@ fn edid_of(_held: &State, slot: usize) -> Option<Edid> {
     edids().0.get(slot).map(|cell| unsafe { *cell.get() })
 }
 
+/// Where a slot's EDID bytes sit in their cell, and how many, for the system
+/// to read after the call that hands them over. The caller holds the lock.
+fn edid_bytes(_held: &State, slot: usize) -> Option<(*const u8, usize)> {
+    let cell = edids().0.get(slot)?;
+    // SAFETY: the lock is held, and writes take it too; the cell is static,
+    // so the bytes stay where they are.
+    let bytes = unsafe { (*cell.get()).as_slice() };
+    Some((bytes.as_ptr(), bytes.len()))
+}
+
 pub(crate) fn guid(id: lowlat_vdd_proto::Guid) -> GUID {
     GUID {
         Data1: id.data1,
@@ -542,12 +552,7 @@ fn arrive(
     index: usize,
 ) -> Result<(Handle<IDDCX_MONITOR__>, u32, u64), NTSTATUS> {
     let slot = u8::try_from(index).map_err(|_| STATUS_INSUFFICIENT_RESOURCES)?;
-    let (data, size) = {
-        let state = lock();
-        let edid = edid_of(&state, index).ok_or(STATUS_INVALID_PARAMETER)?;
-        let cell = edids().0.get(index).ok_or(STATUS_INVALID_PARAMETER)?;
-        (cell.get().cast::<u8>(), edid.as_slice().len())
-    };
+    let (data, size) = edid_bytes(&lock(), index).ok_or(STATUS_INVALID_PARAMETER)?;
     let mut info = IDDCX_MONITOR_INFO {
         Size: size_of::<IDDCX_MONITOR_INFO>(),
         // As the EDID says.
@@ -557,9 +562,9 @@ fn arrive(
             Size: size_of::<IDDCX_MONITOR_DESCRIPTION>(),
             Type: IDDCX_MONITOR_DESCRIPTION_TYPE_EDID,
             DataSize: u32::try_from(size).unwrap_or(0),
-            // The EDID's bytes lead its cell; they stay put while the slot
-            // has a monitor (`Edids`).
-            pData: data.cast(),
+            // The EDID's own bytes, in its static cell; they stay put while
+            // the slot has a monitor (`Edids`). The system only reads them.
+            pData: data.cast_mut().cast(),
         },
         MonitorContainerId: guid(container_id(slot)),
     };

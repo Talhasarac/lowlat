@@ -84,8 +84,9 @@ pub enum Error {
     Busy,
     /// The system's display configuration refused, with its code.
     Display(i32),
-    /// The monitor is plugged but the system did not finish within the bound.
-    NotReady,
+    /// The monitor at this slot is plugged but the system did not finish
+    /// within the bound.
+    NotReady(u8),
     /// The settings file could not be read or written.
     File,
     /// Any other answer from the system, its error code.
@@ -192,21 +193,38 @@ impl Controller {
             }
         }
         let kept = lifetime == Lifetime::Kept;
-        self.show(
+        let shown = self.show(
+            slot,
             plugged.os_adapter_luid,
             plugged.os_target_id,
             Some(mode),
             kept,
             deadline,
-        )?;
+        );
+        if let Err(refused @ Error::Display(_)) = shown {
+            // **Not plugged at all rather than plugged and not shown**, as for
+            // the file above: the system refused the monitor, so nothing of
+            // the request stays behind -- neither the monitor nor its line.
+            if restore {
+                let _ = file::change(Instant::now() + BOUND, |settings| {
+                    if let Some(entry) = settings.restore.get_mut(usize::from(slot)) {
+                        *entry = None;
+                    }
+                });
+            }
+            let _ = self.device.unplug(slot);
+            return Err(refused);
+        }
+        shown?;
         self.monitor(slot)
     }
 
-    /// Wait for the system to show the monitor, making it active when the
-    /// system does not, then put it at `mode` -- which a saved arrangement
-    /// may have overruled.
+    /// Wait for the system to show the monitor at `slot`, making it active
+    /// when the system does not, then put it at `mode` -- which a saved
+    /// arrangement may have overruled.
     fn show(
         &self,
+        slot: u8,
         adapter: u64,
         target: u32,
         mode: Option<Mode>,
@@ -221,7 +239,7 @@ impl Controller {
                 .map_err(|code| Error::Display(i32::try_from(code).unwrap_or(i32::MAX)))?;
             shown = wait(deadline, || display::shown(adapter, target));
         }
-        let shown = shown.ok_or(Error::NotReady)?;
+        let shown = shown.ok_or(Error::NotReady(slot))?;
         let Some(mode) = mode else {
             return Ok(());
         };
@@ -246,7 +264,7 @@ impl Controller {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err(Error::NotReady);
+                return Err(Error::NotReady(slot));
             }
             if let Some(now) = display::shown(adapter, target) {
                 self.put_mode(&now.name, mode, save, deadline)?;
@@ -272,7 +290,9 @@ impl Controller {
     pub fn unplug(&mut self, slot: u8) -> Result<(), Error> {
         let deadline = Instant::now() + BOUND;
         let entry = self.entry(slot)?;
-        self.device.unplug(slot)?;
+        // **The file first**: a monitor the driver then refuses to unplug
+        // stays plugged and no longer comes back, where the other order
+        // would bring a removed one back at the driver's next start.
         if entry.flags & Entry::RESTORE != 0 {
             file::change(deadline, |settings| {
                 if let Some(entry) = settings.restore.get_mut(usize::from(slot)) {
@@ -280,12 +300,13 @@ impl Controller {
                 }
             })?;
         }
+        self.device.unplug(slot)?;
         wait(deadline, || {
             display::shown(entry.os_adapter_luid, entry.os_target_id)
                 .is_none()
                 .then_some(())
         })
-        .ok_or(Error::NotReady)
+        .ok_or(Error::NotReady(slot))
     }
 
     /// Put a monitor this handle plugged, or a kept one, at `mode`: through
@@ -303,13 +324,16 @@ impl Controller {
         }
         let (adapter, target) = (entry.os_adapter_luid, entry.os_target_id);
         // Shown first, so the system can be asked what it offers.
-        self.show(adapter, target, None, kept, deadline)?;
-        let name = display::shown(adapter, target).ok_or(Error::NotReady)?.name;
+        self.show(slot, adapter, target, None, kept, deadline)?;
+        let name = display::shown(adapter, target)
+            .ok_or(Error::NotReady(slot))?
+            .name;
         if display::offers(&name, mode) {
-            self.show(adapter, target, Some(mode), kept, deadline)?;
+            self.show(slot, adapter, target, Some(mode), kept, deadline)?;
         } else {
             let plugged = self.device.replug(slot, mode)?;
             self.show(
+                slot,
                 plugged.os_adapter_luid,
                 plugged.os_target_id,
                 Some(mode),
@@ -412,4 +436,48 @@ pub fn gpus() -> Vec<GpuInfo> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::PathBuf;
+
+    /// **An unplug writes the file first**: with the file's lock held by
+    /// another, an unplug of a monitor marked to come back answers that the
+    /// file could not be written and leaves the monitor plugged and still
+    /// marked -- never a removed monitor that the driver's next start brings
+    /// back.
+    #[test]
+    #[ignore = "plugs a display on this machine's driver and holds its file's lock"]
+    fn an_unplug_writes_the_file_first() {
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1280, 720, 60), Lifetime::Kept, true, None)
+            .expect("a kept monitor, marked to come back");
+        let lock = PathBuf::from(std::env::var_os("ProgramData").expect("ProgramData"))
+            .join(lowlat_vdd_proto::settings::FOLDER)
+            .join("displays.lock");
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(&lock)
+            .expect("the file's lock");
+        let answered = controller.unplug(monitor.slot);
+        let still = controller.monitor(monitor.slot);
+        drop(held);
+        let cleaned = controller.unplug(monitor.slot);
+        assert_eq!(
+            answered,
+            Err(Error::File),
+            "the unplug went on without the file"
+        );
+        let still = still.expect("unplugged though its line stayed in the file");
+        assert!(still.kept && still.restore, "{still:?}");
+        assert_eq!(cleaned, Ok(()), "the unplug once the lock was let go");
+    }
 }

@@ -159,7 +159,8 @@ pub enum lowlat_status {
     /// The system's display configuration refused the change.
     LOWLAT_ERR_VDD_DISPLAY_CONFIG = -609,
     /// The monitor is plugged and the system did not finish within the
-    /// bound; asking for the monitor says where it stands.
+    /// bound; asking for the monitor says where it stands. From minor 30 a
+    /// plug's or a mode's `out` holds it as it stands, its slot among it.
     LOWLAT_ERR_VDD_NOT_READY = -610,
     /// The settings file could not be read or written.
     LOWLAT_ERR_VDD_FILE = -611,
@@ -170,7 +171,7 @@ pub enum lowlat_status {
 /// The major version, raised only when something already published changes.
 pub const LOWLAT_ABI_MAJOR: u32 = 0;
 /// The minor version, raised when surface is appended.
-pub const LOWLAT_ABI_MINOR: u32 = 29;
+pub const LOWLAT_ABI_MINOR: u32 = 30;
 
 /// Major and minor, packed.
 ///

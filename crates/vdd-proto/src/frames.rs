@@ -550,6 +550,19 @@ pub fn read_shape(section: &[AtomicU64], shape: u32, into: &mut [u8]) -> Option<
     None
 }
 
+/// The pictures the system skipped between two frame numbers it handed over.
+/// **The numbers wrap**, so a newer one may be the smaller: they compare as
+/// serial numbers, newer when ahead by less than half their range. A repeat
+/// or an older number skipped nothing.
+pub fn skipped(last: u32, frame: u32) -> u32 {
+    let ahead = frame.wrapping_sub(last);
+    if ahead == 0 || ahead >= 1 << 31 {
+        0
+    } else {
+        ahead - 1
+    }
+}
+
 /// Write `data` into `words` under `lock`. The sequence goes odd before the
 /// first word and even again after the last; the release fence keeps every
 /// word's store after the odd one, so a reader that sees any of them sees the
@@ -603,6 +616,19 @@ pub(crate) fn read_locked_with(
 mod tests {
     use super::*;
     use std::vec::Vec;
+
+    /// **Frame numbers wrap**: the pictures skipped are counted across the
+    /// top, and a repeat or an older number counts none.
+    #[test]
+    fn skipped_pictures_count_across_the_wrap() {
+        assert_eq!(skipped(10, 11), 0, "the next");
+        assert_eq!(skipped(10, 13), 2);
+        assert_eq!(skipped(10, 10), 0, "a repeat");
+        assert_eq!(skipped(10, 9), 0, "an older one");
+        assert_eq!(skipped(u32::MAX, 0), 0, "the wrap itself");
+        assert_eq!(skipped(u32::MAX - 1, 2), 3, "across the wrap");
+        assert_eq!(skipped(0, 1 << 31), 0, "half the range away reads as older");
+    }
 
     fn page() -> Vec<AtomicU64> {
         (0..SECTION_WORDS).map(|_| AtomicU64::new(0)).collect()

@@ -6,15 +6,16 @@
 //! plug answers with, never by its `\\.\DISPLAYn` name, which the system
 //! hands out afresh, nor by its EDID.
 
+use lowlat_drivers::d3d11::{D3d11, Luid};
 use lowlat_vdd_proto::modes::Mode;
 use windows_sys::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
     DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL,
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
-    QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS, QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
-    SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
-    SetDisplayConfig,
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
+    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS,
+    QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig, SDC_ALLOW_CHANGES, SDC_APPLY,
+    SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG, SetDisplayConfig,
 };
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -135,18 +136,55 @@ pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
     })
 }
 
+/// An active path, as the save decision reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Lit {
+    adapter: u64,
+    technology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
+    /// The kernel's word that the path's adapter is a virtual display's;
+    /// none where it does not say.
+    indirect: Option<bool>,
+}
+
+/// Whether `path` is a display of another adapter than `ours` and not a
+/// virtual one. **A virtual display reports whatever technology its driver
+/// chose** -- DisplayPort, HDMI -- so the kernel's word on its adapter counts
+/// first, and an indirect technology as well.
+fn real_beside(path: Lit, ours: u64) -> bool {
+    path.adapter != ours
+        && path.indirect != Some(true)
+        && path.technology != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED
+        && path.technology != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL
+}
+
+/// The active paths, each with the kernel's word on its adapter.
+fn lit() -> Vec<Lit> {
+    let Some(config) = query(QDC_ONLY_ACTIVE_PATHS) else {
+        return Vec::new();
+    };
+    let kernel = D3d11::load().ok();
+    config
+        .paths
+        .iter()
+        .filter(|p| p.flags & DISPLAYCONFIG_PATH_ACTIVE != 0)
+        .map(|p| Lit {
+            adapter: value(p.targetInfo.adapterId),
+            technology: p.targetInfo.outputTechnology,
+            indirect: kernel.as_ref().and_then(|kernel| {
+                kernel.indirect(Luid {
+                    high: p.targetInfo.adapterId.HighPart,
+                    low: p.targetInfo.adapterId.LowPart,
+                })
+            }),
+        })
+        .collect()
+}
+
 /// Whether a display of another adapter, and not a virtual one, is active:
 /// what makes an arrangement safe to save (a saved one that only virtual
 /// displays satisfy holds a later boot waiting for their driver).
 pub(crate) fn others_active(adapter: u64) -> bool {
-    query(QDC_ONLY_ACTIVE_PATHS).is_some_and(|config| {
-        config.paths.iter().any(|p| {
-            p.flags & DISPLAYCONFIG_PATH_ACTIVE != 0
-                && value(p.targetInfo.adapterId) != adapter
-                && p.targetInfo.outputTechnology != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED
-                && p.targetInfo.outputTechnology != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL
-        })
-    })
+    lit().into_iter().any(|path| real_beside(path, adapter))
 }
 
 /// Make the monitor active beside what is: the active paths and one more,
@@ -251,4 +289,70 @@ pub(crate) fn set_mode(name: &str, mode: Mode, save: bool) -> Result<(), i32> {
         return Err(status);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Devices::Display::DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL;
+
+    const OURS: u64 = 7;
+    const DP: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY =
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL;
+
+    fn path(
+        adapter: u64,
+        technology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
+        indirect: Option<bool>,
+    ) -> Lit {
+        Lit {
+            adapter,
+            technology,
+            indirect,
+        }
+    }
+
+    /// **Another vendor's virtual display is no reason to save, whatever
+    /// technology it reports**: the kernel calls its adapter indirect. A panel
+    /// of another adapter is, and the technology still counts where the
+    /// kernel says nothing.
+    #[test]
+    fn a_virtual_display_reporting_displayport_is_not_a_real_one() {
+        assert!(real_beside(path(1, DP, Some(false)), OURS), "a panel");
+        assert!(
+            !real_beside(path(2, DP, Some(true)), OURS),
+            "another vendor's virtual display, reported as DisplayPort"
+        );
+        assert!(!real_beside(path(OURS, DP, Some(false)), OURS), "our own");
+        assert!(
+            !real_beside(
+                path(3, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED, None),
+                OURS
+            ),
+            "the kernel silent, an indirect technology"
+        );
+        assert!(
+            real_beside(path(4, DP, None), OURS),
+            "the kernel silent, a panel's technology"
+        );
+    }
+
+    /// The active paths as the save decision reads them, printed: a virtual
+    /// display's adapter must read indirect and a panel's not. Run with a
+    /// virtual display plugged beside a panel.
+    #[test]
+    #[ignore = "reads this machine's displays"]
+    fn the_active_paths_as_the_save_reads_them() {
+        let paths = lit();
+        assert!(!paths.is_empty(), "no active display");
+        for path in &paths {
+            println!(
+                "adapter {:#018x} technology {} indirect {:?} real beside nothing {}",
+                path.adapter,
+                path.technology,
+                path.indirect,
+                real_beside(*path, 0)
+            );
+        }
+    }
 }
