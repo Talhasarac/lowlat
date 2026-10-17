@@ -1284,6 +1284,65 @@ for any address, and destroys an allocation that sends toward loopback.
    and both requests granted when sent again, and the allocation released at the leave.
    Round trip under the millisecond relayed and direct, below what the status resolves.*
 
+## Phase C11 - The relay over TCP (planned 2026-10-17)
+
+**Planned 2026-10-17, interview of the same day, and next.** A client on a network that blocks
+UDP reaches nothing through C10's relay, which it speaks to over UDP alone. This phase lets it
+reach the same relay over TCP; the allocation and the host's leg stay datagrams, so the host
+still takes no part ([00 D15](00-overview.md), amended). **TLS is not offered** -- it would
+protect nothing the session needs, measured no better than TCP on the same leg, and is the TLS
+stack inside the boundary that D3 keeps out. The rules are [03 §7.4](03-connectivity.md), the
+shell's part [02 §5-§6](02-io-shell.md), the client's side [10 §11](10-client.md).
+
+**The relays were measured before the phase was written**, with an earlier implementation of
+the stream carrier against an established host. A relay on the host's own machine served TCP on
+its forwarded port, and its TCP leg carried a steady 14.4 Mbit/s as cleanly as UDP. A public
+relay service's TCP leg lost 0.65 to 1.87 percent of the same load, with stalls up to half a
+second, while retransmitting nothing: it throttled itself to four segments a round trip for
+about 300 ms at a time and paused outright, dropping what it could not hold. Each stall set off
+the session's own recovery against the stalled stream: duplicates, late arrivals and loss bursts
+near 1 percent, none over UDP. So the stream is the last rung, and its cost is stated per relay.
+
+- [ ] **The stream's framing and a reliable carrier** (`lowlat-core`): each message found in
+  place from its length, channel data padded to four bytes on a stream, a reserved channel
+  skipped by its length, a header that is neither ending the stream; nothing re-sent over TCP
+  and no timer armed by an answer awaited; an error-class answer that verifies under the key and
+  names no code read as a refusal. Fuzzed. *C11.1.*
+- [ ] **The stream on the loop's wait** (`lowlat-net`): the stream a socket of the platform
+  module beside the datagram one -- one more descriptor in the Linux poll, the stream's own key on
+  the Windows port with the connect, one receive posted and staged sends completing there --
+  the wake unchanged. Set once at open: non-blocking, `TCP_NODELAY`, no buffer sizes,
+  `MSG_NOSIGNAL` on Linux. One fixed receive buffer parsed in place; a pass's frames written with
+  one call; teardown takes every posted operation back. Zero allocations per message both ways.
+  No new dependency. *C11.2.*
+- [ ] **A stream leg in the simulator** (`lowlat-sim`): ordered, lossless, with scripted stalls
+  and the relay's bounded queue that drops; the relay's stream listener written from the
+  specification. *C11.3.*
+- [ ] **The TCP relay attempt through the boundary** (`lowlat-client`, `lowlat-sdk`, minor 29):
+  `relay_carrier` in `lowlat_client_config`; a TCP attempt opens no datagram socket and asks for
+  no gateway mapping; one five-second setup deadline with the connect in it; the connect, the
+  stream's end and a stalled write mapped onto the three outcomes. *C11.4.*
+- [ ] **The demo takes the carrier from the environment.** *C11.5.*
+- [ ] **The relay over TCP in the namespace fixtures**, the client's datagrams dropped at its own
+  firewall. *C11.6.*
+- [ ] Documentation as built: 02, 03 §7.4 and §11, 06 §3b, 07 §12, 08, 10 §11, README, the
+  changelog.
+
+**Gate:**
+
+1. [ ] Both platforms' workspace tests and lints, the dependency policy and the ABI gate; zero
+   allocations per message on the stream, both ways, with what crossed counted.
+2. [ ] Under the simulator: full-size datagrams both ways over the stream, as indications and as
+   padded channel data; a half-second stall with a dropped run survived; three permission
+   lifetimes and a nonce rotation crossed over the stream; each outcome from its cause -- a connect
+   refused, the stream ended, the stream reset, a write stalled. Each check shown failing with its
+   mechanism taken out before it is trusted.
+3. [ ] In namespaces: a real relay over TCP, the client's datagrams dropped.
+4. [ ] **Live**, ten minutes each with motion on the host, each beside the same relay over UDP on
+   the same pair: a public relay service over TCP on both of its ports, and a relay on the host's
+   machine over TCP; late, duplicated, asked again, resent by the host, the loss over thirty
+   seconds and the round trip, for both carriers.
+
 ## Later, and not in v1
 
 - **A Windows client**: the completion-port receive path in the shell ([02 §6](02-io-shell.md)),
@@ -1336,6 +1395,10 @@ slower decoder ever reopens them.
 ## Change log
 
 Newest first.
+
+- 2026-10-17: C11 planned: the relay over TCP where UDP is blocked, TLS not offered; the
+  stream a socket on the loop's own wait, not a second loop; the relays measured first, a relay
+  on the host's machine clean over TCP and a public relay service costly.
 
 - 2026-10-12: the codec library is replaced, in both directions and on both sides: the new
   decoder reads every stream tried to within one step of a sample of the reference decoder,

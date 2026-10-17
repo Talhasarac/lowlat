@@ -210,6 +210,18 @@ anywhere else, which the protocol recovers from as it does any loss -- once per 
 per datagram. The service is loaded at run time; without it, sends go unmarked and the session
 says so once. Linux marks the socket at open and has nothing to do here.
 
+**The relay's stream** (C11, planned 2026-10-17; [03 §7.4](03-connectivity.md)). A TCP attempt's
+one socket is a stream to the relay, made the way the datagram socket is and set once at open:
+non-blocking, `TCP_NODELAY` on -- a pass's frames are staged and written together already (§6)
+-- and **no buffer sizes**: the stack tunes a stream's buffers itself, and an explicit 64 MB
+receive buffer measured no different from the stack's own over a relay's stream at 14.4 Mbit/s,
+nor did the reader pausing 600 ms lose anything. On Linux every send passes `MSG_NOSIGNAL`: a
+send on a stream the relay closed would otherwise raise a signal whose disposition is the host
+process's, not ours. On Windows the stream is marked as the datagram path is. Its receive
+storage is one fixed buffer, parsed in place; only a message straddling the buffer's end is moved
+to its front, and a message longer than the receive slot plus its padding is skipped by its
+length and counted, never stored.
+
 **Receive buffer sizing is derived from the protocol's absolute ceiling, never from the
 current path MTU:**
 
@@ -272,6 +284,15 @@ plain one a system that refuses registered I/O needs anyway, and it is taken onl
 measures better than this: the plain port hands over a keyframe-sized burst of 2550 datagrams
 already queued on the socket in 1.8 ms at the median (2.6 at the 99th percentile), 695 ns a
 datagram, on the development machine.
+
+**The relay's stream joins the same wait** (C11, planned; §5). On Linux it is one more descriptor
+in the poll, watched for writing only while connecting or while a write is pending. On Windows the
+stream's socket joins the loop's port under its own key -- the connect, one receive kept posted
+into the stream's buffer, and sends from fixed staging, each completing there -- with the same
+cancel-and-take-back at teardown. A pass's frames are staged and written with one call; while a
+write is pending no more of the core's output is taken, and it waits in the core's own rings. No
+second poller, and the wake is unchanged: the stream is a socket of the platform module, not a
+kind of wake.
 
 **Send uses segmentation offload where available**: `UDP_SEGMENT` on Linux, the segment size
 as a control message on the message send on Windows, falling back to per-datagram send. One

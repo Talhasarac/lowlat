@@ -1385,3 +1385,12 @@ through its own translator is checked at one address and speaks from another.
 round trip against a direct session on the same pair, measured before this was written with an
 earlier implementation; 27 ms at the median through the same relay with this one -- and 4 bytes
 a datagram on the client's leg once the path is bound to a channel, 36 before that.
+
+**Over TCP** (C11, planned 2026-10-17; [03 §7.4](03-connectivity.md)). An application whose
+relay over UDP is unreachable may make the same attempt with the relay's carrier set to TCP
+([06 §3b](06-api.md)). It is the same relay attempt -- the same candidate, the same order, the same
+outcomes -- over one stream to the relay instead of a datagram socket, and it opens no datagram
+socket at all: the handle keeps its port, and the gateway's mapping is not asked for. What it
+costs depends on the relay: through a relay on the host's network the stream measured as clean as
+datagrams; through a public relay service, stalls of up to half a second that the session's own
+recovery turns into resend storms. It is the last rung, not a quality option.

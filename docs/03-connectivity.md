@@ -2,7 +2,7 @@
 
 **Status:** locked 2026-08-15; §7 rewritten 2026-09-23, when the relay moved from the host to
 the client ([00-overview.md](00-overview.md) D15), and built the same day (C10), whose live gate
-made §5's path both directions. Implemented
+made §5's path both directions; the relay over TCP planned 2026-10-17 (C11, §7.4). Implemented
 by `lowlat-core` (state machines) and `lowlat-net` (sockets), per
 [00-overview.md](00-overview.md) D4.
 
@@ -477,6 +477,15 @@ unparseable connectivity messages and at the client as resends.)*
 - **No exchange with the relay blocks the reader.** A request is state and a deadline in the
   same stream the media arrives on; a reader that waits for one answer discards the media that
   arrives meanwhile.
+- **Over TCP nothing is re-sent** (C11, planned; §7.4). The stream recovers its own loss, so a
+  request goes once, and one awaiting its answer arms no timer of its own -- a past re-send
+  deadline left armed would turn into a hot poll. The deadlines that already end an attempt bound
+  it: setup's, the allocation's lifetime, the path permission's. An unanswered bind leaves media
+  on indications, and an unanswered permission for an address the path never takes costs nothing.
+  A stale nonce is still a new request.
+- **A refusal that names no code is still a refusal** (C11, planned). A deployed relay's stream
+  listener answers a refused permission with integrity and no error code; an answer of the error
+  class that verifies under the key is read as refused, one that does not stays malformed.
 - **Failure is typed and final** (§9). No answer to the allocation, a refused allocation, or a
   hard error on a renewal mid-session ends the attempt with its own outcome; nothing is retried
   forever.
@@ -485,10 +494,39 @@ unparseable connectivity messages and at the client as resends.)*
 
 ### §7.4 Transport
 
-**Reaching the relay over a stream transport is deferred.** It cannot sit behind the sans-IO
-boundary, where there is no async runtime and no transport security, so it is a shell concern
-if it is ever wanted. The datagram transport is the whole of the first implementation, and the
-relayed address is IPv4.
+*Rewritten 2026-10-17, planned as C11 ([00 D15](00-overview.md)); until then the datagram
+transport was the whole of it.*
+
+**The client reaches its relay over UDP, or over TCP where UDP is blocked.** The carrier is the
+attempt's, set by the application. The allocation still asks for UDP, so the relayed address and
+the host's leg are datagrams either way and the host cannot tell. **TLS is not offered**: the
+media is encrypted end to end and every relay request carries its own integrity, so it would
+protect nothing the session needs; it measured no better than TCP on the same leg; and a TLS
+stack inside the library is what [00 D3](00-overview.md) keeps out. It stays a later addition --
+a byte-stream layer under the same framing -- for a network that admits nothing but TLS.
+
+- **The stream is framed by length** (RFC 8656 §12.5-12.6). Each message is found from its own
+  length field, in place. Channel data is padded to four bytes, its length field unchanged; a
+  reserved channel number is skipped by its length; a header that is neither ends the stream,
+  since resynchronising on untrusted bytes is not recovery.
+- **The stream is one more descriptor on the loop's wait** ([02 §6](02-io-shell.md)), not a second
+  loop, and a TCP attempt opens no datagram socket.
+- **Setup is one deadline**: five seconds from the attempt's start, the connect counted in it,
+  and nothing sent before the connect completes. A connect refused or not completed in time is the
+  relay unreachable; the stream ended or reset mid-session, or a write that makes no progress for
+  five seconds, is the relay lost (§9).
+- **A clean leave writes the release before it closes the stream**, and waits for no answer.
+- **What it costs depends on the relay.** Measured 2026-10-17 from one client network, a steady
+  14.4 Mbit/s through the relay to the client: through a public relay service's TCP listener,
+  0.65 to 1.87 percent lost and stalls up to half a second, where the same service over UDP lost
+  nothing -- and a capture showed the stream retransmitting nothing: the service sent four
+  segments a round trip for about 300 ms at a time, and paused outright for up to half a second,
+  dropping what it could not hold. Through a relay on the host's own network the TCP leg carried
+  the same rate as cleanly as UDP. **A stall costs the session more than the stall**: the host's
+  resend timer and the receiver's requests fire into the stalled stream for what is already
+  queued in it -- duplicates, late arrivals and loss bursts near 1 percent through the public
+  service, none over UDP. So the stream is the last rung (§8), never a quality option.
+- The relayed address is IPv4 either way.
 
 ## §8 Policy and the ladder
 
@@ -505,6 +543,8 @@ So the ladder is:
 1. Direct punch with whatever candidates were gathered. Report the outcome.
 2. The application, seeing a typed failure, may start a new attempt with a relay configured,
    which makes it a relay attempt (§7.2), or with mapping enabled.
+3. The application, seeing a relay attempt end with the relay unreachable, may make the same
+   attempt over TCP (§7.4, C11 planned) -- the last rung, for a network that blocks UDP.
 
 An application that knows its host is reachable only through a relay may start with the relay
 attempt; nothing requires a failed direct attempt first. The active path is reported, relayed
@@ -520,9 +560,9 @@ completely between them.
 | peer gone | the other side abandoned the attempt | give up, inform the user |
 | no permission | rejected before connectivity began | do not retry |
 | probe timeout | probes sent, nothing answered | retry with mapping or relay |
-| relay unreachable | the relay did not answer in time to allocate and permit its own machine: five seconds | retry direct, or a different relay |
+| relay unreachable | the relay did not answer in time to allocate and permit its own machine: five seconds; over TCP also a connect refused or not completed in that time | retry direct, the same relay over TCP if this was over UDP, or a different relay |
 | relay refused | the relay refused the credentials or the allocation, or is full | fix the configuration; the same relay refuses again |
-| relay lost | a renewal was refused or went unanswered mid-session | reconnect; the relay has already let the allocation go |
+| relay lost | a renewal was refused or went unanswered mid-session; over TCP also the stream ended or reset, or took no write for five seconds | reconnect; the relay has already let the allocation go |
 
 A probe timeout is the only one that justifies escalation. Retrying the others wastes the
 user's time and, on a rejection, looks like an attack to the far side.
@@ -611,6 +651,15 @@ once §5's path was made both directions -- no malformed connectivity message on
 log at connect. Against this project's own host with a credentialed relay beside it, twelve
 and a half minutes crossed every renewal, answered the relay's rotated nonce, and released
 the allocation at the leave.
+
+**Planned 2026-10-17 (C11), the relay over TCP, measured before it was written** (§7.4): a
+relay on an established host's machine served allocations over TCP through its router's
+forwarded port, relayed at the machine's own address as over UDP; a public relay service's TCP
+listener allocated and relayed on both of its ports, answered a refused permission with
+integrity and no error code, held channel data of four bytes or less until the next message,
+and closed the connection on unpadded channel data. Sessions ran over TCP through both relays
+with an earlier implementation of the stream: established through each, with the costs §7.4
+states.
 
 **Confirmed against two browser families, 2026-09-12 and 2026-09-13:** the fixed controlled
 role against a full agent that is always controlling; sixteen pending answers under a check

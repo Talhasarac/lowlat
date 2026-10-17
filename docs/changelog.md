@@ -3,6 +3,34 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - C11 planned: the relay over TCP
+
+### Decided
+- **The client may reach its relay over TCP where UDP is blocked** ([03 §7.4](03-connectivity.md),
+  [00 D15](00-overview.md) amended): the allocation and the host's leg stay datagrams, so the host
+  cannot tell. The carrier is the attempt's (`relay_carrier`, minor 29, [06 §3b](06-api.md)); the
+  library never moves from one to the other by itself, and TCP is the application's last rung.
+- **TLS is not offered**: the media is encrypted end to end and every relay request carries its
+  own integrity, it measured no better than TCP on the same leg, and a TLS stack inside the
+  boundary is what D3 keeps out.
+- **The stream is a socket of the loop, not a second loop** ([02 §5-§6](02-io-shell.md)): one more
+  descriptor in the Linux poll, its own key on the Windows port; no new dependency; no buffer
+  sizes; one fixed receive buffer parsed in place.
+- **Over TCP nothing is re-sent** and no awaited answer arms a timer; channel data is padded to four
+  bytes; a refusal that verifies but names no code is a refusal.
+
+### Measured
+- A steady 14.4 Mbit/s through a public relay service to the client: over UDP nothing lost; over
+  its TCP leg 0.65 to 1.87 percent lost and stalls up to half a second, with the stream
+  retransmitting nothing -- the service sent four segments a round trip for about 300 ms at a time,
+  and paused outright, dropping what it could not hold. An explicit receive buffer made no
+  consistent difference, and the client's reader pausing 600 ms lost nothing.
+- Through a relay on an established host's machine, its TCP leg carried the same rate as cleanly
+  as UDP; the machine's router forwarded the relay's port for TCP as well.
+- With an earlier implementation of the carrier, sessions to that host through the public service:
+  over TCP and TLS, duplicates (95-110), late arrivals (58-99) and the host's resends (239-342) in
+  ninety seconds, the loss over thirty seconds peaking near 1 percent; over UDP, none.
+
 ## 2026-10-17 - W3.3 measured: the direct frame against the duplication
 
 ### Changed

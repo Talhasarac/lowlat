@@ -77,6 +77,12 @@ What it is for:
   translator. **The long run is made twice, through a relay that binds channels and one that
   refuses them**, because a binding renews its address's permission too: a permission renewed
   late passed with a channel bound and stalled the media at 305 s without one.
+- **The relay over TCP** ([03 §7.4](03-connectivity.md), C11, planned): a stream leg -- ordered,
+  lossless, with scripted stalls and the relay's bounded queue that drops past its depth -- and the
+  relay's stream listener written from the specification as its datagram side was, so a stall and
+  the resends it sets off run in milliseconds and are counted. The counts are the cost being
+  documented, recorded rather than asserted; what is asserted is that the session survives a
+  half-second stall with a run dropped.
 
 What it is not for: performance. The simulator has no realistic timing and any latency number
 from it is meaningless.
@@ -94,7 +100,9 @@ server and a host endpoint in one namespace behind one forwarded port, the clien
 symmetric translation: the one fixture in which the relay's bytes come from somebody else's
 implementation. It is judged on both ends -- the client's path is the host's own address, the
 host's the relayed one -- and it runs beside the same topology without the relay, which must
-time out. It needs the relay server on the machine and is skipped where there is none.
+time out. It needs the relay server on the machine and is skipped where there is none. With C11
+(planned) the same relay over TCP, the client's datagrams dropped at its own namespace's
+firewall, so nothing reaches the relay but the stream.
 And, with Phase 15, a real mapping daemon in one gateway of the symmetric pair, which no punch
 crosses: the endpoint behind it maps its port through the client's own mapper and offers the
 mapped address once the reflexive server confirms it, and the far side's path must be that
@@ -144,7 +152,8 @@ Every byte that arrives from the network is parsed by a fuzz target:
 - cleartext packets and the group acknowledgement
 - control messages and their bodies
 - connectivity check messages
-- relay framing, and every answer, indication and channel message a relay can send (C10)
+- relay framing, and every answer, indication and channel message a relay can send (C10); the
+  stream's framing, split anywhere (C11, planned)
 - **the pointer's picture** ([10 §7](10-client.md)): the PNG a host sends, taken apart,
   inflated and unfiltered by the client's own reader, seeded with six pictures an
   established host sent in a recorded session. Those six are also fixtures: each decodes
@@ -216,7 +225,7 @@ in this repository: a formatting check that reported success while examining zer
 Covered paths: receive, decrypt, dispatch, reassemble, packetize, encrypt, send, the input
 path end to end, and the relayed path both ways, as indications and as channel data -- with the
 count of what crossed asserted too, because the first version of that test passed with no
-channel data crossing at all.
+channel data crossing at all. With C11 (planned), the relayed path over the stream as well.
 
 **The browser pipe is exempt and measured instead** ([02 §7](02-io-shell.md)). Its record
 layer and association allocate by design, so the assertion would only ever fail there; the
