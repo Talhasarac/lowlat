@@ -3,6 +3,35 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-17 - W2.5 reviewed: the service
+
+### Decided
+- **The service decides on every pass** -- the console's session, the host's and how it last
+  exited -- and starts a new host only once the old one has gone; **a clean exit is not
+  restarted**, so a host that is not logged in stays down until the console's session changes or
+  the service starts again ([impl-plan-windows.md](impl-plan-windows.md) W2).
+- **Two events, inherited by the host alone**: the service's request to end, and the host's
+  request for the attention chord. Nothing is named, so no other process can signal either.
+- **Install copies the programs into the program-files directory** and protects the program-data
+  folder explicitly, since a program the system account runs must be writable by administrators
+  alone and the folder's default lets any user plant the host's configuration; the display driver
+  is installed and removed with the service ([07 §10](07-platforms.md)).
+- **The policy for the attention chord is set around each call**, the value found put back, not
+  by install and uninstall ([05 §7.3](05-host.md)).
+- **What a guest is told when its host ends at a change of session is decided by measurement**:
+  a host ended with its session can say nothing; where the old host lives on, telling each guest
+  the host system is changing stays only if every established client handles it at least as well
+  as silence.
+- **The login tool learns Windows**: the program-data configuration and the service manager;
+  Python a prerequisite there.
+
+### Found
+- The host on Windows advertised itself as a Linux machine, named for nothing, with no version or
+  identifier, reading files only Linux has; it advertises Windows, the computer's name, the
+  system's version and the machine's identifier at the build.
+- An ending host told its guests nothing, and on Windows it could not be asked to end: it stopped
+  only on a console's interrupt, which a process the service starts never receives.
+
 ## 2026-10-17 - W3.7 built: the review's fixes
 
 ### Changed

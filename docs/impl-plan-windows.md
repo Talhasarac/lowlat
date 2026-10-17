@@ -6,7 +6,7 @@ the day the host's own virtual display (W3) was added with its frame hand-off de
 planned at its own interview on 2026-10-15, and its first step, the driver and its package,
 built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3.6 -- the
 controller as a program of its own -- and W3.7 -- the review's fixes -- are built, and W3's gate
-waits for W2.5.
+waits for W2.5, reviewed the same day.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -580,6 +580,10 @@ once, here.
   state's: the host reads them so on both platforms, and the client's per-axis call converts at
   the wire so its interface keeps the state's direction. The attention chord is the system's
   own call for it, made by the service, never typed keys ([05 §7.3](05-host.md)).
+  *Amended 2026-10-17, at W2.5's review:* **the machine's policy allows the service's call for
+  the length of each call** -- the service sets it, makes the call and puts back the value it
+  found -- rather than from install to uninstall, so the policy is never left changed, nothing is
+  kept between the two, and a program deleted without its uninstall leaves nothing set.
 - **Sound.** The loopback of the default render endpoint, event-driven, 48 kHz stereo asked and
   the system's engine converting, 20 ms a packet. **A loopback delivers nothing while nothing
   plays** -- measured on the development machine: no packet in three seconds, where a silent
@@ -618,6 +622,32 @@ once, here.
   administrators can read, since it holds the signaling secret, and the host's log is a file
   beside it. `lowlatd install` and `lowlatd uninstall`, from an elevated shell, register and
   remove the service; there is no installer package, and the ViGEm bus is a prerequisite.
+  *Amended 2026-10-17, at W2.5's review:* **the service decides on every pass** -- the console's
+  session, the session the host runs in and how it last exited -- rather than acting on each
+  notification, which only wakes the pass; a new host starts only once the old one has gone.
+  **A clean exit is not restarted**: a host that ends because it is not logged in stays down until
+  the console's session changes or the service is started again, as a failed one does not.
+  **The service and its host share two events and nothing named**: one the service sets to ask
+  the host to end, one the host sets to ask for the attention chord, both inherited by the host
+  alone, so no other process can find or signal either. **Install copies the programs into the
+  program-files directory** and the service runs them from there: a program the system account
+  runs must not be writable by anyone else, and a build tree writable by every user would hand
+  that account to whoever replaced the file. **The program-data folder is protected
+  explicitly** -- the system account and administrators alone, nothing inherited -- since by
+  default any user may create a file there, and one created before the install would become the
+  host's configuration; an existing configuration is kept, its owner and access reset. **The
+  display driver is installed and removed with the service** ([07 §10](07-platforms.md)), from
+  beside the program; with none there it is said and skipped, since a machine with a monitor
+  needs none. **One log**: the host's output and the service's own lines, each start stamped in
+  UTC, with one earlier file kept past 16 MB. **What a guest is told when its host ends at a
+  change of session is decided by measurement at the build**: a host ended with its session, as
+  at a logoff, can say nothing; where the old host lives on -- a user switch, a remote connection,
+  the service stopping -- each seated guest is told the host system is changing, or that the host
+  shut down, and that stays only if every established client handles it at least as well as
+  silence, recorded as what it shows, whether it reconnects by itself and how soon the new host's
+  picture arrives. **A Windows install takes its token from the login tool**, which learns the
+  program-data file and the service manager; Python is a prerequisite on Windows, as the ViGEm
+  bus is.
 - **The floor is Windows 10 1703**: the duplication call the host uses and the event-driven
   loopback both need it, and the client set it already.
 
@@ -811,6 +841,29 @@ once, here.
   moves the console to another session as a logoff does; and with each, the host's own display
   back with the new host -- the display side of both, which W3.5 checks as the host's end and a
   new host's start.
+  *Reviewed 2026-10-17, before its build* (the decisions above): the policy for the chord is set
+  around each call, not by install and uninstall (W2's input decision, amended). Read in the code:
+  the host ends only on an interrupt from a console, which a process the service starts never
+  receives, so the service's request to end needs a path of its own; an ending host told its
+  guests nothing, each learning of it from its own silence; and the host advertised itself on
+  Windows as a Linux machine named for nothing, its version and identifier read from files only
+  Linux has -- it advertises Windows, the computer's name, the system's version and the machine's
+  identifier, and its two lines worded for Linux are worded for Windows. The login tool knew only
+  Linux's file and service manager. Checked by: install, install again over a running install,
+  and uninstall, with the access of the configuration and the folders read by an ordinary user;
+  the host killed, back two seconds later with the guest reconnecting; the service's process
+  killed, the host going with it and the service started again; a host not logged in started
+  once; the request to end, and a host deaf to it ended at its bound; the service stopped and
+  started; **a remote connection** from another machine on the network, remote desktop turned on
+  for it and off after, the console's new session served and the user's session brought back
+  through a guest -- the same run measuring what each established client makes of being told the
+  host is changing against silence; the chord from a guest with the keyboard permission, refused
+  without it, and with the policy put back by hand raising nothing; the advertisement read by a
+  client and the signaling service's list; a guest on the network and one over the internet
+  connecting with no firewall rule for the installed program; **one reboot**, the logon screen
+  streamed before anyone signs in; and **the logoff**, last, from a guest's own menu while
+  streaming -- it ends the session the development tools run in; both bars. No user switch is run:
+  the machine has one person's account, and a switch is the same change of session.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1486,6 +1539,12 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-17: W2.5 reviewed: the service decides on every pass and restarts only a failed exit;
+  two inherited events between the service and its host; the programs copied into the
+  program-files directory and the program-data folder protected explicitly; the display driver
+  installed with the service; the policy for the chord set around each call (amending W2's input
+  decision); what a guest is told at a change of session decided by measurement; the login tool
+  taught Windows; the host's advertisement on Windows corrected.
 - 2026-10-17: W3.7 reviewed, built, checked and ticked: the driver's process's access list read (no
   other account admitted); a virtual display told by its adapter for the save; the monitor's
   description from its own bytes; the frame number's wrap; the controller's refusals leaving

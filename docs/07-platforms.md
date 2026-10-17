@@ -890,6 +890,17 @@ After Gate B. The differences are contained:
   the system account and administrators read. An arrangement of displays that only the virtual
   one can satisfy is never saved, or a later boot waits on the driver. The design is
   [11](11-drivers.md).
+- The service (*reviewed 2026-10-17*, [impl-plan-windows.md](impl-plan-windows.md) W2.5): the
+  daemon's second role, under the service manager, which starts the host in the console's session
+  and starts it again when that session changes or the host fails, deciding on every pass rather
+  than on each notification. `lowlatd install` copies the programs into the program-files
+  directory -- a program the system account runs must be writable by administrators alone -- makes
+  the program-data folder readable by the system account and administrators alone, since the
+  configuration it holds is the host's environment and carries the signaling secret, and installs
+  the display driver from beside the program; `uninstall` removes the service, the programs and
+  the driver and keeps the configuration. The secure attention call is allowed in the machine's
+  policy only for the length of each call. The login tool writes the configuration and restarts
+  the service; Python is a prerequisite here, as the ViGEm bus is.
 
 None of this reaches the protocol core, the IO shell's logic, or the public API.
 
