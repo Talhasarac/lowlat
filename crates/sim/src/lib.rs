@@ -12,12 +12,13 @@
 //! It is not for performance. There is no realistic timing here and any latency
 //! number taken from it is meaningless.
 //!
-//! The simulator moves datagrams; it does not drive the engine. Tests own their
-//! endpoints and hand outbound datagrams over, which keeps this crate
-//! independent of the shape of whatever is being tested.
+//! The simulator moves datagrams and a stream's writes; it does not drive the
+//! engine. Tests own their endpoints and hand outbound datagrams over, which
+//! keeps this crate independent of the shape of whatever is being tested.
 
 pub mod nat;
 pub mod relay;
+pub mod stream;
 
 use std::net::SocketAddr;
 
@@ -195,6 +196,8 @@ pub struct Sim {
     hosts: Vec<Host>,
     queue: Vec<Delivery>,
     dropped: Vec<Dropped>,
+    legs: Vec<stream::Leg>,
+    stream_queue: Vec<stream::Delivery>,
 }
 
 impl Sim {
@@ -211,6 +214,8 @@ impl Sim {
             hosts: Vec::new(),
             queue: Vec::new(),
             dropped: Vec::new(),
+            legs: Vec::new(),
+            stream_queue: Vec::new(),
         }
     }
 
@@ -377,11 +382,13 @@ impl Sim {
         })
     }
 
-    /// Milliseconds until the next queued delivery, if any.
+    /// Milliseconds until the next queued delivery, datagram or stream, if
+    /// any.
     pub fn next_delivery_ms(&self) -> Option<f64> {
         self.queue
             .iter()
             .map(|d| d.at_us)
+            .chain(self.stream_queue.iter().map(|d| d.at_us))
             .min()
             .map(|at| at.saturating_sub(self.now_us) as f64 / 1000.0)
     }

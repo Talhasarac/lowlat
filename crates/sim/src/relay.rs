@@ -16,6 +16,13 @@
 //! - it delivers channel data unpadded, and a relayed datagram with its data
 //!   ahead of the peer's address;
 //! - a refusal carries no integrity.
+//!
+//! On a client's stream (RFC 8656 12.5) each message is found from its own
+//! length, channel data is padded to four bytes both ways, and a head that is
+//! neither closes the stream. Beyond the standard: behind a client's stream
+//! that has stopped, the relay holds about a hundred of its peers' datagrams
+//! and drops the rest, as one was measured doing; and the stream's close frees
+//! its allocation, as a widely deployed one does.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -23,6 +30,7 @@ use hmac::{Hmac, Mac};
 use md5::{Digest, Md5};
 use sha1::Sha1;
 
+use crate::stream::{Segment, StreamArrival, StreamId};
 use crate::{Arrival, HostId, NatId, Sim};
 
 const COOKIE: [u8; 4] = [0x21, 0x12, 0xA4, 0x42];
@@ -56,6 +64,8 @@ const DEFAULT_LIFETIME_S: u32 = 600;
 const MAX_LIFETIME_S: u32 = 3_600;
 const FIRST_RELAYED_PORT: u16 = 49_152;
 const TTL: u8 = 64;
+/// Peers' datagrams held behind a client's stream that has stopped.
+const STREAM_DEPTH: usize = 100;
 
 /// What the relay did, for a test to assert the mechanism rather than the
 /// outcome alone.
@@ -83,13 +93,31 @@ pub struct Counts {
     pub channel_out: u32,
     pub largest_indication_out: usize,
     pub largest_channel_out: usize,
+    /// Messages found on clients' streams.
+    pub stream_in: u32,
+    /// Peers' datagrams dropped behind a client's stream that stopped: the
+    /// relay's queue past its depth.
+    pub stream_drops: u32,
+    /// Streams closed for a head that was neither a message nor channel data.
+    pub stream_errors: u32,
+    /// Allocations freed by their stream's close, from either end.
+    pub closed: u32,
+}
+
+/// Where a client's messages come from and its answers go: its address as
+/// the relay sees it, and its stream when it has one. A relay tells a
+/// stream's allocation from a datagram one by its transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Flow {
+    addr: SocketAddr,
+    stream: Option<StreamId>,
 }
 
 #[derive(Debug)]
 struct Allocation {
-    /// The client's address as the relay sees it: with the relay's own, the
+    /// The client as the relay sees it: with the relay's own address, the
     /// flow that names the allocation.
-    client: SocketAddr,
+    client: Flow,
     /// The allocation request's identifier, so a re-sent one is recognised.
     tid: [u8; 12],
     relayed: SocketAddr,
@@ -266,6 +294,8 @@ pub struct Relay {
     next_port: u16,
     next_tid: u32,
     allocations: Vec<Allocation>,
+    /// What each client's stream has delivered of a message not yet whole.
+    streams: Vec<(StreamId, Vec<u8>)>,
     refused: Vec<IpAddr>,
     binds_channels: bool,
     pub counts: Counts,
@@ -303,6 +333,7 @@ impl Relay {
             next_port: FIRST_RELAYED_PORT,
             next_tid: 0,
             allocations: Vec::new(),
+            streams: Vec::new(),
             refused: Vec::new(),
             binds_channels: true,
             counts: Counts::default(),
@@ -332,6 +363,12 @@ impl Relay {
         host == self.listener || self.allocations.iter().any(|a| a.host == host)
     }
 
+    /// The address clients reach, for a test that stops the relay's side of
+    /// a stream.
+    pub fn listener(&self) -> HostId {
+        self.listener
+    }
+
     /// Forget every allocation, as a relay that restarted has.
     pub fn forget_allocations(&mut self) {
         for allocation in &mut self.allocations {
@@ -342,9 +379,73 @@ impl Relay {
     /// Take a datagram that arrived at one of the relay's addresses.
     pub fn receive(&mut self, sim: &mut Sim, arrival: &Arrival) {
         if arrival.host == self.listener {
-            self.client_sent(sim, arrival.from, &arrival.bytes);
+            let client = Flow {
+                addr: arrival.from,
+                stream: None,
+            };
+            self.client_sent(sim, client, &arrival.bytes);
         } else {
             self.peer_sent(sim, arrival);
+        }
+    }
+
+    /// Take what a client's stream delivered: every message now whole in it,
+    /// or its close.
+    pub fn receive_stream(&mut self, sim: &mut Sim, arrival: &StreamArrival) {
+        let client = Flow {
+            addr: arrival.from,
+            stream: Some(arrival.stream),
+        };
+        let bytes = match &arrival.data {
+            Segment::Bytes(bytes) => bytes,
+            Segment::End => return self.stream_closed(sim, client),
+        };
+        let index = match self
+            .streams
+            .iter()
+            .position(|(id, _)| *id == arrival.stream)
+        {
+            Some(index) => index,
+            None => {
+                self.streams.push((arrival.stream, Vec::new()));
+                self.streams.len() - 1
+            }
+        };
+        self.streams[index].1.extend_from_slice(bytes);
+        loop {
+            let held = &self.streams[index].1;
+            match message_on_stream(held) {
+                Ok(None) => return,
+                Ok(Some((len, wire))) => {
+                    let message = held[..len].to_vec();
+                    self.streams[index].1.drain(..wire);
+                    self.counts.stream_in += 1;
+                    self.client_sent(sim, client, &message);
+                }
+                Err(()) => {
+                    // Nothing after it can be found: the stream is closed.
+                    self.counts.stream_errors += 1;
+                    sim.close(arrival.stream, self.listener);
+                    return self.stream_closed(sim, client);
+                }
+            }
+        }
+    }
+
+    /// A client's stream is gone, and the allocation on it with it.
+    fn stream_closed(&mut self, sim: &Sim, client: Flow) {
+        self.streams.retain(|(id, _)| Some(*id) != client.stream);
+        if let Some(allocation) = self.live(client, sim.now_ms()) {
+            allocation.alive = false;
+            self.counts.closed += 1;
+        }
+    }
+
+    /// Send the client something: back to its address, or on its stream.
+    fn reply(&self, sim: &mut Sim, client: Flow, bytes: &[u8]) {
+        match client.stream {
+            None => sim.send(self.listener, client.addr, TTL, bytes),
+            Some(stream) => sim.stream_send(stream, self.listener, bytes),
         }
     }
 
@@ -363,13 +464,13 @@ impl Relay {
         format!("{epoch:016x}").into_bytes()
     }
 
-    fn live(&mut self, client: SocketAddr, now_ms: f64) -> Option<&mut Allocation> {
+    fn live(&mut self, client: Flow, now_ms: f64) -> Option<&mut Allocation> {
         self.allocations
             .iter_mut()
             .find(|a| a.client == client && a.alive && now_ms < a.expires_ms)
     }
 
-    fn client_sent(&mut self, sim: &mut Sim, client: SocketAddr, bytes: &[u8]) {
+    fn client_sent(&mut self, sim: &mut Sim, client: Flow, bytes: &[u8]) {
         let now = sim.now_ms();
         if bytes.first().is_some_and(|byte| byte >> 6 == 0b01) {
             return self.channel_from_client(sim, client, bytes, now);
@@ -381,7 +482,7 @@ impl Relay {
             SEND_INDICATION => self.send_from_client(sim, client, &message, now),
             ALLOCATE | REFRESH | CREATE_PERMISSION | CHANNEL_BIND => {
                 let answer = self.request(sim, client, &message, now);
-                sim.send(self.listener, client, TTL, &answer);
+                self.reply(sim, client, &answer);
             }
             _ => {}
         }
@@ -392,7 +493,7 @@ impl Relay {
     fn relay_to_peer(
         &mut self,
         sim: &mut Sim,
-        client: SocketAddr,
+        client: Flow,
         peer: SocketAddr,
         data: &[u8],
         now: f64,
@@ -414,7 +515,7 @@ impl Relay {
         true
     }
 
-    fn send_from_client(&mut self, sim: &mut Sim, client: SocketAddr, message: &Message, now: f64) {
+    fn send_from_client(&mut self, sim: &mut Sim, client: Flow, message: &Message, now: f64) {
         let (Some(peer), Some(data)) = (
             message
                 .get(XOR_PEER_ADDRESS)
@@ -430,7 +531,7 @@ impl Relay {
         }
     }
 
-    fn channel_from_client(&mut self, sim: &mut Sim, client: SocketAddr, bytes: &[u8], now: f64) {
+    fn channel_from_client(&mut self, sim: &mut Sim, client: Flow, bytes: &[u8], now: f64) {
         if bytes.len() < 4 {
             return;
         }
@@ -465,13 +566,12 @@ impl Relay {
             return;
         }
         let client = allocation.client;
-        let framed = match allocation.channel_to(arrival.from, now) {
+        let channel = allocation.channel_to(arrival.from, now);
+        let mut framed = match channel {
             Some(number) => {
                 let mut out = number.to_be_bytes().to_vec();
                 out.extend_from_slice(&be16(arrival.bytes.len()));
                 out.extend_from_slice(&arrival.bytes);
-                self.counts.channel_out += 1;
-                self.counts.largest_channel_out = self.counts.largest_channel_out.max(out.len());
                 out
             }
             None => {
@@ -483,23 +583,33 @@ impl Relay {
                 attribute(&mut out, XOR_PEER_ADDRESS, &xor_encode(arrival.from, &tid));
                 let length = out.len() - 20;
                 set_length(&mut out, length);
-                self.counts.indications_out += 1;
-                self.counts.largest_indication_out =
-                    self.counts.largest_indication_out.max(out.len());
                 out
             }
         };
-        sim.send(self.listener, client, TTL, &framed);
+        let len = framed.len();
+        match client.stream {
+            None => sim.send(self.listener, client.addr, TTL, &framed),
+            Some(stream) => {
+                // Padded on a stream, or the client reads its next message
+                // from the wrong place.
+                framed.resize(len.next_multiple_of(4), 0);
+                if !sim.stream_send_within(stream, self.listener, &framed, STREAM_DEPTH) {
+                    self.counts.stream_drops += 1;
+                    return;
+                }
+            }
+        }
+        if channel.is_some() {
+            self.counts.channel_out += 1;
+            self.counts.largest_channel_out = self.counts.largest_channel_out.max(len);
+        } else {
+            self.counts.indications_out += 1;
+            self.counts.largest_indication_out = self.counts.largest_indication_out.max(len);
+        }
     }
 
     /// Answer a request: the credentials checked, then the method.
-    fn request(
-        &mut self,
-        sim: &mut Sim,
-        client: SocketAddr,
-        message: &Message,
-        now: f64,
-    ) -> Vec<u8> {
+    fn request(&mut self, sim: &mut Sim, client: Flow, message: &Message, now: f64) -> Vec<u8> {
         let nonce = self.nonce(now);
         let (Some(username), Some(_), Some(sent_nonce), Some(_)) = (
             message.get(USERNAME),
@@ -538,13 +648,7 @@ impl Relay {
         mac.verify_slice(&message.bytes[at + 4..at + 24]).is_ok()
     }
 
-    fn allocate(
-        &mut self,
-        sim: &mut Sim,
-        client: SocketAddr,
-        message: &Message,
-        now: f64,
-    ) -> Vec<u8> {
+    fn allocate(&mut self, sim: &mut Sim, client: Flow, message: &Message, now: f64) -> Vec<u8> {
         if let Some(existing) = self.live(client, now) {
             // A re-sent request is answered again; a second allocation on the
             // same flow is refused.
@@ -586,7 +690,7 @@ impl Relay {
     fn allocated(
         &self,
         message: &Message,
-        client: SocketAddr,
+        client: Flow,
         relayed: SocketAddr,
         lifetime_s: u32,
     ) -> Vec<u8> {
@@ -594,13 +698,13 @@ impl Relay {
             message,
             &[
                 (XOR_RELAYED_ADDRESS, xor_encode(relayed, &message.tid)),
-                (XOR_MAPPED_ADDRESS, xor_encode(client, &message.tid)),
+                (XOR_MAPPED_ADDRESS, xor_encode(client.addr, &message.tid)),
                 (LIFETIME, lifetime_s.to_be_bytes().to_vec()),
             ],
         )
     }
 
-    fn refresh(&mut self, client: SocketAddr, message: &Message, now: f64) -> Vec<u8> {
+    fn refresh(&mut self, client: Flow, message: &Message, now: f64) -> Vec<u8> {
         let requested = requested_lifetime(message).unwrap_or(DEFAULT_LIFETIME_S);
         let Some(allocation) = self.live(client, now) else {
             return self.error(message, 437, None);
@@ -617,7 +721,7 @@ impl Relay {
         self.success(message, &[(LIFETIME, lifetime_s.to_be_bytes().to_vec())])
     }
 
-    fn create_permission(&mut self, client: SocketAddr, message: &Message, now: f64) -> Vec<u8> {
+    fn create_permission(&mut self, client: Flow, message: &Message, now: f64) -> Vec<u8> {
         let peers: Vec<IpAddr> = message
             .attributes
             .iter()
@@ -641,7 +745,7 @@ impl Relay {
         self.success(message, &[])
     }
 
-    fn channel_bind(&mut self, client: SocketAddr, message: &Message, now: f64) -> Vec<u8> {
+    fn channel_bind(&mut self, client: Flow, message: &Message, now: f64) -> Vec<u8> {
         let number = message
             .get(CHANNEL_NUMBER)
             .filter(|value| value.len() == 4)
@@ -707,6 +811,37 @@ impl Relay {
         set_length(&mut out, length);
         out
     }
+}
+
+/// The first message whole in what a stream has delivered, as its length and
+/// the bytes it takes on the stream: a message is its header and the body
+/// its length names, a whole number of words; channel data is its header and
+/// its data, padded to four bytes. `Err` for a head that is neither, after
+/// which nothing on the stream can be found.
+fn message_on_stream(held: &[u8]) -> Result<Option<(usize, usize)>, ()> {
+    let Some(&first) = held.first() else {
+        return Ok(None);
+    };
+    let message = match first >> 6 {
+        0b00 => true,
+        0b01 => false,
+        _ => return Err(()),
+    };
+    let Some(length) = held
+        .get(2..4)
+        .map(|field| usize::from(u16::from_be_bytes([field[0], field[1]])))
+    else {
+        return Ok(None);
+    };
+    let (len, wire) = if message {
+        if length % 4 != 0 {
+            return Err(());
+        }
+        (20 + length, 20 + length)
+    } else {
+        (4 + length, (4 + length).next_multiple_of(4))
+    };
+    Ok((held.len() >= wire).then_some((len, wire)))
 }
 
 fn requested_lifetime(message: &Message) -> Option<u32> {

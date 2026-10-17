@@ -297,16 +297,29 @@ fn relay_answer(request: &[u8], relayed: std::net::SocketAddr) -> Vec<u8> {
 /// is its own peer here -- the same credentials both ways -- so a relay that
 /// hands back what it is sent, from the peer it was sent to, is all the
 /// network there is.
+///
+/// Over datagrams and over a stream. On a stream channel data goes padded,
+/// and comes back with the padding taken off by the stream's framing, as the
+/// shell takes it off.
 #[test]
 fn a_relayed_round_does_not_allocate() {
+    use lowlat_core::relay::Carrier;
+    for carrier in [Carrier::Datagram, Carrier::Stream] {
+        relayed_round(carrier);
+    }
+}
+
+fn relayed_round(carrier: lowlat_core::relay::Carrier) {
     use lowlat_core::conn::{Conn, Credentials, Kind};
     use lowlat_core::endpoint::Endpoint;
-    use lowlat_core::relay::Relay;
+    use lowlat_core::relay::{Carrier, Relay};
+    use lowlat_core::turn;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     let server = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 3478);
     let relayed = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), 50_048);
     let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), 22_974);
+    let over_stream = carrier == Carrier::Stream;
 
     let mut recv_bodies = vec![0u8; SLOT * SLOTS];
     let mut recv_meta = vec![SlotMeta::default(); SLOTS];
@@ -335,7 +348,7 @@ fn a_relayed_round_does_not_allocate() {
         [7; 16],
         0.0,
     );
-    let relay = Relay::new(server, "user", "password", [9; 16], 0.0);
+    let relay = Relay::new(server, "user", "password", [9; 16], 0.0).over(carrier);
     let mut endpoint = Endpoint::relayed(conn, session, relay);
     endpoint.add_candidate(peer, Kind::Direct).unwrap();
     endpoint.conn().set_peer_ready();
@@ -343,18 +356,23 @@ fn a_relayed_round_does_not_allocate() {
     let mut wire = [0u8; 2100];
     let mut scratch = [0u8; 2100];
     let mut message = vec![0u8; 8192];
-    let payload = [0x42u8; 2500];
+    // A length whose last fragment ends short of a whole word, so a stream's
+    // padding is there to be checked.
+    let payload = [0x42u8; 2501];
+    // Over a stream the binding left unanswered is kept here, since it is
+    // never sent again.
+    let held = std::cell::RefCell::new(Vec::with_capacity(2100));
 
     // One pass: requests answered, except a channel binding while `bind` is
     // false; a datagram for the peer handed straight back as the relay
     // delivers it -- an indication under the data method, channel data as it
-    // is.
+    // is, its padding taken off over a stream.
     let indications = std::cell::Cell::new(0u32);
     let channels = std::cell::Cell::new(0u32);
     let taken = std::cell::Cell::new(0u32);
     let mut pass = |endpoint: &mut Endpoint<'_>, now: f64, bind: bool| {
         while let Some(result) = endpoint.get_output(now, &mut wire) {
-            let len = result.unwrap().len;
+            let mut len = result.unwrap().len;
             let kind = u16::from_be_bytes([wire[0], wire[1]]);
             if wire[0] >> 6 == 0b01 || kind == 0x0016 {
                 if kind == 0x0016 {
@@ -362,6 +380,11 @@ fn a_relayed_round_does_not_allocate() {
                     indications.set(indications.get() + 1);
                 } else {
                     channels.set(channels.get() + 1);
+                }
+                if over_stream {
+                    let frame = turn::frame(&wire[..len]).unwrap().unwrap();
+                    assert_eq!(frame.wire, len, "unpadded on a stream");
+                    len = frame.len;
                 }
                 endpoint
                     .process_input(&wire[..len], server, None, now, &mut scratch)
@@ -371,6 +394,10 @@ fn a_relayed_round_does_not_allocate() {
                 endpoint
                     .process_input(&answer, server, None, now, &mut scratch)
                     .unwrap();
+            } else if over_stream {
+                let mut held = held.borrow_mut();
+                held.clear();
+                held.extend_from_slice(&wire[..len]);
             }
         }
         endpoint.poll(now);
@@ -413,8 +440,16 @@ fn a_relayed_round_does_not_allocate() {
     assert!(taken.get() > before.1, "no message arrived");
     assert_eq!(channels.get(), 0, "a channel was used before it was bound");
 
-    // The binding answered when it is next sent: channel data from there on.
+    // The binding answered when it is next sent, or over a stream the one
+    // sent and held: channel data from there on.
     let bound = now + lowlat_core::relay::RESEND_MS + 40.0;
+    if over_stream {
+        let answer = relay_answer(&held.borrow(), relayed);
+        let mut answer_scratch = [0u8; 2100];
+        endpoint
+            .process_input(&answer, server, None, bound, &mut answer_scratch)
+            .unwrap();
+    }
     round(&mut endpoint, bound, true);
     let before = (indications.get(), channels.get(), taken.get());
     alloc_counter::assert_no_alloc(|| {
