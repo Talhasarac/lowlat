@@ -91,6 +91,10 @@ the library and never printed: the relayed address is all the demo offers,
 every check goes through the relay, and the line at establishment says the
 path is relayed and where. A relay that does not answer, refuses the
 credential, or lets the allocation go ends the session with its own outcome.
+`LOWLAT_RELAY_CARRIER=tcp` reaches the relay over one TCP stream instead, for a
+network that carries no datagrams (section 7.4); `udp` is the default. It is
+the last rung, not a quality option: through a relay that stalls its streams
+the session's own recovery turns each stall into resends.
 `LOWLAT_LEGACY_CIPHER` offers no media key, so the host answers for the
 legacy 128-bit cipher, keyed from its certificate digest, as an older client
 would. `LOWLAT_MIC_TONE=440` sends a tone at that pitch as the microphone,

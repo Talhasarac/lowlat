@@ -405,7 +405,9 @@ static bool begin_attempt()
 		snprintf(cfg.relay_username, sizeof cfg.relay_username, "%s", knobs.relay_user);
 		snprintf(cfg.relay_password, sizeof cfg.relay_password, "%s",
 			password != NULL ? password : "");
-		printf("demo: a relay attempt through %s\n", knobs.relay);
+		cfg.relay_carrier = knobs.relay_carrier;
+		printf("demo: a relay attempt through %s over %s\n", knobs.relay,
+			knobs.relay_carrier == LOWLAT_RELAY_CARRIER_TCP ? "TCP" : "UDP");
 	}
 	printf("demo: asking %s\n", video_words());
 	lowlat_status s = lowlat_client_new_attempt(_client, &cfg, _attempt, LOWLAT_TRANSPORT_BUD,

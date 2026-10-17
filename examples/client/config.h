@@ -49,7 +49,9 @@
 // relay, with `LOWLAT_RELAY_USER` and `LOWLAT_RELAY_PASS` its credential,
 // which is handed to the library and never printed: the relayed address is
 // all this side offers, and every check goes through the relay. The password
-// is read at each attempt and kept nowhere here.
+// is read at each attempt and kept nowhere here. `LOWLAT_RELAY_CARRIER=tcp`
+// reaches that relay over one stream instead, for a network that carries no
+// datagrams; `udp`, the default, is the other.
 // `LOWLAT_SECONDS` leaves cleanly after that long; `LOWLAT_DUMP_FRAME` names
 // a file the tenth picture's planes are written to, so what the renderer
 // was handed can be looked at with another tool. `LOWLAT_RAW_AUDIO` asks
@@ -117,13 +119,15 @@ struct Settings {
 	lowlat_client_video_config video;
 
 	// Every attempt's: the reflexive servers as named, sound asked
-	// uncompressed, no media key offered, IPv4 alone, a relay and its user.
+	// uncompressed, no media key offered, IPv4 alone, a relay, its user and
+	// what reaches it.
 	const char *stun;
 	bool raw_audio;
 	bool legacy_cipher;
 	bool ipv4_only;
 	const char *relay;
 	const char *relay_user;
+	lowlat_relay_carrier relay_carrier;
 	// The translation asked of the reflexive servers before the attempt.
 	bool nat;
 

@@ -148,6 +148,15 @@ int read()
 	s.ipv4_only = getenv("LOWLAT_IPV4_ONLY") != NULL;
 	s.relay = env_or("LOWLAT_RELAY", "");
 	s.relay_user = env_or("LOWLAT_RELAY_USER", "");
+	const char *carrier = env_or("LOWLAT_RELAY_CARRIER", "udp");
+	if (strcmp(carrier, "udp") == 0) {
+		s.relay_carrier = LOWLAT_RELAY_CARRIER_UDP;
+	} else if (strcmp(carrier, "tcp") == 0) {
+		s.relay_carrier = LOWLAT_RELAY_CARRIER_TCP;
+	} else {
+		fprintf(stderr, "demo: LOWLAT_RELAY_CARRIER is udp or tcp: %s\n", carrier);
+		return 2;
+	}
 	s.nat = strcmp(env_or("LOWLAT_NAT", "0"), "0") != 0;
 	s.mic_hz = atof(env_or("LOWLAT_MIC_TONE", "0"));
 	s.dump_frame = getenv("LOWLAT_DUMP_FRAME");
