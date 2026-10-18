@@ -6,7 +6,8 @@ the day the host's own virtual display (W3) was added with its frame hand-off de
 planned at its own interview on 2026-10-15, and its first step, the driver and its package,
 built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3.6 -- the
 controller as a program of its own -- and W3.7 -- the review's fixes -- are built, and W3's gate
-waits for W2.5, reviewed the same day.
+waits for W2.5, reviewed the same day. *Amended 2026-10-18:* W2.5, the service, is built,
+checked on the development machine and closed; W3's gate is next.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -841,7 +842,7 @@ once, here.
   the speakers' mute moved to the new output and put back on the old; and the speakers
   silenced while a guest was seated and put back as it left, three times. A program in
   exclusive mode was checked by the machine's own tests, not live.
-- [ ] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
+- [x] **W2.5 the service**: the two roles, install and uninstall, a change of console session.
   Checked by a logoff mid-session and the guest reconnecting.
   *Added 2026-10-15, at W2.3's review:* the attention chord. The host asks the service, which
   makes the system's call for the secure screen, since the system takes it from a service alone;
@@ -905,6 +906,17 @@ once, here.
   on the network with the firewall on and no rule for the program. Fixed from them: each host
   has a job of its own, since a job holds one session's processes, and a host waiting for a
   display ends when asked rather than at the service's bound.
+  *Closed 2026-10-18:* a reboot with the service installed, the logon screen streamed before
+  anyone signed in and the sign-in kept in the boot's session; what a guest is told measured on
+  three established clients (the status stays); the ordinary user's refusals as an account
+  outside the administrators; a guest seated without the keyboard, whose keys are not typed and
+  whose client offers no chord, so the host's own refusal of it is read in the code and not
+  reached. **Known and deferred: a host ended with its session tells its guests nothing**, at a
+  logoff and at a shutdown, whose sessions end before any service hears of it -- the guests wait
+  for their own timeout, where the established host, a windowed program, hears its session
+  ending through its window and tells them the host shut down. The system's console notices of
+  either reach services alone (measured: none arrived at a logoff), and this host has no
+  window; the decision waits for a window of the host's own or the Windows tray.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1580,6 +1592,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5 closed: the reboot checked; a host ended with its session telling its guests
+  nothing recorded as a known gap and deferred.
 - 2026-10-18: W2.5: what a guest is told at a change of session measured on three clients -- the
   status stays; the ordinary-user refusals and a guest without the keyboard checked.
 - 2026-10-18: W2.5: a user switch, a logoff and guests through the firewall checked; a job for

@@ -902,7 +902,13 @@ After Gate B. The differences are contained:
   policy only for the length of each call. The login tool writes the configuration and restarts
   the service; Python is a prerequisite here, as the ViGEm bus is. The host advertises Windows,
   the system's major version, the computer's name and a random identifier kept beside its
-  configuration, so a listing does not become a fingerprint of the machine.
+  configuration, so a listing does not become a fingerprint of the machine. *Checked
+  2026-10-18:* where the host outlives a change of session or the service stops, each seated
+  guest is told the host system is changing; **a host ended with its session says nothing** --
+  at a logoff, and at a shutdown, whose sessions end before any service hears of it -- and its
+  guests wait for their own timeout. That is a known gap, deferred: the system tells a session's
+  end to a window, and of a program in the session to services alone through the console, and
+  this host has no window.
 
 None of this reaches the protocol core, the IO shell's logic, or the public API.
 

@@ -49,9 +49,11 @@ What works today, measured on one desktop (KDE Plasma on Wayland, Debian 13):
 
 What does not, yet:
 
-- A Windows host out of the box: the host, its display driver and the service are built, and
-  the machine checks that prove them remain
-  ([docs/impl-plan-windows.md](docs/impl-plan-windows.md) W2.5).
+- A Windows host out of the box: the host, its display driver and the service are built and
+  checked on the development machine, but there is no package yet -- the programs are staged
+  from a build and installed with `lowlatd install` -- and the Windows gates remain
+  ([docs/impl-plan-windows.md](docs/impl-plan-windows.md)). A guest is told nothing when the
+  host's session ends at a logoff or a shutdown, and waits for its own timeout.
 - A guest's microphone as a device other applications on the host can open: the route is
   measured and not built.
 - Relative pointer mode: an application that takes the pointer (mouselook) is not yet put into
@@ -128,7 +130,7 @@ same signaling over a second pipe, a data channel on the attempt socket, and
 | | Status |
 |---|---|
 | Linux host | primary target |
-| Windows host | in progress: the host, its display driver and the service are built; the machine checks remain ([docs/impl-plan-windows.md](docs/impl-plan-windows.md) W2.5) |
+| Windows host | in progress: the host, its display driver and the service are built and checked; a package and the gates remain ([docs/impl-plan-windows.md](docs/impl-plan-windows.md)) |
 | Linux client | the client half of the library, and the demo; what decodes on which part is [docs/09-compatibility.md](docs/09-compatibility.md) section 7a |
 | Windows client | planned, after Linux |
 | Guests of a host | any platform with a stock Parsec client, or a browser; nothing to install |

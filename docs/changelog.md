@@ -3,6 +3,24 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5 closed: the reboot, and a session's end left silent
+
+### Checked
+- A reboot with the service installed: the service started at boot and its host in the logon
+  screen's session within milliseconds; a guest streamed the logon screen before anyone signed
+  in, and the sign-in through it stayed in that session, so the guest was not moved.
+
+### Known and deferred
+- **A host ended with its session tells its guests nothing.** At a logoff, and at a shutdown,
+  whose sessions end before any service hears of it, the host goes with its session and each
+  guest waits for its own timeout; the established host, a windowed program, hears its session
+  ending through its window and tells its guests the host shut down. The system's console
+  notices of a logoff or a shutdown reach services alone -- a host listening for them heard
+  nothing at a logoff -- and this host has no window. Left until the host has a window of its
+  own, or the Windows tray.
+
+W2.5 is ticked.
+
 ## 2026-10-18 - W2.5: what a guest is told, measured; an ordinary user refused
 
 ### Decided by measurement
