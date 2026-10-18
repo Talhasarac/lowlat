@@ -3,6 +3,34 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5: a job for each host, and a host that ends while waiting for a display
+
+### Fixed
+- **A host started in another session ran outside the service's job.** A job holds the
+  processes of one session, the one its first process ran in, and the service made one job for
+  its whole life: every host after a change of the console's session failed to join it, and a
+  service ending then would have left that host running beside the next service's. Each host
+  now gets a kill-on-close job of its own, closed once the host has gone, and a host that cannot
+  be put in its job is ended before it runs.
+- **A host asked to end while waiting for a display outlived the request.** A change of session
+  can take the host's display away a moment before the service asks it to end, and the wait
+  that follows ran for up to twenty seconds without looking at the request, trying to plug the
+  host's own display meanwhile; the service ended it at its bound and the guests waited for the
+  new host the whole time. The wait now ends as soon as the host is ending. The same wait on
+  Linux does not look either; there the service manager's own stop timeout covers it.
+
+### Checked
+- On the development machine, with a second local account: a user switch both ways and that
+  account's logoff while a guest streamed -- the guest told the host is changing at each switch,
+  the logoff's host ended with its session and a new one on the logon screen a second later, the
+  user's session brought back through the guest; then the service killed while the host was in
+  the other account's session, the host gone with it within a second and a half and one new
+  host after; then three round trips of switches, each old host gone within 0.34 to 0.70 s of
+  the request, none ended at the bound, and nothing flickering at the desk.
+- The firewall on with no rule for the installed program: a guest on the network and one over
+  a mobile network both connected directly, with no prompt.
+- The host's tests (199), the daemon's (27), clippy and formatting.
+
 ## 2026-10-18 - W2.5: the attention policy read before it is written
 
 ### Fixed

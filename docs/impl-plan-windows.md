@@ -895,7 +895,11 @@ once, here.
   driver that fails is a line, not a failed install), and the log's rotation. The attention
   policy's key is opened for reading first and for writing only to write, since a locked key
   refuses the opening: checked with the key locked against the system account, the chord refused
-  with the value absent and made with it allowing services.
+  with the value absent and made with it allowing services. A user switch and a second
+  account's logoff were checked with a guest streaming, and a guest over the internet and one
+  on the network with the firewall on and no rule for the program. Fixed from them: each host
+  has a job of its own, since a job holds one session's processes, and a host waiting for a
+  display ends when asked rather than at the service's bound.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1571,6 +1575,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5: a user switch, a logoff and guests through the firewall checked; a job for
+  each host, and a host waiting for a display ending when asked.
 - 2026-10-18: W2.5: the attention policy's key read before it is written, and the locked key's
   two cases checked through a guest.
 - 2026-10-18: W2.5 checked on the fixed build (the end request with a guest, the host killed
