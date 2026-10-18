@@ -19,7 +19,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows_sys::Win32::Foundation::{
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_EXISTS,
-    ERROR_SUCCESS, GetLastError, LocalFree,
+    ERROR_SERVICE_NOT_ACTIVE, ERROR_SUCCESS, GetLastError, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
@@ -36,10 +36,10 @@ use windows_sys::Win32::System::Services::{
     OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_ACTION, SC_ACTION_RESTART,
     SC_MANAGER_CONNECT, SC_MANAGER_CREATE_SERVICE, SERVICE_ALL_ACCESS, SERVICE_AUTO_START,
     SERVICE_CONFIG_DESCRIPTION, SERVICE_CONFIG_FAILURE_ACTIONS,
-    SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL,
-    SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
-    SERVICE_START, SERVICE_STATUS, SERVICE_STOP, SERVICE_STOPPED, SERVICE_WIN32_OWN_PROCESS,
-    StartServiceW,
+    SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW,
+    SERVICE_ERROR_NORMAL, SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW,
+    SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS, SERVICE_STOP,
+    SERVICE_STOPPED, SERVICE_WIN32_OWN_PROCESS, StartServiceW,
 };
 use windows_sys::core::GUID;
 
@@ -103,6 +103,26 @@ fn same_path(left: &Path, right: &Path) -> bool {
         _ => left
             .to_string_lossy()
             .eq_ignore_ascii_case(&right.to_string_lossy()),
+    }
+}
+
+/// Copy a file, retrying briefly while a just-stopped service releases its
+/// image. The service is reported stopped a moment before its process ends.
+fn copy_file(from: &Path, to: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut last = None;
+    for _ in 0..10 {
+        match std::fs::copy(from, to) {
+            Ok(_) => return Ok(()),
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32)) => {
+                last = Some(error);
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    match last {
+        Some(error) => Err(format!("{}: {error}", to.display()).into()),
+        None => Err(format!("{}: the copy did not happen", to.display()).into()),
     }
 }
 
@@ -530,10 +550,71 @@ fn vigem_installed() -> bool {
     installed
 }
 
+/// Stop an installed service before its program is replaced, bounded at
+/// thirty seconds. Absent is fine, and a running host goes with the job.
+fn stop_existing_service() -> Result<(), Box<dyn std::error::Error>> {
+    // SAFETY: no machine and no database name.
+    let manager = unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) };
+    if manager.is_null() {
+        return Err(
+            format!("the service manager was not opened, error={}", unsafe {
+                GetLastError()
+            })
+            .into(),
+        );
+    }
+    let name = wide(SERVICE_NAME);
+    // SAFETY: a terminated name and the access the stop needs.
+    let service =
+        unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_STOP | SERVICE_QUERY_STATUS) };
+    if service.is_null() {
+        let error = unsafe { GetLastError() };
+        // SAFETY: the manager is open here.
+        unsafe { windows_sys::Win32::System::Services::CloseServiceHandle(manager) };
+        if error == ERROR_SERVICE_DOES_NOT_EXIST {
+            return Ok(());
+        }
+        return Err(format!("the service was not opened, error={error}").into());
+    }
+    let mut status = SERVICE_STATUS::default();
+    // SAFETY: an open service and a live status structure.
+    let requested = unsafe { ControlService(service, SERVICE_CONTROL_STOP, &raw mut status) };
+    if requested == 0 {
+        let error = unsafe { GetLastError() };
+        if error != ERROR_SERVICE_NOT_ACTIVE {
+            lowlat_common::log_warn!("lowlatd: the service stop was not accepted, error={error}");
+        }
+    }
+    let mut stopped = false;
+    for _ in 0..60 {
+        let mut status = SERVICE_STATUS::default();
+        // SAFETY: as above.
+        if unsafe { QueryServiceStatus(service, &raw mut status) } != 0
+            && status.dwCurrentState == SERVICE_STOPPED
+        {
+            stopped = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    // SAFETY: both handles are open here.
+    unsafe {
+        windows_sys::Win32::System::Services::CloseServiceHandle(service);
+        windows_sys::Win32::System::Services::CloseServiceHandle(manager);
+    }
+    if !stopped {
+        return Err("the service did not stop within thirty seconds".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn install() -> Result<(), Box<dyn std::error::Error>> {
     if !elevated() {
         return Err("install needs an elevated shell (Run as administrator)".into());
     }
+    // A running service holds its own image open, so it is stopped first;
+    // the host it started goes with the job.
+    stop_existing_service()?;
     let exe = std::env::current_exe()?;
     let source = exe
         .parent()
@@ -542,15 +623,30 @@ pub(crate) fn install() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&target)?;
     let installed = target.join("lowlatd.exe");
     if !same_path(&exe, &installed) {
-        std::fs::copy(&exe, &installed)?;
+        copy_file(&exe, &installed)?;
         lowlat_common::log_info!("lowlatd: copied {}", installed.display());
     }
     for name in ["lowlat-vdd.exe", "lowlat-login.py", "lowlatd.env.template"] {
         let from = source.join(name);
         let to = target.join(name);
         if from.exists() && !same_path(&from, &to) {
-            std::fs::copy(&from, &to)?;
+            copy_file(&from, &to)?;
             lowlat_common::log_info!("lowlatd: copied {}", to.display());
+        }
+    }
+    // The driver's package travels beside the program, in its own folder.
+    let staged_driver = source.join("driver");
+    let driver = target.join("driver");
+    if staged_driver.exists() && !same_path(&staged_driver, &driver) {
+        std::fs::create_dir_all(&driver)?;
+        for entry in std::fs::read_dir(&staged_driver)? {
+            let entry = entry?;
+            let from = entry.path();
+            if from.is_file() {
+                let to = driver.join(entry.file_name());
+                copy_file(&from, &to)?;
+                lowlat_common::log_info!("lowlatd: copied {}", to.display());
+            }
         }
     }
 
@@ -615,7 +711,7 @@ fn remove_service() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut status = SERVICE_STATUS::default();
     // SAFETY: an open service and a live status structure.
-    unsafe { ControlService(service, SERVICE_STOP, &raw mut status) };
+    unsafe { ControlService(service, SERVICE_CONTROL_STOP, &raw mut status) };
     for _ in 0..60 {
         let mut status = SERVICE_STATUS::default();
         // SAFETY: an open service and a live status structure.

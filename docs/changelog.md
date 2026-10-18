@@ -3,6 +3,35 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5 checked on the machine: the service, install and the fixes
+
+### Checked
+- Install from the staged folder, elevated: the programs and the driver package under the
+  program-files directory, the program-data folder and `lowlatd.env` owned by Administrators
+  and readable or writable by the system account and Administrators alone (an ordinary user's
+  read and create both refused), the service automatic as LocalSystem, the driver updated, and
+  the service running.
+- Install again over the running install: stopped, replaced, running.
+- Not logged in: one host start in the console session, its one line, exit 0, no restart.
+- The host killed: back two seconds later.
+- The service killed: the host went with the job, and the service manager started the service
+  again.
+- The service stopped and started: the host asked to end and left cleanly; a new host after.
+
+### Fixed
+- **The install did not copy the driver's folder**, so the staged package was never installed;
+  it now copies `driver\` beside the program and installs or updates it.
+- **The stop passed the access right where the control code belongs** (`SERVICE_STOP` instead
+  of `SERVICE_CONTROL_STOP`), so an install over a running service never stopped it; both stop
+  paths now send the control.
+- **The copies retry briefly** while a stopped service's image unmaps: the service is reported
+  stopped a moment before its process ends.
+
+### Not run
+- A logoff, a remote desktop connection, the chord, the advertisement with a real session, a
+  guest on the LAN and one over the internet, a reboot, and D1's measurement: each needs a
+  session, clients or a reboot.
+
 ## 2026-10-18 - W2.5 built: the service, the install and the chord
 
 ### Built

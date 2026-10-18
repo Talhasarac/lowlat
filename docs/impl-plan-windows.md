@@ -872,6 +872,12 @@ once, here.
   events; the chord is the service's call with the policy set around it; `install` and
   `uninstall` place the programs, protect the configuration and handle the display driver.
   **The machine checks C5-C18 and the measurement D1 stay open**, so the step stays open.
+  *Checked 2026-10-18 on the development machine:* install and install over a running install;
+  the configuration's access refused to an ordinary user; the not-logged-in host started once
+  and left; the host killed and back in two seconds; the service killed, the host going with it
+  and the service started again; the service stopped and started, the host asked to end. A
+  logoff, a remote connection, the chord, the advertisement with a real session, guests, a
+  reboot and D1's measurement remain.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1547,6 +1553,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5 checked on the machine: install (stopped, stopped over running), the
+  configuration's access, the not-logged-in host, the host killed and back in two seconds, the
+  service killed with the host going with it, stop and start. Three fixes: the driver folder is
+  copied, the stop sends the control code, the copies retry while the image unmaps. The checks
+  needing a session, guests or a reboot remain.
 - 2026-10-18: W2.5 built: the advertisement, wording, configuration and login (the first
   commit); the service role, install and uninstall, and the chord's call (the second). The
   machine checks and D1's measurement remain, so the step stays open.
