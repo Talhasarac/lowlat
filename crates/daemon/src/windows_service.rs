@@ -622,113 +622,140 @@ fn launch(state: &State, session: u32) -> Result<(HANDLE, u32), String> {
 /// The machine's policy for the secure attention call, set around one call.
 ///
 /// The value is written only when it does not already allow services, put back
-/// afterwards, and deleted when it was absent. A write refused with
-/// `ACCESS_DENIED` is a policy the service must not change: the call is made
-/// only if the value already allows it, and otherwise refused with a line
-/// naming the policy (docs/impl-plan-windows.md W2.5, D8).
+/// afterwards, and deleted when it was absent.
+///
+/// **Read first, and the write asked for only when it is needed.** A registry
+/// key's access is checked when it is opened, so a key a policy locked
+/// refuses the opening for writing rather than the write. That refusal is a
+/// policy the service must not change, and the call is refused with a line
+/// naming it; a locked key whose value already allows services is called
+/// through with nothing written (docs/impl-plan-windows.md W2.5, D8 and D9).
 fn secure_attention() {
     let key = wide(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
     let value_name = wide("SoftwareSASGeneration");
-    let mut key_handle = std::ptr::null_mut();
-    // SAFETY: a terminated subkey and a handle written by the call.
-    let rc = unsafe {
-        RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE,
-            key.as_ptr(),
-            0,
-            KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_64KEY,
-            &raw mut key_handle,
-        )
+    let size = u32::try_from(core::mem::size_of::<u32>()).unwrap_or(0);
+    let open = |access: u32| {
+        let mut handle = std::ptr::null_mut();
+        // SAFETY: a terminated subkey and a handle written by the call.
+        let rc = unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                0,
+                access | KEY_WOW64_64KEY,
+                &raw mut handle,
+            )
+        };
+        if rc == ERROR_SUCCESS {
+            Ok(handle)
+        } else {
+            Err(rc)
+        }
     };
-    if rc != ERROR_SUCCESS {
-        lowlat_common::log_warn!("lowlatd: the SAS policy key was not opened, error={rc}");
-        return;
-    }
+
+    let reading = match open(KEY_QUERY_VALUE) {
+        Ok(handle) => handle,
+        Err(rc) => {
+            lowlat_common::log_warn!("lowlatd: the SAS policy key was not opened, error={rc}");
+            return;
+        }
+    };
     let mut value: u32 = 0;
     let mut kind: u32 = 0;
-    let mut size = u32::try_from(core::mem::size_of::<u32>()).unwrap_or(0);
-    let mut existed = true;
-    // SAFETY: the value buffer is a u32 and `size` says so.
+    let mut read = size;
+    // SAFETY: the value buffer is a u32 and `read` says so.
     let rc = unsafe {
         RegQueryValueExW(
-            key_handle,
+            reading,
             value_name.as_ptr(),
             std::ptr::null_mut(),
             &raw mut kind,
             (&raw mut value).cast(),
-            &raw mut size,
+            &raw mut read,
         )
     };
-    if rc == ERROR_FILE_NOT_FOUND {
-        existed = false;
-        value = 0;
-    } else if rc != ERROR_SUCCESS || kind != REG_DWORD || size != 4 {
+    // SAFETY: the key was opened above and is closed once.
+    unsafe { RegCloseKey(reading) };
+    let found = if rc == ERROR_FILE_NOT_FOUND {
+        None
+    } else if rc != ERROR_SUCCESS || kind != REG_DWORD || read != 4 {
         lowlat_common::log_warn!(
             "lowlatd: the SAS policy value was not read, error={rc} kind={kind}"
         );
-        // SAFETY: the key is open here.
-        unsafe { RegCloseKey(key_handle) };
+        return;
+    } else {
+        Some(value)
+    };
+    let policy = found.map_or_else(|| "absent".to_string(), |value| value.to_string());
+
+    if found.is_some_and(|value| value & 1 != 0) {
+        // SAFETY: sas.dll's only call, with the flag the established host passes.
+        unsafe { SendSAS(0) };
+        lowlat_common::log_info!("lowlatd: secure attention, asked=service policy={policy}");
         return;
     }
 
-    let mut changed = false;
-    if value & 1 == 0 {
-        let allowed = value | 1;
-        // SAFETY: a u32 value and its size, on an open key.
-        let rc = unsafe {
-            RegSetValueExW(
-                key_handle,
-                value_name.as_ptr(),
-                0,
-                REG_DWORD,
-                (&raw const allowed).cast(),
-                u32::try_from(core::mem::size_of::<u32>()).unwrap_or(0),
-            )
-        };
-        if rc == ERROR_ACCESS_DENIED {
-            // SAFETY: the key is open here.
-            unsafe { RegCloseKey(key_handle) };
+    let writing = match open(KEY_SET_VALUE) {
+        Ok(handle) => handle,
+        Err(ERROR_ACCESS_DENIED) => {
             lowlat_common::log_warn!(
-                "lowlatd: the SAS policy is managed and does not allow services, refused=policy"
+                "lowlatd: the SAS policy is managed and does not allow services, refused=policy policy={policy}"
             );
             return;
         }
-        if rc != ERROR_SUCCESS {
-            // SAFETY: the key is open here.
-            unsafe { RegCloseKey(key_handle) };
-            lowlat_common::log_warn!("lowlatd: the SAS policy was not set, error={rc}");
+        Err(rc) => {
+            lowlat_common::log_warn!(
+                "lowlatd: the SAS policy key was not opened for writing, error={rc}"
+            );
             return;
         }
-        changed = true;
+    };
+    let allowed = found.unwrap_or(0) | 1;
+    // SAFETY: a u32 value and its size, on an open key.
+    let rc = unsafe {
+        RegSetValueExW(
+            writing,
+            value_name.as_ptr(),
+            0,
+            REG_DWORD,
+            (&raw const allowed).cast(),
+            size,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        // SAFETY: the key is open here and closed once.
+        unsafe { RegCloseKey(writing) };
+        lowlat_common::log_warn!("lowlatd: the SAS policy was not set, error={rc}");
+        return;
     }
 
     // SAFETY: sas.dll's only call, with the flag the established host passes.
     unsafe { SendSAS(0) };
 
-    // Put back what was found, on every path after a change, including one
-    // where the call above did nothing.
-    if changed {
-        // SAFETY: the key is open and the value is a u32 or absent.
-        unsafe {
-            if existed {
-                RegSetValueExW(
-                    key_handle,
-                    value_name.as_ptr(),
-                    0,
-                    REG_DWORD,
-                    (&raw const value).cast(),
-                    u32::try_from(core::mem::size_of::<u32>()).unwrap_or(0),
-                );
-            } else {
-                RegDeleteValueW(key_handle, value_name.as_ptr());
-            }
-            RegCloseKey(key_handle);
-        }
-    } else {
-        // SAFETY: the key is open here.
-        unsafe { RegCloseKey(key_handle) };
+    // Put back what was found, including when the call above did nothing.
+    // SAFETY: the key is open, the value a u32 or deleted, and the key closed
+    // once.
+    let restored = unsafe {
+        let restored = match found {
+            Some(value) => RegSetValueExW(
+                writing,
+                value_name.as_ptr(),
+                0,
+                REG_DWORD,
+                (&raw const value).cast(),
+                size,
+            ),
+            None => RegDeleteValueW(writing, value_name.as_ptr()),
+        };
+        RegCloseKey(writing);
+        restored
+    };
+    if restored != ERROR_SUCCESS {
+        lowlat_common::log_warn!(
+            "lowlatd: the SAS policy was not put back, error={restored} policy={policy}"
+        );
     }
-    lowlat_common::log_info!("lowlatd: secure attention, asked=service");
+    lowlat_common::log_info!("lowlatd: secure attention, asked=service policy={policy}");
 }
 
 #[link(name = "sas")]
