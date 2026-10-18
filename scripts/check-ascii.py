@@ -18,7 +18,7 @@ import sys
 ALLOWED = {"§"}
 
 EXTENSIONS = {
-    ".rs", ".md", ".toml", ".py", ".sh", ".c", ".h", ".ts", ".js",
+    ".rs", ".md", ".toml", ".py", ".sh", ".ps1", ".c", ".h", ".ts", ".js",
     ".json", ".yml", ".yaml", ".glsl", ".hlsl", ".comp", ".service",
     ".cs", ".csproj",
 }

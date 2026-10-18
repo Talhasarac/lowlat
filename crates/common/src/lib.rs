@@ -7,6 +7,7 @@
 pub mod bytes;
 pub mod clock;
 pub mod dynlib;
+pub mod env_file;
 pub mod events;
 pub mod latest;
 pub mod log;

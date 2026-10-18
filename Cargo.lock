@@ -995,6 +995,7 @@ dependencies = [
  "log",
  "lowlat-audio",
  "lowlat-common",
+ "lowlat-crypto",
  "lowlat-host",
  "lowlat-kessel",
  "lowlat-vdd-ctl",

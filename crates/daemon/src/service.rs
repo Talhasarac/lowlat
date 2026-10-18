@@ -91,6 +91,19 @@ const READY_PORT: u16 = 1234;
 const UNREAD_MARKER_ADDRESS: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0);
 
+/// What a host with no session says, in the words of the platform it runs on.
+#[cfg(windows)]
+const NOT_LOGGED_IN: &str = "lowlatd: not logged in, KESSEL_SESSION is read from %ProgramData%\\lowlat\\lowlatd.env and lowlat-login.py --install obtains it";
+#[cfg(not(windows))]
+const NOT_LOGGED_IN: &str = "lowlatd: not logged in, KESSEL_SESSION is read from /etc/lowlat/lowlatd.env and lowlat-login --install obtains it";
+
+/// Why capture was refused, again in the platform's own terms: on Linux the
+/// privilege is the answer, on Windows the session the host runs in.
+#[cfg(windows)]
+const CAPTURE_REFUSED: &str = "a display is lit and its framebuffer cannot be reached; the host must run in the console session, or --synth to generate pictures instead";
+#[cfg(not(windows))]
+const CAPTURE_REFUSED: &str = "a display is lit and its framebuffer cannot be reached; this needs the capture privilege, or --synth to generate pictures instead";
+
 #[tokio::main]
 pub(crate) async fn main() {
     if let Err(error) = run().await {
@@ -264,10 +277,157 @@ fn sound_server() -> Option<String> {
     named
 }
 
+/// A small text file's contents, trimmed; empty when it cannot be read.
+#[cfg(not(windows))]
 fn read(path: &str) -> String {
     std::fs::read_to_string(path)
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
+}
+
+/// The machine's own name: the kernel's on Linux, the system's on Windows.
+#[cfg(not(windows))]
+fn host_name() -> String {
+    read("/proc/sys/kernel/hostname")
+}
+
+#[cfg(windows)]
+fn host_name() -> String {
+    computer_name()
+}
+
+/// What the advertisement says this machine is: its system, that system's
+/// version, the platform's own word for itself, and the listing's identifier.
+#[cfg(not(windows))]
+fn platform_fields() -> (&'static str, String, &'static str, String) {
+    (
+        "linux",
+        read("/proc/sys/kernel/osrelease"),
+        "linux",
+        read("/etc/machine-id"),
+    )
+}
+
+#[cfg(windows)]
+fn platform_fields() -> (&'static str, String, &'static str, String) {
+    ("Windows", os_version(), "windows", device_id())
+}
+
+/// The system's major version, as a client's listing shows it.
+///
+/// **`RtlGetVersion`, not `GetVersionExW`.** The latter answers with the
+/// version the process's manifest declares unless the image opts into a newer
+/// one, which would put a made-up number in a public listing; ntdll answers
+/// what the kernel is.
+#[cfg(windows)]
+fn os_version() -> String {
+    #[repr(C)]
+    struct OsVersionInfo {
+        size: u32,
+        major: u32,
+        _minor: u32,
+        _build: u32,
+        _platform: u32,
+        _service_pack: [u16; 128],
+    }
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlGetVersion(info: *mut OsVersionInfo) -> i32;
+    }
+    let mut info = OsVersionInfo {
+        size: u32::try_from(core::mem::size_of::<OsVersionInfo>()).unwrap_or(0),
+        major: 0,
+        _minor: 0,
+        _build: 0,
+        _platform: 0,
+        _service_pack: [0; 128],
+    };
+    // SAFETY: the structure is sized by its first field as the call requires
+    // and lives across the call; the call writes within that size.
+    let status = unsafe { RtlGetVersion(&raw mut info) };
+    if status == 0 {
+        info.major.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// The computer's network name, as the system reports it.
+#[cfg(windows)]
+fn computer_name() -> String {
+    unsafe extern "system" {
+        fn GetComputerNameW(name: *mut u16, size: *mut u32) -> i32;
+    }
+    // Room for the longest such name, fifteen characters, and more.
+    let mut name = [0u16; 64];
+    let mut len = u32::try_from(name.len()).unwrap_or(0);
+    // SAFETY: a buffer of `len` wide characters and its length, both live for
+    // the call; the call writes at most that many and shortens `len`.
+    let ok = unsafe { GetComputerNameW(name.as_mut_ptr(), &raw mut len) };
+    if ok == 0 {
+        return String::new();
+    }
+    let len = usize::try_from(len).unwrap_or(0).min(name.len());
+    String::from_utf16_lossy(name.get(..len).unwrap_or(&[]))
+}
+
+/// The identifier a listing shows for this machine: thirty-two hex characters
+/// made once from the one entropy source and kept beside the configuration.
+///
+/// **Random, not derived.** It need only be stable across restarts and
+/// distinct between machines; deriving it from hardware or the installation's
+/// identifier would make a public listing a fingerprint of the machine. A
+/// file that cannot be read is made again, and one that cannot be written is
+/// used for this process with a line saying so. Uninstall keeps it.
+#[cfg(windows)]
+fn device_id() -> String {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let Some(path) = device_id_path() else {
+            return fresh_device_id();
+        };
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let text = text.trim();
+            if is_device_id(text) {
+                return text.to_string();
+            }
+        }
+        let id = fresh_device_id();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(error) = std::fs::write(&path, &id) {
+            lowlat_common::log_warn!("lowlatd: device id not kept at {}: {error}", path.display());
+        }
+        id
+    })
+    .clone()
+}
+
+#[cfg(windows)]
+fn device_id_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("ProgramData").map(|base| {
+        std::path::PathBuf::from(base)
+            .join("lowlat")
+            .join("device-id")
+    })
+}
+
+#[cfg(windows)]
+fn is_device_id(text: &str) -> bool {
+    text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(windows)]
+fn fresh_device_id() -> String {
+    let mut bytes = [0u8; 16];
+    match lowlat_crypto::fill(&mut bytes) {
+        Ok(()) => lowlat_crypto::hex(&bytes),
+        Err(_) => {
+            lowlat_common::log_warn!("lowlatd: the platform supplied no entropy for a device id");
+            String::new()
+        }
+    }
 }
 
 /// The signaling address from what the configuration names: the public service
@@ -296,15 +456,16 @@ pub(crate) fn occupancy(seam: &Admission) -> u32 {
 }
 
 fn advertisement(name: &str, capacity: u32, players: u32) -> ConnUpdate {
+    let (os, os_v, platform, device_id) = platform_fields();
     ConnUpdate {
         loader_v: 0,
         service_v: 0,
-        os: "linux".to_string(),
-        os_v: read("/proc/sys/kernel/osrelease"),
-        platform: "linux".to_string(),
+        os: os.to_string(),
+        os_v,
+        platform: platform.to_string(),
         app_v: APP_V.to_string(),
         sdk_v: SDK_V,
-        device_id: read("/etc/machine-id"),
+        device_id,
         mode: "desktop".to_string(),
         name: name.to_string(),
         desc: String::new(),
@@ -458,11 +619,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             lowlat_host::display::Capturable::NotReachable => {
-                return Err(
-                    "a display is lit and its framebuffer cannot be reached; this needs the \
-                            capture privilege, or --synth to generate pictures instead"
-                        .into(),
-                );
+                return Err(CAPTURE_REFUSED.into());
             }
         }
     }
@@ -473,14 +630,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // this says what is missing and where it goes, and exits cleanly.
     let session = std::env::var("KESSEL_SESSION").unwrap_or_default();
     if session.trim().is_empty() {
-        lowlat_common::log_warn!(
-            "lowlatd: not logged in, KESSEL_SESSION is read from /etc/lowlat/lowlatd.env and \
-             lowlat-login --install obtains it"
-        );
+        lowlat_common::log_warn!("{}", NOT_LOGGED_IN);
         return Ok(());
     }
     let server = signaling_url(&std::env::var("KESSEL_WS_SERVER").unwrap_or_default());
-    let hostname = read("/proc/sys/kernel/hostname");
+    let hostname = host_name();
     let name = flag("--name").unwrap_or(if hostname.is_empty() {
         "lowlat".to_string()
     } else {
@@ -1182,6 +1336,21 @@ mod role_tests {
             program_of(["--output", "card0:DP-1", "--session"]),
             Program::Service
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod platform_tests {
+    use super::is_device_id;
+
+    /// The listing's identifier has the shape the established host sends:
+    /// thirty-two hex characters and nothing else.
+    #[test]
+    fn a_device_id_is_thirty_two_hex_characters() {
+        assert!(is_device_id("0123456789abcdef0123456789abcdef"));
+        assert!(!is_device_id("0123456789abcdef0123456789abcde"));
+        assert!(!is_device_id("0123456789abcdef0123456789abcdeg"));
+        assert!(!is_device_id(""));
     }
 }
 

@@ -49,7 +49,9 @@ What works today, measured on one desktop (KDE Plasma on Wayland, Debian 13):
 
 What does not, yet:
 
-- A Windows host.
+- A Windows host out of the box: the host and its display driver are built, and the service
+  that starts it at boot and on the logon screen is open work
+  ([docs/impl-plan-windows.md](docs/impl-plan-windows.md) W2.5).
 - A guest's microphone as a device other applications on the host can open: the route is
   measured and not built.
 - Relative pointer mode: an application that takes the pointer (mouselook) is not yet put into
@@ -126,7 +128,7 @@ same signaling over a second pipe, a data channel on the attempt socket, and
 | | Status |
 |---|---|
 | Linux host | primary target |
-| Windows host | planned |
+| Windows host | in progress: the host and its display driver are built; the service that starts it at boot is open ([docs/impl-plan-windows.md](docs/impl-plan-windows.md) W2.5) |
 | Linux client | the client half of the library, and the demo; what decodes on which part is [docs/09-compatibility.md](docs/09-compatibility.md) section 7a |
 | Windows client | planned, after Linux |
 | Guests of a host | any platform with a stock Parsec client, or a browser; nothing to install |

@@ -864,6 +864,11 @@ once, here.
   streamed before anyone signs in; and **the logoff**, last, from a guest's own menu while
   streaming -- it ends the session the development tools run in; both bars. No user switch is run:
   the machine has one person's account, and a switch is the same change of session.
+  *Built 2026-10-18, in part:* the advertisement says Windows, the system's major version, the
+  computer's name and a random identifier kept beside the configuration; the configuration
+  file's format, its Windows template and the login tool's Windows branch are in;
+  `scripts/stage-windows.ps1` builds the folder install copies from. The service role, install
+  and uninstall, and the chord's call remain, so the step stays open.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1539,6 +1544,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5 in part built: the Windows advertisement (Windows, the major version, the
+  computer's name, a random identifier kept beside the configuration); the two Linux-worded
+  lines worded for their platform; the configuration file's parser and Windows template; the
+  login tool's Windows branch; the staging script. The service role, install and the chord's
+  call remain.
 - 2026-10-17: W2.5 reviewed: the service decides on every pass and restarts only a failed exit;
   two inherited events between the service and its host; the programs copied into the
   program-files directory and the program-data folder protected explicitly; the display driver

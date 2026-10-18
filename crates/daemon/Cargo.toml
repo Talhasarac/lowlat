@@ -39,6 +39,9 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 # `lowlatd display`: the virtual displays through the driver's controller.
 lowlat-vdd-ctl.workspace = true
+# The device id the advertisement carries: the workspace's one entropy
+# source, so the id is drawn rather than derived from the machine.
+lowlat-crypto.workspace = true
 
 [lints]
 workspace = true

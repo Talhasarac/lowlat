@@ -3,6 +3,30 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5 in part: the host's Windows face and its login
+
+### Built
+- **The advertisement on Windows** says `Windows`, the system's major version as
+  `RtlGetVersion` reports it, the platform's word `windows`, the computer's name, and a
+  random 32-hex device id drawn once from the one entropy source and kept beside the
+  configuration, so a public listing is not a fingerprint of the machine.
+- **The two lines that named Linux paths and privileges** are worded for the platform they
+  run on: where the configuration file is and how the login is obtained, and that capture
+  needs the console session rather than a Linux capability.
+- **The configuration file's format** is one parser in `lowlat-common` (`KEY=VALUE`, `#`
+  comments, the first `=` splitting, CRLF accepted), and `packaging/lowlatd.env.windows`
+  is the template.
+- **The login tool learns Windows** ([05 §7.3](05-host.md)):
+  `%ProgramData%\lowlat\lowlatd.env`, the elevation check, and the service restarted
+  through the service manager, its waits bounded. Python remains a prerequisite there.
+- **`scripts/stage-windows.ps1`** builds the folder install copies from: the host, the
+  display controller, the driver's package when one has been signed, the login tool and
+  the template.
+
+### Still open
+- The service role, install and uninstall, and the chord's call; W2.5 stays unticked, and
+  the README's Windows row says in progress until they land.
+
 ## 2026-10-17 - W2.5 reviewed: the service
 
 ### Decided
