@@ -143,16 +143,15 @@ fn level_of(level: log::Level) -> lowlat_common::log::Level {
     }
 }
 
-/// Which of the two programs an invocation is.
+/// Which program an invocation is.
 ///
-/// **One binary, two roles**, because the two sides speak a private protocol
+/// **One binary, several roles**, because the sides speak a private protocol
 /// that changes whenever either does and one build cannot disagree with itself
 /// (docs/07-platforms.md section 5.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Program {
-    /// The system service: the stream, the network, and the socket the session
-    /// side connects to.
-    Service,
+    /// The host itself, which is what an invocation with no role word is.
+    Host,
     /// The session agent, which connects outward and speaks for its own
     /// session and no other.
     Session,
@@ -160,6 +159,11 @@ enum Program {
     Tray,
     /// The virtual displays from a shell: a command that runs and ends.
     Display,
+    /// Windows' service manager's role: start and watch the host's processes.
+    Service,
+    /// Windows' install and uninstall, from an elevated shell.
+    Install,
+    Uninstall,
 }
 
 /// The words that select the session-side roles, in first position and
@@ -167,6 +171,9 @@ enum Program {
 const SESSION_ROLE: &str = "session";
 const TRAY_ROLE: &str = "tray";
 const DISPLAY_ROLE: &str = "display";
+const SERVICE_ROLE: &str = "service";
+const INSTALL_ROLE: &str = "install";
+const UNINSTALL_ROLE: &str = "uninstall";
 
 /// The program this invocation is, from the arguments after the name it was
 /// run under.
@@ -181,7 +188,92 @@ fn program_of<'a>(args: impl IntoIterator<Item = &'a str>) -> Program {
         Some(SESSION_ROLE) => Program::Session,
         Some(TRAY_ROLE) => Program::Tray,
         Some(DISPLAY_ROLE) => Program::Display,
-        _ => Program::Service,
+        Some(SERVICE_ROLE) => Program::Service,
+        Some(INSTALL_ROLE) => Program::Install,
+        Some(UNINSTALL_ROLE) => Program::Uninstall,
+        _ => Program::Host,
+    }
+}
+
+/// The Windows control roles, named so the refusal off Windows can say which
+/// one was asked for.
+#[derive(Debug, Clone, Copy)]
+enum ControlRole {
+    Service,
+    Install,
+    Uninstall,
+}
+
+#[cfg(not(windows))]
+impl ControlRole {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Service => SERVICE_ROLE,
+            Self::Install => INSTALL_ROLE,
+            Self::Uninstall => UNINSTALL_ROLE,
+        }
+    }
+}
+
+/// Run one of the control roles, or refuse it where the platform has no such
+/// mechanism: the Linux unit is installed by packaging/install.sh, not by the
+/// daemon.
+#[cfg(windows)]
+fn control_role(role: ControlRole) -> Result<(), Box<dyn std::error::Error>> {
+    match role {
+        ControlRole::Service => crate::windows_service::run_service(),
+        ControlRole::Install => crate::windows_service::install(),
+        ControlRole::Uninstall => crate::windows_service::uninstall(),
+    }
+}
+
+#[cfg(not(windows))]
+fn control_role(role: ControlRole) -> Result<(), Box<dyn std::error::Error>> {
+    Err(format!(
+        "lowlatd: the {} role is only for Windows; packaging/install.sh installs the unit on this platform",
+        role.word()
+    )
+    .into())
+}
+
+/// A stop flag the host's loops wait on beside the console's interrupt.
+///
+/// The service's end event raises it on Windows; on every other platform
+/// nothing does, and the interrupt is the only way out.
+#[derive(Clone)]
+pub(crate) struct Stop {
+    fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl Stop {
+    #[cfg(not(windows))]
+    pub(crate) fn never() -> Self {
+        Self::new()
+    }
+
+    pub(crate) fn new() -> Self {
+        Self {
+            fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    pub(crate) fn fired(&self) -> bool {
+        self.fired.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) async fn wait(&self) {
+        if self.fired() {
+            return;
+        }
+        self.notify.notified().await;
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn fire(&self) {
+        self.fired.store(true, std::sync::atomic::Ordering::Release);
+        self.notify.notify_waiters();
     }
 }
 
@@ -565,7 +657,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Program::Session => session_side::session(),
         Program::Tray => session_side::tray(),
         Program::Display => crate::display::main(args.get(1..).unwrap_or(&[])),
-        Program::Service => {}
+        Program::Service => return control_role(ControlRole::Service),
+        Program::Install => return control_role(ControlRole::Install),
+        Program::Uninstall => return control_role(ControlRole::Uninstall),
+        Program::Host => {}
     }
     // **The host's waits are milliseconds, and Windows rounds each one up to
     // its tick, about 15.6 ms, until the process raises it.** The library's
@@ -574,6 +669,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _timer = lowlat_common::clock::TimerResolution::raise();
     #[cfg(windows)]
     raise_process_class();
+    // **The service's handles, if this host was started by it**: the log and
+    // the two events, taken before anything logs so the first line reaches
+    // the service's file. Nothing happens when it was not.
+    #[cfg(windows)]
+    crate::windows_service::host_handles();
+    #[cfg(windows)]
+    let stop = crate::windows_service::stop_signal();
+    #[cfg(not(windows))]
+    let stop = Stop::never();
     // **Before anything else is set up.** It answers the one question that has
     // to be answered before --output can be used at all, and a machine being
     // asked what it has is not a machine about to host.
@@ -936,6 +1040,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     max_guests,
                     reject_all,
                     &settings,
+                    &stop,
                 )
                 .await
                 {
@@ -970,7 +1075,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 lowlat_common::log_info!("lowlatd: stopping");
                 return Ok(());
             }
+            _ = stop.wait() => {
+                #[cfg(windows)]
+                kick_all(&mut seam);
+                lowlat_common::log_info!("lowlatd: stopping, asked by the service");
+                return Ok(());
+            }
         }
+    }
+}
+
+/// Tell every seated guest the host system is changing, then let the loop end.
+///
+/// **Used only where a host outlives the change** (Windows, on the service's
+/// end event): a logoff ends the host with its session and gives it no chance
+/// to say anything (docs/impl-plan-windows.md W2.5, D1).
+#[cfg(windows)]
+fn kick_all(seam: &mut Admission) {
+    let guests = seam.guests();
+    for guest in guests {
+        seam.kick_guest(guest.number, 3);
     }
 }
 
@@ -989,6 +1113,7 @@ async fn session_loop(
     capacity: u32,
     reject_all: bool,
     settings: &app::Settings,
+    stop: &Stop,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     // What was being captured, and at what rate, the last time every guest was
     // told. Zero until a display has been opened, which is also what a host
@@ -1161,6 +1286,12 @@ async fn session_loop(
                 lowlat_common::log_info!("lowlatd: stopping");
                 return Ok(true);
             }
+            _ = stop.wait() => {
+                #[cfg(windows)]
+                kick_all(seam);
+                lowlat_common::log_info!("lowlatd: stopping, asked by the service");
+                return Ok(true);
+            }
         }
 
         // **Watched rather than reported.** A guest asking for a different
@@ -1320,21 +1451,25 @@ mod role_tests {
         assert_eq!(program_of(["tray"]), Program::Tray);
         assert_eq!(program_of(["tray", "--verbose"]), Program::Tray);
         assert_eq!(program_of(["display", "list"]), Program::Display);
-        assert_eq!(program_of(["list", "display"]), Program::Service);
-        assert_eq!(program_of(["--tray"]), Program::Service);
-        assert_eq!(program_of(["--verbose", "tray"]), Program::Service);
+        assert_eq!(program_of(["service"]), Program::Service);
+        assert_eq!(program_of(["install"]), Program::Install);
+        assert_eq!(program_of(["uninstall"]), Program::Uninstall);
+        assert_eq!(program_of(["list", "display"]), Program::Host);
+        assert_eq!(program_of(["--tray"]), Program::Host);
+        assert_eq!(program_of(["--verbose", "tray"]), Program::Host);
         assert_eq!(program_of(["session", "tray"]), Program::Session);
 
-        assert_eq!(program_of([] as [&str; 0]), Program::Service);
-        assert_eq!(program_of(["--verbose"]), Program::Service);
+        assert_eq!(program_of([] as [&str; 0]), Program::Host);
+        assert_eq!(program_of(["--verbose"]), Program::Host);
         // The word, anywhere but first.
-        assert_eq!(program_of(["--name", "session"]), Program::Service);
-        assert_eq!(program_of(["--verbose", "session"]), Program::Service);
+        assert_eq!(program_of(["--name", "session"]), Program::Host);
+        assert_eq!(program_of(["--verbose", "session"]), Program::Host);
+        assert_eq!(program_of(["--verbose", "service"]), Program::Host);
         // The word as a flag, which is the shape the rule exists to refuse.
-        assert_eq!(program_of(["--session"]), Program::Service);
+        assert_eq!(program_of(["--session"]), Program::Host);
         assert_eq!(
             program_of(["--output", "card0:DP-1", "--session"]),
-            Program::Service
+            Program::Host
         );
     }
 }

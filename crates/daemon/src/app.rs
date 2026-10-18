@@ -329,19 +329,37 @@ pub(crate) fn on_message(
         //
         // **Never typed on Windows**: the system raises its secure screen for
         // the keys only from a keyboard, and for software only through its
-        // own call for it, which answers a service alone. The service makes
-        // it (docs/impl-plan-windows.md W2.5); until it exists the request is
-        // refused.
+        // own call for it, which answers a service alone. The service makes it
+        // (docs/impl-plan-windows.md W2.5), and the keyboard permission gates
+        // it here because there is no injected chord for the guest's own
+        // thread to gate.
         id::SECURE_ATTENTION => {
             if lowlat_host::inject::console_takes_the_chord() {
                 lowlat_common::log_warn!(
                     "lowlatd: guest {guest} asked for the attention chord, refused=console"
                 );
-            } else if cfg!(windows) {
-                lowlat_common::log_warn!(
-                    "lowlatd: guest {guest} asked for the attention chord, refused=no-service"
-                );
             } else {
+                #[cfg(windows)]
+                {
+                    let keyboard = seam
+                        .guests()
+                        .iter()
+                        .any(|seated| seated.number == guest && seated.permissions.keyboard);
+                    if !keyboard {
+                        lowlat_common::log_warn!(
+                            "lowlatd: guest {guest} asked for the attention chord, refused=keyboard"
+                        );
+                    } else if crate::windows_service::attention() {
+                        lowlat_common::log_info!(
+                            "lowlatd: guest {guest} asked for the attention chord, asked=service"
+                        );
+                    } else {
+                        lowlat_common::log_warn!(
+                            "lowlatd: guest {guest} asked for the attention chord, refused=no-service"
+                        );
+                    }
+                }
+                #[cfg(not(windows))]
                 seam.secure_attention(guest);
             }
             true

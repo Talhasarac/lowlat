@@ -998,8 +998,8 @@ Three things make it a host action rather than an ordinary keystroke:
 **On Windows the chord cannot be typed** (*2026-10-15*): the system raises its secure screen
 for the keys only from the keyboard, and for software only through its own call for it, which a
 machine's policy has to allow and which answers a service alone. So the host asks its service
-to make the call ([impl-plan-windows.md](impl-plan-windows.md) W2.5); until the service exists
-the request is refused and logged. The keyboard permission gates it there as here.
+to make the call ([impl-plan-windows.md](impl-plan-windows.md) W2.5), through an event it alone
+holds. The keyboard permission gates it there as here, read by the host before it asks.
 *Reviewed 2026-10-17:* the host asks through an event it alone holds, and **the service allows
 its own call in the machine's policy for the length of each call**, putting back the value it
 found -- so installing the service changes no policy, and nothing is left set by a program

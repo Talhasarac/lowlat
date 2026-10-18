@@ -3,6 +3,33 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5 built: the service, the install and the chord
+
+### Built
+- **The service role** (`lowlatd service`, under the service manager): a synchronous loop that
+  reconciles on every pass -- the console's session, the host's session and how it last exited --
+  with the decision table tested without a service manager. It starts one host in the console
+  session, a failed exit is restarted after two seconds, a clean one waits for the console to
+  move, and an end request gets five before the job is used.
+- **The launch**: the service's own token moved to the console session, `winsta0\default`, no
+  window, a kill-on-close job, and an inherited append handle for the host's output. A failed
+  exit is observed through the process handle, not a snapshot.
+- **The two events**, unnamed and inherited by that host alone: the service's request to end
+  (the host tells each seated guest the host system is changing) and the host's request for the
+  secure attention call. The host clears their inheritance when it takes them.
+- **The chord**: the host asks for a guest with the keyboard permission; the service sets
+  `SoftwareSASGeneration` around one `SendSAS` call, writes back the value it found, deletes it
+  when it was absent, and refuses when a managed policy denies the write.
+- **`lowlatd install` / `uninstall`**, elevated: the programs under the program-files
+  directory, the program-data folder and configuration given an explicit owner and access list,
+  the service registered automatic with a two-second failure restart, the display driver's root
+  device and package installed or removed, and the configuration kept on uninstall.
+
+### Still open
+- The machine checks C5-C18 and the measurement D1 decides; W2.5 stays unticked until they
+  pass. A guest told of a service stop is told the host system is changing (one end event, not
+  the shutdown status the review named).
+
 ## 2026-10-18 - W2.5 in part: the host's Windows face and its login
 
 ### Built

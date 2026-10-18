@@ -31,6 +31,10 @@ mod session_side;
 mod session_side;
 #[cfg(target_os = "linux")]
 mod sni;
+#[cfg(windows)]
+mod windows_install;
+#[cfg(windows)]
+mod windows_service;
 
 fn main() {
     service::main();
