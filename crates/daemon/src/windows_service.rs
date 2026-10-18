@@ -29,8 +29,8 @@ use windows_sys::Win32::Security::{
     TOKEN_ALL_ACCESS, TokenPrimary, TokenSessionId,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_ALWAYS, WriteFile,
+    CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_ALWAYS, WriteFile,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -149,7 +149,15 @@ fn install_log_sink() {
 fn open_log() -> Result<HANDLE, String> {
     let dir = program_data().ok_or_else(|| "ProgramData is not in the environment".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
-    let path = dir.join("lowlatd.log");
+    open_append(&dir.join("lowlatd.log"))
+}
+
+/// One inheritable append handle on the log.
+///
+/// **Shared for deletion too**, because the service holds this handle while
+/// it renames the file to `lowlatd.log.1`: a rename needs every open handle to
+/// share deletion, and without it the log never rotates.
+fn open_append(path: &std::path::Path) -> Result<HANDLE, String> {
     let path_w = wide(&path.to_string_lossy());
     // The host inherits this handle, so it is created inheritable; the host
     // clears the flag on its own copy when it takes it.
@@ -164,7 +172,7 @@ fn open_log() -> Result<HANDLE, String> {
         CreateFileW(
             path_w.as_ptr(),
             FILE_APPEND_DATA,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             &attributes,
             OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
@@ -1149,9 +1157,25 @@ pub(crate) fn stop_signal() -> crate::service::Stop {
 
 #[cfg(test)]
 mod tests {
-    use super::{Exit, HostState, Pass, SESSION_ENDED, Step, next};
+    use super::{CloseHandle, Exit, HostState, Pass, SESSION_ENDED, Step, next, open_append};
 
     const T0: f64 = 0.0;
+
+    /// The service renames the log while it still holds its handle; a handle
+    /// that does not share deletion fails that rename, and the log grows for
+    /// good.
+    #[test]
+    fn the_log_can_be_renamed_while_its_handle_is_open() {
+        let dir = std::env::temp_dir().join(format!("lowlatd-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("lowlatd.log");
+        let handle = open_append(&path).expect("open");
+        let renamed = std::fs::rename(&path, dir.join("lowlatd.log.1"));
+        // SAFETY: the handle was opened above and is closed once.
+        unsafe { CloseHandle(handle) };
+        let _ = std::fs::remove_dir_all(&dir);
+        renamed.expect("renamed while held");
+    }
 
     fn pass(console: Option<u32>, host: HostState, last_exit: Option<Exit>) -> Pass {
         Pass {
