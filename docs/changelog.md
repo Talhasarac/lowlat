@@ -17,6 +17,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - The service killed: the host went with the job, and the service manager started the service
   again.
 - The service stopped and started: the host asked to end and left cleanly; a new host after.
+- The secure attention call from the service's account: `SoftwareSASGeneration` absent, set to 1
+  around one `SendSAS` call, absent again after; the secure screen shown at the desk, and the
+  input desktop refusing a session process (`Winlogon`) while it was up. The path from a guest
+  through the host's event remains, as does the keyboard and managed-policy refusal.
 
 ### Fixed
 - **The install did not copy the driver's folder**, so the staged package was never installed;

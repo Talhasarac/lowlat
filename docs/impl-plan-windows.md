@@ -875,9 +875,10 @@ once, here.
   *Checked 2026-10-18 on the development machine:* install and install over a running install;
   the configuration's access refused to an ordinary user; the not-logged-in host started once
   and left; the host killed and back in two seconds; the service killed, the host going with it
-  and the service started again; the service stopped and started, the host asked to end. A
-  logoff, a remote connection, the chord, the advertisement with a real session, guests, a
-  reboot and D1's measurement remain.
+  and the service started again; the service stopped and started, the host asked to end; the
+  secure attention call from the service's account, the policy absent around it and the secure
+  screen shown. A logoff, a remote connection, the guest-triggered chord, the advertisement
+  with a real session, guests, a reboot and D1's measurement remain.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
