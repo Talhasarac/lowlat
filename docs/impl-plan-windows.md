@@ -584,6 +584,10 @@ once, here.
   the length of each call** -- the service sets it, makes the call and puts back the value it
   found -- rather than from install to uninstall, so the policy is never left changed, nothing is
   kept between the two, and a program deleted without its uninstall leaves nothing set.
+  *Amended 2026-10-18, at W2.5's checks:* a value that already allows services is not written;
+  a write the system refuses is taken as policy, and the call is refused with a line naming it;
+  a value a policy set on a key the system account may write is raised for the length of the
+  call like any other, as established hosts do.
 - **Sound.** The loopback of the default render endpoint, event-driven, 48 kHz stereo asked and
   the system's engine converting, 20 ms a packet. **A loopback delivers nothing while nothing
   plays** -- measured on the development machine: no packet in three seconds, where a silent
@@ -883,6 +887,12 @@ once, here.
   host that ended when asked is followed at once, one ended with its session is followed on the
   same session number too, and the host waits for its kicked guests before it goes. The
   uninstall and the end request with a guest seated remain beside the checks above.
+  *Checked and fixed 2026-10-18, on the fixed build:* the end request with a guest seated, the
+  guest told within a third of a second; the host killed with a guest seated; a remote
+  connection both ways, the console's new session served and the user's brought back through a
+  guest; the chord from a guest; the advertisement in the signaling service's list. Fixed: an
+  install on a machine with no display device (the device is made with a generated id, and a
+  driver that fails is a line, not a failed install), and the log's rotation.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1558,6 +1568,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5 checked on the fixed build (the end request with a guest, the host killed
+  with one, a remote connection both ways, the chord from a guest, the listing); the driver's
+  install on a machine without a device, and the log's rotation, fixed; the attention policy's
+  per-call form kept for a value a policy set on an unlocked key.
 - 2026-10-18: W2.5 reviewed after the checks: the end request cleared before each host, an
   exit the service asked for followed at once, a session's end followed on the same number,
   and the guests' kicks waited for. Uninstall and the end request with a guest are owed too.

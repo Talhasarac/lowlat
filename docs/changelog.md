@@ -3,6 +3,44 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5: the driver on a machine without one, and the log's rotation
+
+### Fixed
+- **An install on a machine with no display device failed.** The device was asked for by a
+  bare name, which the system takes only with the flag that numbers it, so the device was never
+  made and the whole install stopped before the service was registered. The root device is now
+  made as `ROOT\LOWLATVDD\NNNN`, only when no device carries the hardware id (any other failure
+  had added another device each time), and removed again if its driver then fails.
+- **A driver that cannot be installed no longer fails the install**: the setup is never
+  interactive, so a package the machine does not trust is refused rather than asked about at the
+  desk, and the install goes on with a line, as the plan has it.
+- **The log never rotated.** The service holds its handle while it renames the file, and a
+  rename needs every open handle to share deletion; the handle now does.
+
+### Checked
+- The rotation's cause as a test, broken once (error 32, the sharing violation) and restored;
+  the daemon's tests (Windows 27), clippy and formatting. The driver's path needs the machine:
+  an uninstall removes the device, and the install after it takes the new path.
+- On the development machine, with the end request and kick fixes installed and a stock client
+  seated on the network:
+  - the service stopped: the guest told the host system is changing and gone 275 ms later, the
+    stop done in half a second, and the client showing that status;
+  - the host killed: a new one two seconds later; the client, told nothing, stalled as on a slow
+    network, so the status is kept -- either way the person reconnects;
+  - a remote desktop connection: the console's new session served by a new host started a third
+    of a second after the old one was asked to end, the lock screen streamed and signed into
+    through the guest, and the host following the user's session back to the console;
+  - the attention chord from the guest: the service's call, the secure screen captured, and the
+    policy value absent again after;
+  - the listing: the computer's name, `"OS": "Windows"`.
+- Not yet: a logoff, a reboot, the uninstall, a guest without the keyboard permission, and a guest
+  over the internet.
+
+### Decided
+- **The secure attention policy keeps its per-call form**: a value a policy sets on a key the
+  system account may write is raised for the length of the call like any other; only a write
+  the system refuses is taken as policy and refused.
+
 ## 2026-10-18 - W2.5 reviewed after the checks: the host after an end request, and the kick
 
 ### Fixed
