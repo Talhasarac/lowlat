@@ -3,6 +3,24 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5: the attention policy read before it is written
+
+### Fixed
+- **A locked policy key was refused at its opening, not at the write.** The service opened the
+  key for reading and writing at once, and a registry key's access is checked when it is opened,
+  so a key a policy had locked against the system account failed there: the refusal named an
+  unopened key rather than the policy, and a locked key whose value already allowed services
+  refused a call it should have made. The key is now opened for reading; a value that allows
+  services is called through with nothing written; only otherwise is it opened for writing, and
+  a refusal there is the policy's. Each line carries the value read, and a value not put back
+  is said.
+
+### Checked
+- On the development machine, through a seated guest, with the system account denied writes to
+  the policy key alone: the value absent, the chord refused naming the policy and nothing
+  raised; the value set to allow services, the call made, the secure screen captured, and the
+  value left as it was.
+
 ## 2026-10-18 - W2.5: the driver on a machine without one, and the log's rotation
 
 ### Fixed

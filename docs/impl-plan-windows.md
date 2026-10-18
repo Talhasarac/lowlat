@@ -892,7 +892,10 @@ once, here.
   connection both ways, the console's new session served and the user's brought back through a
   guest; the chord from a guest; the advertisement in the signaling service's list. Fixed: an
   install on a machine with no display device (the device is made with a generated id, and a
-  driver that fails is a line, not a failed install), and the log's rotation.
+  driver that fails is a line, not a failed install), and the log's rotation. The attention
+  policy's key is opened for reading first and for writing only to write, since a locked key
+  refuses the opening: checked with the key locked against the system account, the chord refused
+  with the value absent and made with it allowing services.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1568,6 +1571,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5: the attention policy's key read before it is written, and the locked key's
+  two cases checked through a guest.
 - 2026-10-18: W2.5 checked on the fixed build (the end request with a guest, the host killed
   with one, a remote connection both ways, the chord from a guest, the listing); the driver's
   install on a machine without a device, and the log's rotation, fixed; the attention policy's
