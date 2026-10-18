@@ -1107,9 +1107,13 @@ impl Driver {
                     }
                 }
             }
-            // A host sends (kind, microseconds, stream).
+            // A host sends (kind, microseconds, stream). Kind 1 is the
+            // stream's video; kind 2 is the sound's, naming stream 0, and is
+            // not that stream's figure.
             op::ENCODE_LATENCY => {
-                if let Some(slot) = self.encode_latency_us.get_mut(message.a2 as usize) {
+                if message.a0 == 1
+                    && let Some(slot) = self.encode_latency_us.get_mut(message.a2 as usize)
+                {
                     *slot = message.a1;
                 }
             }

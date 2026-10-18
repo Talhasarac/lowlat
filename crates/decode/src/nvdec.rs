@@ -965,6 +965,15 @@ impl<'a> Backend<'a> {
         else {
             return Err(Error::NoProfile);
         };
+        // Into host memory a copy returns only once it is done, the decode
+        // it is queued behind included, and waits for that on this thread's
+        // CPU. So the decode is waited for first, asleep, and timed apart.
+        let host = matches!(out, Out::Host(_));
+        if host {
+            copied.record(stream)?;
+            copied.wait()?;
+        }
+        let synced = lowlat_common::clock::Time::now();
         let planes = registered.planes.get(slot).ok_or(Error::TooLarge)?;
         // Bytes a row and rows, per plane: the luma, then the chroma
         // interleaved at half size.
@@ -1019,10 +1028,15 @@ impl<'a> Backend<'a> {
         copied.record(stream)?;
         copied.wait()?;
         let done = lowlat_common::clock::Time::now();
-        // The wait covers what was left of the decode and the copies, which
-        // cannot be told apart from here.
-        self.decode_us = micros(lowlat_common::clock::diff_ms(queued, done));
-        self.readback_us = micros(lowlat_common::clock::diff_ms(started, queued));
+        if host {
+            self.decode_us = micros(lowlat_common::clock::diff_ms(started, synced));
+            self.readback_us = micros(lowlat_common::clock::diff_ms(synced, done));
+        } else {
+            // The wait covers what was left of the decode and the copies,
+            // which cannot be told apart from here.
+            self.decode_us = micros(lowlat_common::clock::diff_ms(queued, done));
+            self.readback_us = micros(lowlat_common::clock::diff_ms(started, queued));
+        }
         Ok(())
     }
 

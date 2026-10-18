@@ -160,6 +160,15 @@ fn check(
             got, expected,
             "{clip} ({mode}): the pictures differ from the reference decoder's"
         );
+        // Read back into host memory, the decode is waited for apart from the
+        // copy in either mode. From this size a decode takes hundreds of
+        // microseconds, so a wait of nothing is the decode timed as the copy's.
+        if w * h >= 1280 * 720 {
+            assert!(
+                decode_mean >= 20,
+                "{clip} ({mode}): the decode's wait was {decode_mean} us, the copy's {readback_mean} us"
+            );
+        }
     }
 }
 

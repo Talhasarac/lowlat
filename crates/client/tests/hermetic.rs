@@ -1501,6 +1501,50 @@ fn a_disconnect_from_the_host_ends_the_session_with_its_status() {
     assert_eq!(ended, Some(Outcome::Disconnected(11)));
 }
 
+/// **The stream's encode figure is the video's alone.** A host reports its
+/// sound's encode on the same opcode as kind 2, naming stream 0, and its
+/// figure (zero, from some hosts) is not the stream's; nor is a kind this
+/// client does not know.
+#[test]
+fn the_sounds_encode_report_leaves_the_streams_figure() {
+    let mut pair = Pair::new(12, clean());
+    pair.run_for(2000.0);
+    assert!(pair.established());
+    // Just behind the host's own report, so none lands among these: it
+    // goes every two seconds.
+    let sent = pair.host.sent[usize::from(op::ENCODE_LATENCY)];
+    let until = pair.sim.now_ms() + 2500.0;
+    while pair.host.sent[usize::from(op::ENCODE_LATENCY)] == sent {
+        assert!(pair.sim.now_ms() < until, "the host sent no report");
+        assert!(pair.tick().is_none());
+    }
+    let report = |pair: &mut Pair<Recorder>, kind: u32, us: u32| {
+        let received = pair.guest.driver.received()[usize::from(op::ENCODE_LATENCY)];
+        pair.host.send_control(&Control {
+            a0: kind,
+            a1: us,
+            a2: 0,
+            opcode: op::ENCODE_LATENCY,
+            body: &[],
+        });
+        let until = pair.sim.now_ms() + 200.0;
+        while pair.guest.driver.received()[usize::from(op::ENCODE_LATENCY)] == received {
+            assert!(pair.sim.now_ms() < until, "kind {kind} never arrived");
+            assert!(pair.tick().is_none());
+        }
+    };
+    report(&mut pair, 1, 3500);
+    assert_eq!(pair.guest.driver.encode_latency_us(0), 3500);
+    report(&mut pair, 2, 0);
+    report(&mut pair, 0, 0);
+    report(&mut pair, 3, 0);
+    assert_eq!(
+        pair.guest.driver.encode_latency_us(0),
+        3500,
+        "a report of another kind took the stream's figure"
+    );
+}
+
 /// A clean departure is opcode 10 with a zero status, and the host reads it.
 #[test]
 fn a_departure_reaches_the_host_as_a_zero_disconnect() {
