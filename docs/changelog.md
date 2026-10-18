@@ -3,6 +3,31 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - the client's encode and decode figures, each what it says
+
+### Fixed
+- **The stream's encode figure is the video's alone.** An established host sends its sound's
+  encode time on the same opcode as the video's, as kind 2 naming stream 0, every hundred sound
+  packets, and the client took it as stream 0's: status, and the demo's title, read the sound's
+  figure -- zero from some hosts -- until the next video report. Kind 1 alone is the stream's
+  now; a test sends a kind-2 zero, and two kinds the client does not know, after a kind-1
+  figure.
+- **An NVIDIA picture read back to planes is timed decode and copy apart.** Decoding into the
+  backend's own surfaces, the copy into the application's memory returns only once it is done,
+  the decode it is queued behind included: the decode thread spun through both, and both were
+  filed as the read-back, the decode reading about 2 us on every such picture. The decode is
+  waited for first now, asleep, then the copy. Four alternating rounds of 1,140 pictures, the
+  take at the median: at 2560x1440 H.264 and 120 pictures a second, CPU 1.03-1.09 -> 0.41-0.42
+  ms and wall 1.04-1.10 -> 1.08-1.09 ms (the wake, about 20 us); at 3840x2160 and 60, CPU
+  2.40-2.50 -> 0.83-0.84 ms, wall 2.41-2.51 -> 2.46-2.48 ms, and its p95 6.7-9.9 -> 3.9-7.0 ms.
+  What the host is told was the sum and is unchanged: live against an established host, the two
+  builds alternated three times, it and arrival to present moved by less than run-to-run
+  noise (11 us and 0.05 ms on the medians). The decode tests assert the split from 720p up.
+
+### Corrected
+- The newer decode entry points are not the 610 series' alone: on Windows 596.49 has them and
+  576.88 does not (10-client §5.2, impl-plan-windows W1.5).
+
 ## 2026-10-18 - W2.5 closed: the reboot, and a session's end left silent
 
 ### Checked

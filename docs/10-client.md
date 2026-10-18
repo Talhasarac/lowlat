@@ -811,10 +811,15 @@ the NVIDIA.
 **The vendor's decoder** (*built 2026-09-29*, W1.5) is Linux's, fed the same jobs, on an
 NVIDIA GPU named by its identity -- its compute device found by the adapter it is -- or the
 first of the vendor's GPUs offered. Where the driver has the newer entry points (the 610
-series on, on both platforms) it decodes into surfaces of the backend's own, each picture's
-decode queued on the backend's stream and its planes copied out behind it on the same stream:
-nothing waits on the decode thread for a picture handed out as textures, and a picture read
-back to planes costs one wait for the decode and the copy together. Elsewhere it maps the
+series on, on both platforms; *corrected 2026-10-18*: on Windows 596.49 has them too and 576.88
+does not) it decodes into surfaces of the backend's own, each picture's decode queued on the
+backend's stream and its planes copied out behind it on the same stream: nothing waits on the
+decode thread for a picture handed out as textures, and a picture read back to planes waits
+for its decode, asleep, then for the copy. (*Amended 2026-10-18*: until then the copy waited
+out the decode itself -- a copy into the application's memory returns only once it is done --
+so the decode thread spun through both and both were filed as the read-back, the decode
+reading about 2 us. At 2560x1440 and 120 pictures a second the take's CPU fell from 1.03-1.09
+to 0.41-0.42 ms at the median, its wall time 20 us longer for the wake.) Elsewhere it maps the
 decoder's own surface, the map waiting for the decode, and leaves it mapped until the copies
 out of it have passed. The surfaces are made wider and taller than a small picture needs: at
 the coded size the driver refused a surface whose width is not a multiple of 64 samples, and
@@ -1075,7 +1080,7 @@ reads channel 0 for:
 | 16 blocked | raises the blocked or unblocked event |
 | 17 user data | hands the body to the application with its sub-identifier, opaque ([01 §11.2a](01-protocol.md)); except sub-identifier 18, the host's answer on the microphone, which the library reads (§6) |
 | 20 rumble | raises the rumble event for the pad named, the two motors as eight-bit values |
-| 21 encode latency | stores the host's figure for the stream named |
+| 21 encode latency | stores the host's video figure (kind 1) for the stream named; the sound's (kind 2), which names stream 0, is not that stream's and is not kept (*amended 2026-10-18*: an established host sends it every hundred sound packets, zero from some, and status showed it as the video's until the next video report) |
 | 25 guest list | hands the body to the application with the recipient's own number, opaque; the number goes into status |
 | 27 stream ended | raises the stream event with the reason |
 | 28 host mode | stores it |

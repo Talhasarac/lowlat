@@ -255,7 +255,8 @@ once, here; the design is [10 §4.2 and §5.2](10-client.md), the boundary
   device lost under it, which the vendor's runtime cannot come back from in the process, ends
   the session by the library's own departure and `LOWLAT_OUTCOME_DECODER_FAILED`, and so now
   does every decoder that fails past recovery, on both platforms; the driver's newer decode
-  into the backend's own surfaces where it has it (the 610 series on), on Linux too, the map
+  into the backend's own surfaces where it has it (the 610 series on; *corrected 2026-10-18*:
+  596.49 has it too), on Linux too, the map
   below it, textures handed out either way; W1.4's search for a lost GPU amended (below). As
   built: the textures are the queue's own, made on a device of the library's own on the GPU
   and registered with the vendor's runtime once per slot, written by copies between a map and
