@@ -649,7 +649,12 @@ once, here.
   the service stopping -- each seated guest is told the host system is changing, or that the host
   shut down, and that stays only if every established client handles it at least as well as
   silence, recorded as what it shows, whether it reconnects by itself and how soon the new host's
-  picture arrives. **A Windows install takes its token from the login tool**, which learns the
+  picture arrives. *Measured 2026-10-18:* **the guests are told.** Three established clients
+  were each run both ways: told, each showed that the host closed for a login or logout event
+  and to reconnect, within a third of a second; left in silence, each stalled on a slow network
+  notice and then ended on its own timeout; none reconnected by itself either way, and the new
+  host's picture followed each manual reconnect alike. One end event carries the change of
+  session and the service stopping alike. **A Windows install takes its token from the login tool**, which learns the
   program-data file and the service manager; Python is a prerequisite on Windows, as the ViGEm
   bus is.
 - **The floor is Windows 10 1703**: the duplication call the host uses and the event-driven
@@ -1575,6 +1580,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5: what a guest is told at a change of session measured on three clients -- the
+  status stays; the ordinary-user refusals and a guest without the keyboard checked.
 - 2026-10-18: W2.5: a user switch, a logoff and guests through the firewall checked; a job for
   each host, and a host waiting for a display ending when asked.
 - 2026-10-18: W2.5: the attention policy's key read before it is written, and the locked key's

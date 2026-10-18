@@ -3,6 +3,25 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5: what a guest is told, measured; an ordinary user refused
+
+### Decided by measurement
+- **A guest is told when its host ends and the host lives on**: three established clients, each
+  run through a service stop with the status and a host ended without a word. Told, each showed
+  that the host closed for a login or logout event and to reconnect, within a third of a second.
+  In silence, each stalled on a slow network notice, then ended on its own timeout with an
+  error. None reconnected by itself either way, so the status gives the same reconnect with the
+  real reason, sooner.
+
+### Checked
+- As a local account outside the administrators, on the development machine: the configuration,
+  its log and the device identifier unreadable; the configuration folder neither listable nor
+  writable; no file could be placed beside the programs or the driver package, the program not
+  opened for writing, the service's registry key not opened for writing, and the service not
+  stopped; the host process not opened to take its handles, to end it or to read its memory.
+- A guest whose account the signaling service seats without the keyboard: its keys arrive and
+  none is typed, and an established client offers it no attention chord.
+
 ## 2026-10-18 - W2.5: a job for each host, and a host that ends while waiting for a display
 
 ### Fixed
