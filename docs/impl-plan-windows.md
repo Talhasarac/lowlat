@@ -879,6 +879,10 @@ once, here.
   secure attention call from the service's account, the policy absent around it and the secure
   screen shown. A logoff, a remote connection, the guest-triggered chord, the advertisement
   with a real session, guests, a reboot and D1's measurement remain.
+  *Reviewed 2026-10-18, after those checks:* the end request is cleared before every host, a
+  host that ended when asked is followed at once, one ended with its session is followed on the
+  same session number too, and the host waits for its kicked guests before it goes. The
+  uninstall and the end request with a guest seated remain beside the checks above.
 - [ ] **W2.6 a program left out of the sound** (*added 2026-10-15, at W2.4's review; not in the
   gate*): the system's capture of everything but one program's process tree, for a voice
   program whose sound would otherwise reach the guests it is talking to. Its setting through
@@ -1554,6 +1558,9 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-18: W2.5 reviewed after the checks: the end request cleared before each host, an
+  exit the service asked for followed at once, a session's end followed on the same number,
+  and the guests' kicks waited for. Uninstall and the end request with a guest are owed too.
 - 2026-10-18: W2.5 checked on the machine: install (stopped, stopped over running), the
   configuration's access, the not-logged-in host, the host killed and back in two seconds, the
   service killed with the host going with it, stop and start. Three fixes: the driver folder is

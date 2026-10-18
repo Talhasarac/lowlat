@@ -3,6 +3,31 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-18 - W2.5 reviewed after the checks: the host after an end request, and the kick
+
+### Fixed
+- **The end request outlived the host it was meant for.** The event is manual-reset and every
+  host inherits the same one, and nothing cleared it, so after the first request each new host
+  ended the moment it started and the service then left the console without one. It is cleared
+  before every launch. The checks so far never started a host after a request: each began with
+  a fresh service or a killed host.
+- **A host that ended because it was asked to was taken for one with nothing to do**, which
+  stays down until the console moves; a console that read none for a moment and came back to
+  the same session lost its host for good. Such an exit is now followed at once. A host ended
+  with its session is followed at once into a console that moved, and after two seconds into
+  one with the same number, since the number alone cannot say the session is new.
+- **The guests were never told the host is changing.** The status went to each guest's thread
+  and the host returned at once, which stopped those threads before they sent it. The host now
+  waits for each kicked guest to end, up to one second, with a line counting how many did.
+
+### Checked
+- The decision table's new cases, each broken once and failing; the daemon's tests (Windows 26,
+  Linux 40); clippy and formatting on both.
+
+### Not run
+- The machine checks named under "W2.5 checked on the machine" below, which these fixes are
+  for; also the uninstall and the end request with a guest seated.
+
 ## 2026-10-18 - W2.5 checked on the machine: the service, install and the fixes
 
 ### Checked
