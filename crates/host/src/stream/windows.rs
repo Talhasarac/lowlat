@@ -233,6 +233,13 @@ fn run_display(
     let began = Time::now();
     let mut said = None;
     let (output, (width, height, refresh_hz)) = loop {
+        // **A host that is ending stops waiting**, before it plugs anything:
+        // the wait runs for many seconds, and a host asked to end while its
+        // session left the console would otherwise outlive the request and go
+        // on plugging its own display into a desktop that is no longer its.
+        if shared.stopping.load(Ordering::Acquire) != 0 {
+            return Exit::Stopped;
+        }
         let found = Display::shape_of_display(wanted)
             .and_then(|shape| Display::locate(wanted).map(|output| (output, shape)));
         let elsewhere = match found {

@@ -313,6 +313,9 @@ struct HostRun {
     process: HANDLE,
     session: u32,
     asked_ms: Option<f64>,
+    /// The host's own kill-on-close job, closed once the host is gone, and with
+    /// this service's handles if the service goes first.
+    _job: Job,
 }
 
 struct State {
@@ -321,7 +324,6 @@ struct State {
     end: HANDLE,
     attention: HANDLE,
     log: HANDLE,
-    job: Job,
     args: String,
     environment: Vec<(String, String)>,
 }
@@ -456,9 +458,20 @@ fn environment_block(
     block
 }
 
-/// Start one host in `session`, with the log as its standard output and the
-/// two events inherited.
-fn launch(state: &State, session: u32) -> Result<(HANDLE, u32), String> {
+/// End a host that was made suspended and must not run.
+fn abandon(process: &PROCESS_INFORMATION) {
+    // SAFETY: both handles came from the creation, the thread never ran, and
+    // each is closed once.
+    unsafe {
+        TerminateProcess(process.hProcess, 1);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+}
+
+/// Start one host in `session`, with the log as its standard output, the two
+/// events inherited, and a job of its own.
+fn launch(state: &State, session: u32) -> Result<(HANDLE, u32, Job), String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("this program's path could not be read: {error}"))?;
     let exe_w = wide(&exe.to_string_lossy());
@@ -604,19 +617,30 @@ fn launch(state: &State, session: u32) -> Result<(HANDLE, u32), String> {
             "CreateProcessAsUserW failed, session={session} error={error}"
         ));
     }
+    // **A job of its own for each host.** A job holds the processes of one
+    // session, the one its first process ran in, so one job for the service's
+    // life would hold the first console's hosts and no other.
+    let job = match create_job() {
+        Ok(job) => job,
+        Err(error) => {
+            abandon(&process);
+            return Err(format!("the host's job was not made: {error}"));
+        }
+    };
     // SAFETY: the job and the process handle are owned here.
-    if unsafe { AssignProcessToJobObject(state.job.0, process.hProcess) } == 0 {
-        lowlat_common::log_warn!(
-            "lowlatd: the host was not put in the job, error={}",
-            unsafe { GetLastError() }
-        );
+    if unsafe { AssignProcessToJobObject(job.0, process.hProcess) } == 0 {
+        let error = unsafe { GetLastError() };
+        // A host outside its job would outlive this service and meet the next
+        // service's host, so it is ended before it runs.
+        abandon(&process);
+        return Err(format!("the host was not put in its job, error={error}"));
     }
     // SAFETY: the thread handle came from the creation and is closed once.
     unsafe {
         ResumeThread(process.hThread);
         CloseHandle(process.hThread);
     }
-    Ok((process.hProcess, process.dwProcessId))
+    Ok((process.hProcess, process.dwProcessId, job))
 }
 
 /// The machine's policy for the secure attention call, set around one call.
@@ -928,7 +952,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                 // SAFETY: an event this service owns.
                 unsafe { ResetEvent(state.end) };
                 match launch(state, session) {
-                    Ok((process, pid)) => {
+                    Ok((process, pid, job)) => {
                         lowlat_common::log_info!(
                             "lowlatd: host start pid={pid} session={session} args={:?} utc={}",
                             state.args,
@@ -938,6 +962,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                             process,
                             session,
                             asked_ms: None,
+                            _job: job,
                         });
                         last_exit = None;
                     }
@@ -1056,7 +1081,6 @@ pub(crate) fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         end: std::ptr::null_mut(),
         attention: std::ptr::null_mut(),
         log: std::ptr::null_mut(),
-        job: create_job().map_err(|error| format!("the job was not made: {error}"))?,
         args: String::new(),
         environment: Vec::new(),
     });
