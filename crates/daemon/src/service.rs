@@ -1077,7 +1077,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ = stop.wait() => {
                 #[cfg(windows)]
-                kick_all(&mut seam);
+                end_guests(&mut seam).await;
                 lowlat_common::log_info!("lowlatd: stopping, asked by the service");
                 return Ok(());
             }
@@ -1085,17 +1085,48 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Tell every seated guest the host system is changing, then let the loop end.
+/// The status a guest reads as the host system changing.
+#[cfg(windows)]
+const CHANGING_STATUS: i32 = 3;
+
+/// How long the host waits for its kicked guests to end before it goes: a
+/// guest's pass is at most 50 ms and its kick's grace 250 ms, and the service
+/// waits five seconds in all.
+#[cfg(windows)]
+const KICKED_WAIT_MS: f64 = 1000.0;
+
+/// Tell every seated guest the host system is changing, and wait for each to
+/// end before the loop does.
+///
+/// **The wait is what delivers the status.** Each guest's own thread sends it
+/// at its next pass and holds the session through a grace period; dropping
+/// the seam at once stops those threads first, and the peer learns nothing.
 ///
 /// **Used only where a host outlives the change** (Windows, on the service's
 /// end event): a logoff ends the host with its session and gives it no chance
 /// to say anything (docs/impl-plan-windows.md W2.5, D1).
 #[cfg(windows)]
-fn kick_all(seam: &mut Admission) {
-    let guests = seam.guests();
-    for guest in guests {
-        seam.kick_guest(guest.number, 3);
+async fn end_guests(seam: &mut Admission) {
+    let mut waiting: std::collections::HashSet<String> = seam
+        .guests()
+        .into_iter()
+        .filter(|guest| seam.kick_guest(guest.number, CHANGING_STATUS))
+        .map(|guest| guest.attempt)
+        .collect();
+    let kicked = waiting.len();
+    let since = lowlat_common::clock::Time::now();
+    while !waiting.is_empty() && lowlat_common::clock::elapsed_ms(since) < KICKED_WAIT_MS {
+        while let Some(received) = seam.poll_event() {
+            if let Event::Ended { attempt, .. } = received.event {
+                waiting.remove(&attempt);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    lowlat_common::log_info!(
+        "lowlatd: guests told the host is changing, kicked={kicked} ended={}",
+        kicked - waiting.len()
+    );
 }
 
 /// One connection's lifetime. Returns true when the operator asked to stop, and
@@ -1288,7 +1319,7 @@ async fn session_loop(
             }
             _ = stop.wait() => {
                 #[cfg(windows)]
-                kick_all(seam);
+                end_guests(seam).await;
                 lowlat_common::log_info!("lowlatd: stopping, asked by the service");
                 return Ok(true);
             }

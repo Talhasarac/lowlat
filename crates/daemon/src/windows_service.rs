@@ -55,9 +55,9 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateEventW,
     CreateProcessAsUserW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
     GetCurrentProcess, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, SetEvent, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForMultipleObjects, WaitForSingleObject,
+    OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, ResetEvent,
+    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, SetEvent, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForMultipleObjects, WaitForSingleObject,
 };
 
 /// The service's own name and what the service manager shows.
@@ -215,6 +215,9 @@ struct Exit {
     at_ms: f64,
     code: u32,
     session: u32,
+    /// The service had asked it to end. A clean exit then is the answer to
+    /// that request, not a host with nothing to do.
+    asked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,11 +231,13 @@ enum Step {
 /// The whole policy, as a table over one pass. Times are milliseconds on the
 /// loop's own monotonic clock.
 ///
-/// A clean exit is not restarted while the console stays where it was: a host
-/// that is not logged in exits at once, and restarting it every two seconds
-/// would loop a line forever. It is restarted when the console moves, which is
-/// what a logoff produces. A failed exit is restarted after two seconds; a
-/// host that was asked to end gets five.
+/// A clean exit of its own is not restarted while the console stays where it
+/// was: a host that is not logged in exits at once, and restarting it every
+/// two seconds would loop a line forever. It is restarted when the console
+/// moves. A host that ended because it was asked to is followed at once, and
+/// one that ended with its session at once into a console that moved; a
+/// failed exit, and a session's end with the console on the same number, after
+/// two seconds. A host that was asked to end gets five.
 fn next(pass: Pass, now_ms: f64) -> Step {
     if let HostState::AskedEnd { since_ms } = pass.host {
         return if now_ms - since_ms >= END_BOUND_MS {
@@ -258,12 +263,23 @@ fn next(pass: Pass, now_ms: f64) -> Step {
         HostState::AskedEnd { .. } => Step::Wait,
         HostState::None => match pass.last_exit {
             None => Step::Start { session: console },
-            Some(exit) if exit.code == 0 || exit.code == SESSION_ENDED => {
+            // The answer to the service's request: the console is owed a host
+            // whether or not its session moved, since one that read none for a
+            // moment and came back is the same console.
+            Some(exit) if exit.code == 0 && exit.asked => Step::Start { session: console },
+            Some(exit) if exit.code == 0 => {
                 if exit.session == console {
                     Step::Wait
                 } else {
                     Step::Start { session: console }
                 }
+            }
+            // Ended with its session, as at a logoff. The console's number
+            // alone cannot say the session is new: the same number is either
+            // the old session still going, which refuses a launch, or a new one
+            // that took the number. So only a moved console is started at once.
+            Some(exit) if exit.code == SESSION_ENDED && exit.session != console => {
+                Step::Start { session: console }
             }
             Some(exit) => {
                 if now_ms - exit.at_ms >= RESTART_MS {
@@ -870,6 +886,12 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                         }
                     }
                 }
+                // **The end request is cleared before every host.** The event
+                // is manual-reset and each host inherits the same one, so a
+                // request left set for the last host would end this one the
+                // moment it started.
+                // SAFETY: an event this service owns.
+                unsafe { ResetEvent(state.end) };
                 match launch(state, session) {
                     Ok((process, pid)) => {
                         lowlat_common::log_info!(
@@ -890,6 +912,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                             at_ms: now_ms,
                             code: 1,
                             session,
+                            asked: false,
                         });
                     }
                 }
@@ -917,6 +940,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                         at_ms: now_ms,
                         code: 1,
                         session: run.session,
+                        asked: true,
                     });
                 }
             }
@@ -957,6 +981,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                         at_ms: elapsed_ms(clock),
                         code: if read { code } else { 1 },
                         session: run.session,
+                        asked: run.asked_ms.is_some(),
                     });
                 }
             }
@@ -1165,13 +1190,18 @@ mod tests {
         );
     }
 
+    fn exit(code: u32, session: u32, asked: bool) -> Exit {
+        Exit {
+            at_ms: T0,
+            code,
+            session,
+            asked,
+        }
+    }
+
     #[test]
     fn a_clean_exit_waits_for_the_console_to_move() {
-        let exit = Exit {
-            at_ms: T0,
-            code: 0,
-            session: 1,
-        };
+        let exit = exit(0, 1, false);
         assert_eq!(
             next(pass(Some(1), HostState::None, Some(exit)), 7001.0),
             Step::Wait
@@ -1182,30 +1212,34 @@ mod tests {
         );
     }
 
+    /// A console that read none for a moment and came back to the same number
+    /// is still owed a host, and one that moved gets it at once.
     #[test]
-    fn a_host_ended_with_its_session_behaves_as_a_clean_one() {
-        let exit = Exit {
-            at_ms: T0,
-            code: SESSION_ENDED,
-            session: 1,
-        };
+    fn a_host_that_ended_when_asked_is_followed_at_once() {
+        let exit = exit(0, 1, true);
         assert_eq!(
-            next(pass(Some(1), HostState::None, Some(exit)), 7001.0),
-            Step::Wait
+            next(pass(Some(1), HostState::None, Some(exit)), T0),
+            Step::Start { session: 1 }
         );
         assert_eq!(
-            next(pass(Some(2), HostState::None, Some(exit)), 7001.0),
+            next(pass(Some(2), HostState::None, Some(exit)), T0),
             Step::Start { session: 2 }
+        );
+        assert_eq!(
+            next(pass(None, HostState::None, Some(exit)), T0),
+            Step::Wait
         );
     }
 
+    /// A logoff's end: at once into a console that moved, and after the
+    /// failure's delay into the same number, which may be a new session.
     #[test]
-    fn a_failed_exit_is_restarted_after_two_seconds() {
-        let exit = Exit {
-            at_ms: T0,
-            code: 1,
-            session: 1,
-        };
+    fn a_host_ended_with_its_session_is_followed_even_on_the_same_number() {
+        let exit = exit(SESSION_ENDED, 1, false);
+        assert_eq!(
+            next(pass(Some(2), HostState::None, Some(exit)), T0),
+            Step::Start { session: 2 }
+        );
         assert_eq!(
             next(pass(Some(1), HostState::None, Some(exit)), 1001.0),
             Step::Wait
@@ -1214,6 +1248,22 @@ mod tests {
             next(pass(Some(1), HostState::None, Some(exit)), 2001.0),
             Step::Start { session: 1 }
         );
+    }
+
+    #[test]
+    fn a_failed_exit_is_restarted_after_two_seconds() {
+        // On its own, and terminated at the bound after being asked.
+        for asked in [false, true] {
+            let exit = exit(1, 1, asked);
+            assert_eq!(
+                next(pass(Some(1), HostState::None, Some(exit)), 1001.0),
+                Step::Wait
+            );
+            assert_eq!(
+                next(pass(Some(1), HostState::None, Some(exit)), 2001.0),
+                Step::Start { session: 1 }
+            );
+        }
     }
 
     #[test]
