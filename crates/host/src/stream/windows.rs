@@ -218,9 +218,10 @@ fn encoder_config(config: &Config) -> lowlat_encode::nvenc::Config {
     }
 }
 
-/// AMD's encoder's configuration for `config`, reading two planes of YUV:
-/// the display's conversion, or the generator's frames.
-fn amd_config(config: &Config) -> lowlat_encode::amf::Config {
+/// AMD's encoder's configuration for `config`, reading `source`: the
+/// capture's own pictures, or two planes of YUV -- the display's conversion,
+/// or the generator's frames.
+fn amd_config(config: &Config, source: lowlat_encode::amf::Source) -> lowlat_encode::amf::Config {
     lowlat_encode::amf::Config {
         codec: match config.codec {
             Codec::H264 => lowlat_encode::amf::Codec::H264,
@@ -237,7 +238,7 @@ fn amd_config(config: &Config) -> lowlat_encode::amf::Config {
         } else {
             lowlat_encode::amf::Depth::Eight
         },
-        source: lowlat_encode::amf::Source::Yuv,
+        source,
     }
 }
 
@@ -431,8 +432,18 @@ fn run_amd(
             return Exit::Failed(status::ENCODER_UNAVAILABLE);
         }
     };
+    // **Eight bits read the capture as it is**, the encoder converting in its
+    // own hardware; ten go through our conversion into P010, which the
+    // encoder's own cannot write, and so does the host's own display read
+    // from its driver, whose buffers are converted as they are taken.
+    let in_place = !config.ten_bit && !Display::captures_own(config.output.as_deref());
+    let source = if in_place {
+        lowlat_encode::amf::Source::Rgb
+    } else {
+        lowlat_encode::amf::Source::Yuv
+    };
     let mut encoder =
-        match lowlat_encode::amf::Encoder::new(&runtime, &context, amd_config(&config)) {
+        match lowlat_encode::amf::Encoder::new(&runtime, &context, amd_config(&config, source)) {
             Ok(encoder) => encoder,
             Err(error) => {
                 lowlat_common::log_error!("stream: encoder could not be configured, {error}");
@@ -440,16 +451,22 @@ fn run_amd(
             }
         };
     lowlat_common::log_info!(
-        "stream: quality={:?}, quantiser floor {}",
+        "stream: quality={:?}, quantiser floor {}, the capture read {}",
         config.quality,
-        config.quality.min_qp()
+        config.quality.min_qp(),
+        if in_place { "in place" } else { "converted" }
     );
+    let register = if in_place {
+        Register::Captured(encoder.engine())
+    } else {
+        Register::Amd(&mut encoder)
+    };
     let mut desktop = match Display::open(
         device,
         &output.name,
         Layout::of(config.ten_bit, config.chroma_444),
         (config.width, config.height),
-        Register::Amd(&mut encoder),
+        register,
     ) {
         Ok(desktop) => desktop,
         Err(crate::display::Error::NoOutput) => {
@@ -583,14 +600,17 @@ fn synthetic_amd(
         fps: settle_pace(shared, shared.asked_fps(), 0),
         ..config
     };
-    let mut encoder =
-        match lowlat_encode::amf::Encoder::new(&runtime, &context, amd_config(&config)) {
-            Ok(encoder) => encoder,
-            Err(error) => {
-                lowlat_common::log_error!("stream: encoder could not be configured, {error}");
-                return Exit::Failed(status::ENCODER_UNAVAILABLE);
-            }
-        };
+    let mut encoder = match lowlat_encode::amf::Encoder::new(
+        &runtime,
+        &context,
+        amd_config(&config, lowlat_encode::amf::Source::Yuv),
+    ) {
+        Ok(encoder) => encoder,
+        Err(error) => {
+            lowlat_common::log_error!("stream: encoder could not be configured, {error}");
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
     lowlat_common::log_info!(
         "stream: quality={:?}, quantiser floor {}",
         config.quality,
@@ -603,7 +623,7 @@ impl FromDevice for lowlat_encode::nvenc::Encoder<'_> {
     fn submit_from_device(&mut self, registration: &Registration, force_keyframe: bool) -> bool {
         match registration {
             Registration::Nvenc(input) => self.submit_registered(input, force_keyframe).is_ok(),
-            Registration::Amd(_) => false,
+            Registration::Amd(_) | Registration::Captured(_) => false,
         }
     }
 }
@@ -612,6 +632,7 @@ impl FromDevice for lowlat_encode::amf::Encoder<'_> {
     fn submit_from_device(&mut self, registration: &Registration, force_keyframe: bool) -> bool {
         match registration {
             Registration::Amd(input) => self.submit_registered(*input, force_keyframe).is_ok(),
+            Registration::Captured(texture) => self.submit_texture(texture, force_keyframe).is_ok(),
             Registration::Nvenc(_) => false,
         }
     }

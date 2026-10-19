@@ -300,7 +300,11 @@ pub struct Mode {
 #[derive(Debug)]
 pub struct Frame {
     /// The image, when the frame carries a new one: the duplication's own
-    /// texture, read until the frame is released and never after.
+    /// texture, read until the frame is released. **After that the system
+    /// writes the desktop's changes into it as they come**, so a reader that
+    /// goes on reading it -- an encoder handed it in place, between one look
+    /// for a new frame and the next -- reads the last image only while the
+    /// desktop stays still.
     pub image: Option<Com<ID3D11Texture2D>>,
     /// When the system presented that image, by the performance counter.
     pub presented: i64,

@@ -118,6 +118,8 @@ pub enum Registration {
     Nvenc(lowlat_encode::nvenc::Input),
     /// The place of an input AMD's encoder keeps.
     Amd(usize),
+    /// A texture of the capture's own, which AMD's encoder reads as it is.
+    Captured(Com<ID3D11Texture2D>),
 }
 
 impl core::fmt::Debug for Registration {
@@ -125,6 +127,7 @@ impl core::fmt::Debug for Registration {
         match self {
             Self::Nvenc(_) => f.write_str("Nvenc"),
             Self::Amd(input) => write!(f, "Amd({input})"),
+            Self::Captured(_) => f.write_str("Captured"),
         }
     }
 }
@@ -135,6 +138,10 @@ pub enum Register<'a, 'c> {
     Nvenc(&'a lowlat_encode::nvenc::Encoder<'c>),
     /// AMD's, which keeps them and answers each with a place.
     Amd(&'a mut lowlat_encode::amf::Encoder<'c>),
+    /// AMD's reading the capture's own textures as they are, so nothing
+    /// converted and nothing registered: its engine is watched instead, so a
+    /// texture is never let go while it reads.
+    Captured(lowlat_encode::amf::Engine),
 }
 
 impl core::fmt::Debug for Register<'_, '_> {
@@ -142,6 +149,7 @@ impl core::fmt::Debug for Register<'_, '_> {
         match self {
             Self::Nvenc(_) => f.write_str("Nvenc"),
             Self::Amd(_) => f.write_str("Amd"),
+            Self::Captured(_) => f.write_str("Captured"),
         }
     }
 }
@@ -149,11 +157,12 @@ impl core::fmt::Debug for Register<'_, '_> {
 impl Register<'_, '_> {
     /// How many pictures the encoder holds at once, so how many targets the
     /// conversion turns through: a target is written again only once the
-    /// encoder is done reading it.
+    /// encoder is done reading it. None where nothing is converted.
     fn in_flight(&self) -> usize {
         match self {
             Self::Nvenc(_) => lowlat_encode::nvenc::IN_FLIGHT,
             Self::Amd(_) => lowlat_encode::amf::IN_FLIGHT,
+            Self::Captured(_) => 0,
         }
     }
 
@@ -167,8 +176,24 @@ impl Register<'_, '_> {
                 .register_texture(texture)
                 .map(Registration::Amd)
                 .map_err(|_| Error::Register),
+            Self::Captured(_) => Err(Error::Register),
         }
     }
+}
+
+/// The capture's own texture handed to an encoder that reads it as it is
+/// (AMD's, at eight bits): the duplication's frame held through the encode,
+/// and given back -- the next taken -- only once the engine is done with it,
+/// since the loop acquires the next picture before it collects the last.
+struct InPlace {
+    engine: lowlat_encode::amf::Engine,
+    /// The texture the pictures are made from, as the encoder is handed it.
+    presented: Option<Registration>,
+    /// Whether the duplication's frame is still held.
+    held: bool,
+    /// Waits that found the engine still reading and held off the next
+    /// frame: how often the guard is what kept a picture whole.
+    deferred: u64,
 }
 
 /// Whether `wanted` names `name`: the system's own name, its `\\.\` prefix
@@ -970,6 +995,9 @@ pub struct Display {
     /// display whose driver's frames could be taken.
     direct: Option<Direct>,
     kept: Option<Kept>,
+    /// The capture's own texture read by the encoder, in place of the
+    /// conversion and its targets.
+    in_place: Option<InPlace>,
     converter: Converter,
     targets: Vec<Target>,
     registrations: Vec<Registration>,
@@ -1163,11 +1191,21 @@ impl Display {
             registrations.push(register.register(target.texture())?);
             targets.push(target);
         }
+        let in_place = match &register {
+            Register::Captured(engine) => Some(InPlace {
+                engine: engine.clone(),
+                presented: None,
+                held: false,
+                deferred: 0,
+            }),
+            Register::Nvenc(_) | Register::Amd(_) => None,
+        };
         let own = own().is_some_and(|own| own.eq_ignore_ascii_case(&output.name));
         let mut display = Self {
             duplication: None,
             direct: None,
             kept: None,
+            in_place,
             converter,
             targets,
             registrations,
@@ -1200,8 +1238,11 @@ impl Display {
         remember(name);
         // **The host's own display is read straight from its driver whenever
         // the driver answers** -- which it does to the system account the
-        // host runs as -- and duplicated otherwise, as any display is.
+        // host runs as -- and duplicated otherwise, as any display is. **An
+        // encoder reading in place takes the duplication**: the driver's
+        // buffers are converted, and it has no targets to convert into.
         let attached = match direct {
+            _ if display.in_place.is_some() => None,
             Some(slot) => Some((slot, Direct::attach(slot)?)),
             None => own_slot(&display.output.name).and_then(|slot| match Direct::attach(slot) {
                 Ok(attached) => Some((slot, attached)),
@@ -1368,6 +1409,9 @@ impl Display {
         }
         self.kept = None;
         self.duplication = None;
+        if let Some(in_place) = self.in_place.as_mut() {
+            in_place.held = false;
+        }
         self.converter.forget();
     }
 
@@ -1400,8 +1444,12 @@ impl Display {
         Some(if self.own { VIRTUAL } else { &self.output.name })
     }
 
-    /// The registration the last conversion wrote into.
+    /// The registration the last conversion wrote into, or the capture's own
+    /// texture an encoder reading in place was last handed.
     pub fn presented(&self) -> Option<&Registration> {
+        if let Some(in_place) = &self.in_place {
+            return in_place.presented.as_ref();
+        }
         let slot = self.next.checked_sub(1)? % self.registrations.len().max(1);
         self.registrations.get(slot)
     }
@@ -1430,6 +1478,9 @@ impl Display {
         self.duplicate()?;
         let kept = match self.kept.take() {
             Some(kept) => kept,
+            // **Read in place, the picture held stands**: a new one is taken
+            // by a wait alone, once the encoder is done with this one.
+            None if self.in_place.is_some() => return Ok(Time::now()),
             // A composition since the wait gave up, asked for without
             // waiting.
             None => match self.look(0)? {
@@ -1437,6 +1488,32 @@ impl Display {
                 Looked::Pointer | Looked::Nothing => return Ok(Time::now()),
             },
         };
+        if let Some(in_place) = self.in_place.as_mut() {
+            // **Held, not converted**: the encoder reads the frame itself, so
+            // it goes back only before the next is taken.
+            in_place.presented = Some(Registration::Captured(kept.image));
+            in_place.held = true;
+            self.next = self.next.wrapping_add(1);
+            self.timing
+                .queued
+                .record(duplication::age_ms(kept.presented));
+            self.timing.report(&self.output.name);
+            if self.timing.pictures % REPORT_EVERY == 0 {
+                lowlat_common::log_info!(
+                    "display: {} read in place, the next frame held off for the encoder {} \
+                     time(s) in {} pictures",
+                    self.output.name,
+                    in_place.deferred,
+                    self.timing.pictures
+                );
+            }
+            self.flight = Some(Acquired {
+                at: kept.at,
+                changed: true,
+                composed_before_ms: Some(kept.age_ms),
+            });
+            return Ok(kept.at);
+        }
         let slot = self.next % self.targets.len().max(1);
         let target = self.targets.get(slot).ok_or(Error::Register)?;
         let timed = self.timing.read(&self.device);
@@ -1816,6 +1893,7 @@ impl Display {
         let began = *self.waiting_since.get_or_insert_with(Time::now);
         let called = Time::now();
         let mut moved = false;
+        let mut deferred = false;
         loop {
             let now = Time::now();
             let bound = self.period_ms - clock::diff_ms(began, now);
@@ -1832,6 +1910,23 @@ impl Display {
                 reason = "a positive wait of at most a refresh or the loop's timeout"
             )]
             let wait = budget.min(bound).ceil().max(1.0) as u32;
+            // **Nothing is taken while the encoder reads in place**: taking the
+            // next frame gives the held one back, and the system writes the
+            // desktop's changes into the same texture once it is back.
+            if let Some(in_place) = self.in_place.as_mut() {
+                if in_place.engine.busy() {
+                    if !core::mem::replace(&mut deferred, true) {
+                        in_place.deferred += 1;
+                    }
+                    std::thread::sleep(core::time::Duration::from_millis(1));
+                    continue;
+                }
+                if core::mem::take(&mut in_place.held)
+                    && let Some(source) = self.duplication.as_mut()
+                {
+                    source.release();
+                }
+            }
             match self.look(wait) {
                 Ok(Looked::Image(kept)) => {
                     self.kept = Some(kept);
@@ -2201,6 +2296,9 @@ mod tests {
         let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
         // AMD's, written out.
         if output.adapter.vendor == 0x1002 {
+            // As the stream builds it: eight bits read the duplication in
+            // place, ten go through the conversion.
+            let in_place = layout == Layout::Nv12;
             let runtime = lowlat_drivers::amf::Amf::load().expect("AMD's runtime");
             let context = runtime.context(&device).expect("a context");
             let mut encoder = amf::Encoder::new(
@@ -2219,24 +2317,32 @@ mod tests {
                     } else {
                         amf::Depth::Eight
                     },
-                    source: amf::Source::Yuv,
+                    source: if in_place {
+                        amf::Source::Rgb
+                    } else {
+                        amf::Source::Yuv
+                    },
                 },
             )
             .expect("an encoder");
-            let mut display = Display::open(
-                &device,
-                &output.name,
-                layout,
-                (width, height),
-                Register::Amd(&mut encoder),
-            )
-            .expect("the display");
+            let register = if in_place {
+                Register::Captured(encoder.engine())
+            } else {
+                Register::Amd(&mut encoder)
+            };
+            let mut display =
+                Display::open(&device, &output.name, layout, (width, height), register)
+                    .expect("the display");
+            println!("in place: {in_place}");
             at_the_displays_pace(
                 &mut display,
                 &mut encoder,
                 hz,
                 |encoder, made, force| match made {
                     Registration::Amd(input) => encoder.submit_registered(*input, force).is_ok(),
+                    Registration::Captured(texture) => {
+                        encoder.submit_texture(texture, force).is_ok()
+                    }
                     Registration::Nvenc(_) => false,
                 },
             );
@@ -2282,7 +2388,7 @@ mod tests {
             hz,
             |encoder, made, force| match made {
                 Registration::Nvenc(input) => encoder.submit_registered(input, force).is_ok(),
-                Registration::Amd(_) => false,
+                Registration::Amd(_) | Registration::Captured(_) => false,
             },
         );
     }

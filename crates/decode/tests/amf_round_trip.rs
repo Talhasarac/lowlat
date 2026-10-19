@@ -385,12 +385,20 @@ fn the_wait_wakes_on_the_picture() {
     )
     .expect("an encoder");
     assert!(!encoder.wait_finished(Duration::from_millis(100)));
+    let engine = encoder.engine();
+    assert!(
+        !engine.busy(),
+        "the engine busy before anything was handed over"
+    );
     let mut source = Synthetic::new(WIDTH, HEIGHT);
     let mut waits = Vec::new();
     for index in 0..30 {
         encoder
             .submit(&source.acquire(), index == 0)
             .expect("submit");
+        // **Busy from the submit**, before the engine could have finished:
+        // what a reader in place waits on before letting the texture go.
+        assert!(engine.busy(), "the engine idle with a picture just in it");
         let began = Instant::now();
         // The thread may have it already; otherwise the wait sleeps on it.
         while !matches!(encoder.poll().expect("poll"), Poll::Ready { .. }) {
@@ -400,6 +408,7 @@ fn the_wait_wakes_on_the_picture() {
                 "the wait ran on"
             );
         }
+        assert!(!engine.busy(), "the engine busy with its one picture out");
         waits.push(began.elapsed());
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -523,7 +532,6 @@ fn rgb_round_trip(
 ) -> (u32, f64, f64) {
     let config = encoder.config();
     let (width, height) = (config.width, config.height);
-    let input = encoder.register_texture(texture).expect("registered");
     let decoding = amd(d3d11);
     let mut decoder = Backend::new(&decoding, (4096, 4096));
     decoder.build(&header(codec, false)).expect("build");
@@ -559,9 +567,7 @@ fn rgb_round_trip(
                 0
             );
         }
-        encoder
-            .submit_registered(input, index == 0)
-            .expect("submit");
+        encoder.submit_texture(texture, index == 0).expect("submit");
         let (unit, _) = next_unit(encoder);
         decoder.feed(&unit).expect("feed");
         if index + 1 == 30 {

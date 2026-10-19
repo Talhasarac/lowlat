@@ -170,6 +170,28 @@ struct Shared {
     failed: AtomicI32,
 }
 
+/// Whether the encoder still has pictures in its engine, for a reader of the
+/// textures it was handed: one that would let a texture go, or have it
+/// written again, asks first.
+#[derive(Clone)]
+pub struct Engine(Arc<Shared>);
+
+impl core::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Engine")
+            .field("busy", &self.busy())
+            .finish()
+    }
+}
+
+impl Engine {
+    /// True from a picture's submit until its unit comes out: until then the
+    /// engine may still be reading its texture.
+    pub fn busy(&self) -> bool {
+        self.0.in_engine.load(Ordering::Acquire) > 0
+    }
+}
+
 /// One of the generator's inputs: the texture the encoder reads, the one the
 /// processor writes it through, and the input made over the first.
 struct Slot<'c> {
@@ -196,6 +218,9 @@ pub struct Encoder<'c> {
     /// The inputs made over textures something else writes, each at the
     /// place [`Encoder::register_texture`] answered.
     registered: Vec<runtime::Input<'c>>,
+    /// The inputs made over a capture's own textures, by the texture, as
+    /// [`Encoder::submit_texture`] first saw each.
+    captured: Vec<(*mut ID3D11Texture2D, runtime::Input<'c>)>,
     context: &'c Context<'c>,
     names: &'static Names,
     config: Config,
@@ -303,6 +328,7 @@ impl<'c> Encoder<'c> {
             slots,
             next_slot: 0,
             registered: Vec::new(),
+            captured: Vec::new(),
             held: None,
             outstanding: 0,
             component,
@@ -321,6 +347,12 @@ impl<'c> Encoder<'c> {
         self.outstanding
     }
 
+    /// Whether the engine still has pictures in it, for a reader of the
+    /// textures handed over.
+    pub fn engine(&self) -> Engine {
+        Engine(Arc::clone(&self.shared))
+    }
+
     /// `texture`, which something else on the encoder's device writes -- a
     /// conversion's target, or a captured picture -- made an input the
     /// encoder keeps, answered by its place among them: submitted by that
@@ -328,20 +360,66 @@ impl<'c> Encoder<'c> {
     /// picture. Kept as long as the encoder, which gives back every picture
     /// it holds before its inputs go.
     pub fn register_texture(&mut self, texture: &Com<ID3D11Texture2D>) -> Result<usize, Error> {
-        // SAFETY: plain data the call fills whole.
-        let mut desc: D3D11_TEXTURE2D_DESC = unsafe { core::mem::zeroed() };
-        // SAFETY: a live texture; the output is a live local.
-        unsafe { vcall!(texture.as_ptr(), GetDesc, &raw mut desc) };
-        let reads = match (self.config.source, self.config.depth) {
-            (Source::Rgb, _) => desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM,
-            (Source::Yuv, Depth::Eight) => desc.Format == DXGI_FORMAT_NV12,
-            (Source::Yuv, Depth::Ten) => desc.Format == DXGI_FORMAT_P010,
-        };
-        if !reads {
+        if !self.reads(texture) {
             return Err(Error::Layout);
         }
         self.registered.push(self.context.input(texture)?);
         Ok(self.registered.len() - 1)
+    }
+
+    /// Whether `texture` is in the layout the encoder was built to read.
+    fn reads(&self, texture: &Com<ID3D11Texture2D>) -> bool {
+        // SAFETY: plain data the call fills whole.
+        let mut desc: D3D11_TEXTURE2D_DESC = unsafe { core::mem::zeroed() };
+        // SAFETY: a live texture; the output is a live local.
+        unsafe { vcall!(texture.as_ptr(), GetDesc, &raw mut desc) };
+        match (self.config.source, self.config.depth) {
+            (Source::Rgb, _) => desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM,
+            (Source::Yuv, Depth::Eight) => desc.Format == DXGI_FORMAT_NV12,
+            (Source::Yuv, Depth::Ten) => desc.Format == DXGI_FORMAT_P010,
+        }
+    }
+
+    /// Hand over the picture in `texture`, a capture's own on the encoder's
+    /// device, read as it is: made an input the first time it is seen and
+    /// kept while it goes on being handed over. The texture must hold the
+    /// picture until [`Engine::busy`] says the engine is done with it.
+    pub fn submit_texture(
+        &mut self,
+        texture: &Com<ID3D11Texture2D>,
+        force_keyframe: bool,
+    ) -> Result<(), Error> {
+        if self.outstanding >= IN_FLIGHT {
+            return Err(Error::QueueFull);
+        }
+        self.failed()?;
+        let raw = texture.as_ptr();
+        let at = match self.captured.iter().position(|(seen, _)| *seen == raw) {
+            Some(at) => at,
+            None => {
+                if !self.reads(texture) {
+                    return Err(Error::Layout);
+                }
+                // **A texture not seen before replaces those that were**, once
+                // nothing in the engine can be reading them: a capture keeps
+                // one texture a duplication, and lets the old go with it.
+                if self.shared.in_engine.load(Ordering::Acquire) == 0 {
+                    self.captured.clear();
+                }
+                self.captured.push((raw, self.context.input(texture)?));
+                self.captured.len() - 1
+            }
+        };
+        let (_, made) = &self.captured[at];
+        queue(
+            &self.component,
+            self.names,
+            &self.shared,
+            made,
+            force_keyframe,
+        )?;
+        self.outstanding += 1;
+        Ok(())
     }
 
     /// Hand over a picture already on the device, in the input
