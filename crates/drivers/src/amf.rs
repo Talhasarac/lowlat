@@ -820,7 +820,7 @@ impl Amf {
         Ok(Encoder {
             raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
             codec,
-            _context: PhantomData,
+            device: context.device(),
         })
     }
 }
@@ -1145,7 +1145,8 @@ const IID_BUFFER: Guid = Guid {
 pub struct Encoder<'c> {
     raw: NonNull<c_void>,
     codec: Codec,
-    _context: PhantomData<&'c ()>,
+    /// The context's device, asked at the drop whether it is still there.
+    device: &'c Device,
 }
 
 impl fmt::Debug for Encoder<'_> {
@@ -1326,6 +1327,13 @@ impl QueryHandle {
 
 impl Drop for Encoder<'_> {
     fn drop(&mut self) {
+        // **Let go unended on a device that is gone.** The runtime's ending
+        // copies on the device, and AMD's driver then reads through a null
+        // where it should refuse -- a restart of the driver under an encode,
+        // measured. What the encoder holds stays held for the process's life.
+        if self.device.lost() {
+            return;
+        }
         // SAFETY: a live encoder, terminated once and then released once.
         unsafe {
             (self.table().terminate)(self.raw.as_ptr());
