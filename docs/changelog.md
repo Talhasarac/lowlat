@@ -17,6 +17,14 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   reaches a message the association has not put on the wire, which the old rule could not:
   the event that says a message was sent is seen only when the output is polled, so a queue
   nothing was ever asked for read as alive for ever.
+- **The streams are not interleaved, and the protocol document said they were.** The
+  association sends one message at a time and takes turns between streams at message
+  boundaries, so control and sound wait for the video message in flight and for no more
+  than that; the stream priorities take effect only when both ends negotiate the
+  interleaving extension, which this host does not advertise and the browsers in use do not
+  enable. [01 §14.2](01-protocol.md) says so now, and the host logs what the association
+  negotiated, the interleaving and the peer's implementation as the association detects
+  it, on the line that says the association is up, so a live run states it.
 - **The association's timeline follows the session's clock at every call that carries
   it.** The association keeps a timeline of its own and moves it only when told; the session
   told it on the housekeeping pass alone, which the shell runs after it has fed the pass's

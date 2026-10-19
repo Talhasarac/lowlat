@@ -1254,8 +1254,12 @@ Only channels 0, 1 and 2 are served.
 that keeps sound from arriving late happens in the same place on both stacks: before a
 message is queued, never after ([05 §9.2](05-host.md)). What differs is who retransmits --
 the association, on its own timers, rather than the acknowledgements of §9 -- and that the
-streams are interleaved, so a large picture in flight holds neither control nor sound; video
-shares a head-of-line with nothing but itself.
+association sends one message at a time, taking turns between streams at message
+boundaries, so control and sound wait for the video message in flight and for no more than
+that. The priorities above take effect only when both ends negotiate the interleaving
+extension, which this host does not advertise and the browsers in use do not enable; the
+host logs what was negotiated when the association comes up. (*Corrected 2026-10-19: this
+said the streams were interleaved and a picture in flight held neither control nor sound.*)
 
 ### §14.3 Messages
 
