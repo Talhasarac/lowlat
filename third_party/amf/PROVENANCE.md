@@ -17,13 +17,15 @@ here is upstream's blob, checked when they were added. The layout is the install
 the headers include one another by relative paths, so either layout works unedited.
 `LICENSE.txt` is upstream's text, with the line endings this repository stores text in.
 
-**Only what the decoder needs is carried**: the include closure of the factory
+**Only what the decoder and the encoders need is carried**: the include closure of the factory
 (`core/Factory.h`), the version (`core/Version.h`), the decoder component
-(`components/VideoDecoderUVD.h`) and its capability query (`components/ComponentCaps.h`), 22
-headers, which compile as C and as C++. The encoders, capture, the pre-processing and analysis
-components, the software codec wrappers, the Vulkan and D3D12 interop headers, the samples and
-the documentation are not carried; the host's encoder takes its headers from the same tag when
-it is planned.
+(`components/VideoDecoderUVD.h`), its capability query (`components/ComponentCaps.h`), and the
+H.264 and HEVC encoder components (`components/VideoEncoderVCE.h`,
+`components/VideoEncoderHEVC.h`, with the `components/PreAnalysis.h` they include), 25 headers,
+which compile as C and as C++. The AV1 encoder, capture, the pre-processing components, the
+software codec wrappers, the Vulkan and D3D12 interop headers, the samples and the documentation
+are not carried. The three encoder headers were added on 2026-10-19 from the same commit, each
+blob checked against upstream's there.
 
 ## Licensing
 
@@ -38,10 +40,12 @@ own version, read with `AMFQueryVersion`, to `AMFInit`. So the header does not r
 floor by itself, as a version stamped into every structure would; a feature the runtime lacks
 is refused where it is asked for. Everything the decoder uses is here -- its low-latency mode
 arrived at 1.4.26 -- and the next release, 1.5.2, changes nothing in these headers the decoder
-calls: it adds a surface interface for mapping to the processor, and encoder options. **Raise
-the pin only for a feature we actually call.**
+calls: it adds a surface interface for mapping to the processor, and encoder options. Everything
+the encoders use is here too, and a runtime of 1.4.37 answers all of it. **Raise the pin only for
+a feature we actually call.**
 
 ## What is generated from this
 
-Nothing yet. W1.6, the vendor's decoder on AMD, generates its bindings from these, committed
-rather than produced at build time, as the other vendored interfaces are.
+Nothing. The tables the decoder and the encoders are called through are declared by hand in
+`crates/drivers/src/amf.rs`, only the methods used, each at the slot these headers give it, which
+a test asserts; the property names and values used are written there as constants.
