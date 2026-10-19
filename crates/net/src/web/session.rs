@@ -128,6 +128,9 @@ pub struct WebSession {
     delivered_ms: f64,
     srtt_ms: f64,
     rtt_samples: VecDeque<f64>,
+    /// Whether a message has been delivered yet. Before one the association
+    /// reports its initial timeout as the estimate, which is no measurement.
+    rtt_seen: bool,
     /// Messages refused for their payload identifier or their stream.
     skipped: u64,
 }
@@ -231,6 +234,7 @@ impl WebSession {
             delivered_ms: now_ms,
             srtt_ms: 0.0,
             rtt_samples: VecDeque::with_capacity(RTT_WINDOW),
+            rtt_seen: false,
             skipped: 0,
         })
     }
@@ -453,6 +457,7 @@ impl WebSession {
                     self.last_ack_in_ms = now_ms;
                     self.delivered_ms = now_ms;
                     self.last_progress_ms = now_ms;
+                    self.sample_rtt();
                 }
             }
             SocketEvent::OnLifecycleMessageExpired(id)
@@ -488,16 +493,33 @@ impl WebSession {
         any
     }
 
+    /// The association's smoothed estimate, read whenever the loop passes.
+    /// Nothing before the first delivery: the association starts from its
+    /// initial timeout, which is not a measurement.
     fn refresh_rtt(&mut self) {
+        if !self.rtt_seen {
+            return;
+        }
         if let Some(metrics) = self.assoc.metrics() {
             let srtt = metrics.srtt.as_secs_f64() * 1000.0;
             if srtt > 0.0 {
                 self.srtt_ms = srtt;
-                if self.rtt_samples.len() == RTT_WINDOW {
-                    self.rtt_samples.pop_front();
-                }
-                self.rtt_samples.push_back(srtt);
             }
+        }
+    }
+
+    /// A message was just delivered: the estimate behind it goes into the
+    /// minimum's window. Once per delivery and not once per pass, so a loop
+    /// that passes a thousand times a second does not fill the window with
+    /// the estimate and read the gradient between the two as zero.
+    fn sample_rtt(&mut self) {
+        self.rtt_seen = true;
+        self.refresh_rtt();
+        if self.srtt_ms > 0.0 {
+            if self.rtt_samples.len() == RTT_WINDOW {
+                self.rtt_samples.pop_front();
+            }
+            self.rtt_samples.push_back(self.srtt_ms);
         }
     }
 
@@ -931,6 +953,68 @@ mod tests {
         let mut now = 0.0;
         run(&mut client, &mut server, &mut now, 20);
         assert_eq!(client.assoc.negotiated(), Some((false, "dcsctp-rs")));
+    }
+
+    /// One message, acknowledged `rtt_ms` later: the peer's delayed
+    /// acknowledgement timer has fired by then, and the acknowledgement
+    /// crosses at that moment. Returns the clock after the round.
+    fn round_trip(client: &mut WebSession, server: &mut WebSession, now: f64, rtt_ms: f64) -> f64 {
+        client.send_message(0, b"HDR-13-BYTES!", b"x").unwrap();
+        exchange(client, server, now);
+        let back = now + rtt_ms;
+        server.poll(back);
+        assert!(exchange(server, client, back) > 0, "no acknowledgement");
+        while take(server, 0).is_some() {}
+        client.poll(back);
+        back
+    }
+
+    /// Before anything has been delivered there is no round trip, and both
+    /// figures say so, as the native session's do; the association's own
+    /// starting value is its initial timeout, which is not a measurement.
+    #[test]
+    fn the_round_trip_reads_zero_before_the_first_delivery() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        client.poll(now);
+        assert_eq!(client.srtt_ms(), 0.0, "a round trip before any delivery");
+        assert_eq!(client.rtt_min_ms(), 0.0);
+        now = round_trip(&mut client, &mut server, now, 250.0);
+        assert!((client.srtt_ms() - 250.0).abs() < 1e-6);
+        assert!((client.rtt_min_ms() - 250.0).abs() < 1e-6, "{}", now);
+    }
+
+    /// The minimum is read beside the estimate for the gradient between
+    /// them, which is the queue building. It is sampled once per delivery,
+    /// so a loop that polls a thousand times a second does not fill the
+    /// window with the estimate and read the gradient as zero.
+    #[test]
+    fn the_round_trip_minimum_keeps_the_floor_while_the_estimate_rises() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        client.poll(now);
+        for _ in 0..8 {
+            now = round_trip(&mut client, &mut server, now, 250.0);
+        }
+        assert!((client.srtt_ms() - 250.0).abs() < 1e-6);
+        // The path slows, short of the association's retransmission floor
+        // of 400 ms, past which a chunk is resent and its sample discarded,
+        // and the loop keeps passing between rounds.
+        for _ in 0..8 {
+            now = round_trip(&mut client, &mut server, now, 390.0);
+            for _ in 0..100 {
+                now += 1.0;
+                client.poll(now);
+            }
+        }
+        let (srtt, floor) = (client.srtt_ms(), client.rtt_min_ms());
+        assert!(srtt > 300.0, "the estimate did not rise: {srtt}");
+        assert!(
+            (floor - 250.0).abs() < 1e-6,
+            "the minimum reads {floor} beside an estimate of {srtt}"
+        );
     }
 
     #[test]
