@@ -409,7 +409,13 @@ impl WebSession {
         match event {
             SocketEvent::SendPacket(_) => {}
             SocketEvent::OnConnected() => {
-                lowlat_common::log_info!("web: association up");
+                // What was negotiated decides whether the priorities mean
+                // anything, and a live run cannot tell otherwise.
+                let (interleaving, peer) = self.assoc.negotiated().unwrap_or((false, "unknown"));
+                lowlat_common::log_info!(
+                    "web: association up, interleaving={} peer={peer}",
+                    u8::from(interleaving)
+                );
                 self.last_progress_ms = now_ms;
             }
             SocketEvent::OnClosed() => {
@@ -912,6 +918,19 @@ mod tests {
             server.assoc.metrics().is_some(),
             "no association on the server"
         );
+    }
+
+    /// What the association negotiated is read off its own figures for the
+    /// line that says it is up: our own pair agrees no interleaving, so the
+    /// priorities are inert and the streams take turns at message
+    /// boundaries, and the client names the peer's implementation from the
+    /// cookie it was handed.
+    #[test]
+    fn the_pair_negotiates_no_interleaving_and_names_its_peer() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        assert_eq!(client.assoc.negotiated(), Some((false, "dcsctp-rs")));
     }
 
     #[test]

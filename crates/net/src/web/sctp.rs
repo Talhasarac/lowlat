@@ -8,8 +8,8 @@
 use std::time::Duration;
 
 use dcsctp::api::{
-    DcSctpSocket, LifecycleId, Message, Metrics, Options, PpId, SendError, SendOptions, Socket,
-    SocketEvent, SocketTime, StreamId,
+    DcSctpSocket, LifecycleId, Message, Metrics, Options, PpId, SctpImplementation, SendError,
+    SendOptions, Socket, SocketEvent, SocketTime, StreamId,
 };
 
 use super::{
@@ -122,6 +122,21 @@ impl Assoc {
     /// Path figures, once the association is up.
     pub(super) fn metrics(&self) -> Option<Metrics> {
         self.socket.get_metrics()
+    }
+
+    /// What was negotiated, once the association is up: whether both ends
+    /// agreed to interleave messages, and the peer's implementation as the
+    /// socket detects it from the handshake.
+    pub(super) fn negotiated(&self) -> Option<(bool, &'static str)> {
+        let m = self.socket.get_metrics()?;
+        let peer = match m.peer_implementation {
+            SctpImplementation::Unknown => "unknown",
+            SctpImplementation::DcsctpRs => "dcsctp-rs",
+            SctpImplementation::DcsctpCc => "dcsctp",
+            SctpImplementation::UsrSctp => "usrsctp",
+            SctpImplementation::Other => "other",
+        };
+        Some((m.uses_message_interleaving, peer))
     }
 
     /// Bytes queued on a stream and not yet handed to the path.

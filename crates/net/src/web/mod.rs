@@ -58,6 +58,11 @@ pub const INBOX_DEPTH: usize = 1000;
 
 /// Stream priorities: control ahead of sound ahead of pictures, because a
 /// picture that waits is late and an input event that waits is lost time.
+/// They take effect only when both ends negotiate the interleaving
+/// extension, which this host does not advertise and the browsers in use
+/// do not enable; without it the association sends one message at a time
+/// and takes turns between streams at message boundaries, so control and
+/// sound wait for the video message in flight and for no more than that.
 pub const PRIORITY_CONTROL: u16 = 512;
 pub const PRIORITY_AUDIO: u16 = 384;
 pub const PRIORITY_VIDEO: u16 = 256;
