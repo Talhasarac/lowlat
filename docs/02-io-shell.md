@@ -113,6 +113,7 @@ loop:
     timeout = clamp(endpoint.next_timer_ms(now), 1, 50)   // rounded up, never down
     wait:    poll(fd, timeout) -> which descriptors spoke
     now = clock()                                         // the pass runs on this
+    endpoint.woke(now)                                    // the media half's own timeline follows
     receive: if the socket spoke: batch drain -> endpoint.process_input(...)
     deliver: drain complete messages -> pipeline rings (+ notify)
     if app_send_seq changed:

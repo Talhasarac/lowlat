@@ -3,9 +3,21 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
-## 2026-10-19 - the browser pipe's stale count reads the association's pacing as fresh
+## 2026-10-19 - the browser pipe's figures: pacing is fresh, and the association's clock is the session's
 
 ### Fixed
+- **The association's timeline follows the session's clock at every call that carries
+  it.** The association keeps a timeline of its own and moves it only when told; the session
+  told it on the housekeeping pass alone, which the shell runs after it has fed the pass's
+  records. So an acknowledgement was timed at the previous pass's reading, and a message the
+  application queued after a quiet interval was stamped with the pass before the wake: a
+  round trip measured between those two readings was short by the receive wait, up to the
+  shell's longest wait of 50 ms when the link was quiet, and the first acknowledgement after
+  a quiet interval, timed at zero, was discarded, so the estimate stayed at the association's
+  initial timeout of 500 ms. Every call that carries the clock passes it on now, and the
+  seam gained `woke`: the shell reports its reading to the media half before it pulls the
+  application, so what the application queues is stamped with this pass. The native session
+  stamps nothing at the queue and ignores it.
 - **A picture the association is still releasing no longer reads as stale.** The pressure
   synthesized for the controller on the browser pipe counted whatever a queued message had
   not yet put on the wire as stale at once, the way the native scan counts a fragment the
@@ -27,6 +39,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - A picture larger than the association's initial window, queued on a pair that exchanges
   nothing more: fresh, its window is the whole picture and its stale count zero, which read
   82 before the fix; polled past the threshold, what is still unsent is stale.
+- An acknowledgement that arrives 210 ms after the message it answers, with nothing having
+  read the client's clock in between, sets the round trip to 210 ms; before the fix the
+  estimate stayed at the initial 500. A message queued at a wake 40 ms after the last pass,
+  acknowledged 210 ms later, measures 210 and not 250.
 
 ## 2026-10-18 - the client's encode and decode figures, each what it says
 
