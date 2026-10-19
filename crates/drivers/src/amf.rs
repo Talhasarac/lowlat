@@ -866,11 +866,14 @@ impl<'d> Context<'d> {
 
     /// `texture`, which must be the context's device's, wrapped for an
     /// encoder to read: made once and submitted as often as the caller
-    /// likes, each time read as the texture is then.
-    pub fn input<'a>(&'a self, texture: &'a Com<ID3D11Texture2D>) -> Result<Input<'a>> {
+    /// likes, each time read as the texture is then. The wrapper holds a
+    /// reference of its own on the texture.
+    pub fn input(&self, texture: &Com<ID3D11Texture2D>) -> Result<Input<'_>> {
+        let texture = texture.clone_ref();
         let mut raw: *mut c_void = core::ptr::null_mut();
-        // SAFETY: a live context and a live texture, which the wrapper's
-        // lifetime keeps alive; no observer; the output is a live local.
+        // SAFETY: a live context and a live texture, which the wrapper keeps
+        // alive by its own reference; no observer; the output is a live
+        // local.
         check(unsafe {
             (self.table().create_surface_from_dx11_native)(
                 self.raw.as_ptr(),
@@ -881,7 +884,8 @@ impl<'d> Context<'d> {
         })?;
         Ok(Input {
             raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
-            _borrowed: PhantomData,
+            _texture: texture,
+            _context: PhantomData,
         })
     }
 }
@@ -1222,43 +1226,99 @@ impl<'c> Encoder<'c> {
         check(unsafe { (self.table().init)(self.raw.as_ptr(), format.code(), width, height) })
     }
 
-    /// Hand `input` over for one picture. The encoder holds it until the
-    /// unit it gives for it is collected.
-    pub fn submit(&self, input: &Input<'_>) -> Result<Submitted> {
+    /// Hand `input` over for one picture: true when it was taken, false when
+    /// the encoder holds as many as it takes. The encoder holds the input
+    /// until the unit it gives for it is collected.
+    pub fn submit(&self, input: &Input<'_>) -> Result<bool> {
         // SAFETY: a live encoder and a live input.
-        Component::submitted(unsafe {
-            (self.table().submit_input)(self.raw.as_ptr(), input.raw.as_ptr())
-        })
+        match unsafe { (self.table().submit_input)(self.raw.as_ptr(), input.raw.as_ptr()) } {
+            OK => Ok(true),
+            INPUT_FULL => Ok(false),
+            other => Err(Error::Status(other)),
+        }
     }
 
     /// The next unit, if one is ready: at once, or after waiting as long as
     /// the encoder was told before it was initialised.
     pub fn query(&self) -> Result<Option<Unit<'c>>> {
-        let mut data: *mut c_void = core::ptr::null_mut();
-        // SAFETY: a live encoder; the output is a live local.
-        let status = unsafe { (self.table().query_output)(self.raw.as_ptr(), &raw mut data) };
-        match status {
-            OK => {}
-            REPEAT | EOF => return Ok(None),
-            other => return Err(Error::Status(other)),
-        }
-        let Some(data) = NonNull::new(data) else {
-            return Ok(None);
-        };
-        // The data handed out is a buffer; its buffer interface is asked for,
-        // and the data's own reference given up.
-        let mut buffer: *mut c_void = core::ptr::null_mut();
-        // SAFETY: a live object the call handed a reference on; the identity
-        // and the output are live.
-        let status = unsafe {
-            let base = table::<BaseTable>(data);
-            let status = (base.query_interface)(data.as_ptr(), &IID_BUFFER, &raw mut buffer);
-            release(data);
-            status
-        };
-        check(status)?;
-        Ok(Some(Unit {
-            raw: NonNull::new(buffer).ok_or(Error::Status(status))?,
+        // SAFETY: a live encoder.
+        Ok(unsafe { query_on(self.raw) }?.map(|raw| Unit {
+            raw,
+            _context: PhantomData,
+        }))
+    }
+
+    /// The encoder's query, for a thread of the caller's that collects its
+    /// units while this one submits: the runtime takes a query on one thread
+    /// while another submits pictures and writes settings.
+    ///
+    /// # Safety
+    ///
+    /// The handle is not used after this encoder is dropped, and every unit
+    /// it hands out is released before then.
+    pub unsafe fn query_handle(&self) -> QueryHandle {
+        QueryHandle { raw: self.raw }
+    }
+}
+
+/// Query the encoder at `this` once: the buffer of the next unit, if one is
+/// ready, with a reference the caller holds.
+///
+/// # Safety
+///
+/// `this` is a live encoder.
+unsafe fn query_on(this: NonNull<c_void>) -> Result<Option<NonNull<c_void>>> {
+    let mut data: *mut c_void = core::ptr::null_mut();
+    // SAFETY: the caller's contract; the output is a live local.
+    let status =
+        unsafe { (table::<ComponentTable>(this).query_output)(this.as_ptr(), &raw mut data) };
+    match status {
+        OK => {}
+        REPEAT | EOF => return Ok(None),
+        other => return Err(Error::Status(other)),
+    }
+    let Some(data) = NonNull::new(data) else {
+        return Ok(None);
+    };
+    // The data handed out is a buffer; its buffer interface is asked for, and
+    // the data's own reference given up.
+    let mut buffer: *mut c_void = core::ptr::null_mut();
+    // SAFETY: a live object the call handed a reference on; the identity and
+    // the output are live.
+    let status = unsafe {
+        let base = table::<BaseTable>(data);
+        let status = (base.query_interface)(data.as_ptr(), &IID_BUFFER, &raw mut buffer);
+        release(data);
+        status
+    };
+    check(status)?;
+    NonNull::new(buffer).map(Some).ok_or(Error::Unavailable)
+}
+
+/// An encoder's query, held by the thread that collects its units; see
+/// [`Encoder::query_handle`].
+pub struct QueryHandle {
+    raw: NonNull<c_void>,
+}
+
+impl fmt::Debug for QueryHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("QueryHandle")
+    }
+}
+
+// SAFETY: the runtime takes a query on one thread while another submits and
+// writes settings; the handle's maker keeps it inside the encoder's life.
+unsafe impl Send for QueryHandle {}
+
+impl QueryHandle {
+    /// As [`Encoder::query`], from the collecting thread. The unit belongs
+    /// to no lifetime the compiler can see: the handle's maker releases it
+    /// before the encoder goes.
+    pub fn query(&self) -> Result<Option<Unit<'static>>> {
+        // SAFETY: the encoder is live by the handle's contract.
+        Ok(unsafe { query_on(self.raw) }?.map(|raw| Unit {
+            raw,
             _context: PhantomData,
         }))
     }
@@ -1274,13 +1334,15 @@ impl Drop for Encoder<'_> {
     }
 }
 
-/// A texture wrapped for an encoder, which borrows the texture and the
-/// context: released on drop. **What it carries for one picture -- a forced
-/// type, the delimiter -- stays on it until written again**, so a caller
-/// writes them with every picture.
-pub struct Input<'a> {
+/// A texture wrapped for an encoder, in the context it borrows: released on
+/// drop, and its texture with it. **What it carries for one picture -- a
+/// forced type, the delimiter -- stays on it until written again**, so a
+/// caller writes them with every picture.
+pub struct Input<'c> {
     raw: NonNull<c_void>,
-    _borrowed: PhantomData<&'a ()>,
+    /// Released after the wrapper, which reads it.
+    _texture: Com<ID3D11Texture2D>,
+    _context: PhantomData<&'c ()>,
 }
 
 impl fmt::Debug for Input<'_> {
@@ -1358,6 +1420,11 @@ impl Drop for Unit<'_> {
         unsafe { release(self.raw) };
     }
 }
+
+// SAFETY: a unit is a reference-counted buffer of the runtime's; reading it and
+// giving the reference up from another thread than the one that took it is
+// what the count is for, and nothing writes the buffer while it is held.
+unsafe impl Send for Unit<'_> {}
 
 /// What an encoder can do: released on drop.
 pub struct Caps<'c> {
@@ -1655,7 +1722,7 @@ mod tests {
             for header in n.insert_headers {
                 input.set_bool(header, true).unwrap();
             }
-            assert_eq!(encoder.submit(&input).unwrap(), Submitted::Taken);
+            assert!(encoder.submit(&input).unwrap(), "{codec:?}: not taken");
             let unit = encoder
                 .query()
                 .unwrap()

@@ -8,6 +8,9 @@
 // The open and Vulkan backends are Linux's; the vendor's is on both, bound to
 // each platform's device (docs/impl-plan-windows.md). The trait and the
 // parameter sets build everywhere.
+/// AMD's encoder, on the device of the output it encodes (Windows).
+#[cfg(windows)]
+pub mod amf;
 pub mod bitstream;
 pub use lowlat_drivers::cuda;
 /// The device the vendor encoder is bound to on Windows, re-exported for the

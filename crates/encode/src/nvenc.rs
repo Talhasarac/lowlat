@@ -1085,7 +1085,7 @@ const VBV_MAX_BITS: u32 = 768_000;
 /// Reference-faithful; see [`VBV_FRAME_TENTHS`]. The initial delay is set to
 /// the whole buffer, which is what the reference's hundred-percent default
 /// comes to.
-fn vbv_bits(bitrate_bps: u32, fps: u32) -> u32 {
+pub(crate) fn vbv_bits(bitrate_bps: u32, fps: u32) -> u32 {
     let per_frame = bitrate_bps / fps.max(1);
     let scaled = u64::from(per_frame) * u64::from(VBV_FRAME_TENTHS) / 10;
     u32::try_from(scaled).unwrap_or(u32::MAX).min(VBV_MAX_BITS)
