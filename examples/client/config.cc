@@ -50,6 +50,7 @@ int read()
 	s.switch_every = strtoul(env_or("LOWLAT_SWITCH_EVERY", "0"), NULL, 10);
 	s.decoder_every = strtoul(env_or("LOWLAT_DECODER_EVERY", "0"), NULL, 10);
 	s.kind_every = strtoul(env_or("LOWLAT_KIND_EVERY", "0"), NULL, 10);
+	s.output = getenv("LOWLAT_OUTPUT");
 
 	// One peer, or several separated by commas: visited in order on the one
 	// handle, each for LOWLAT_SECONDS, which a list therefore needs.

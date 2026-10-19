@@ -46,6 +46,8 @@ static bool _handles;
 static MTY_JSON *_outputs;
 static MTY_JSON *_host_config;
 static bool _switching;
+// Whether the output named by LOWLAT_OUTPUT was asked for yet.
+static bool _named;
 // Whether the session's rate was asked for: set by the present thread, which
 // asks, and cleared by the reconnect.
 static std::atomic_bool _asked;
@@ -158,11 +160,23 @@ static void cycle_output()
 	uint32_t n = MTY_JSONArrayGetLength(_outputs);
 	if (first == NULL || n == 0)
 		return;
-	uint32_t at = 0;
-	for (uint32_t i = 0; i < n && current != NULL; i++) {
+	// The output LOWLAT_OUTPUT names, where it does, in place of the next.
+	const char *wanted = config::get().output;
+	uint32_t at = wanted != NULL ? n : 0;
+	for (uint32_t i = 0; i < n; i++) {
 		const char *id = MTY_JSONStringPtr(MTY_JSONObjGetItem(MTY_JSONArrayGetItem(_outputs, i), "id"));
-		if (id != NULL && strcmp(id, current) == 0)
+		if (id == NULL)
+			continue;
+		if (wanted != NULL && strcmp(id, wanted) == 0)
+			at = i;
+		else if (wanted == NULL && current != NULL && strcmp(id, current) == 0)
 			at = (i + 1) % n;
+	}
+	if (at == n) {
+		printf("demo: the host lists no output %s\n", wanted);
+		MTY_JSONDestroy(&_outputs);
+		MTY_JSONDestroy(&_host_config);
+		return;
 	}
 	const char *next = MTY_JSONStringPtr(MTY_JSONObjGetItem(MTY_JSONArrayGetItem(_outputs, at), "id"));
 	if (next == NULL)
@@ -595,6 +609,11 @@ void walk(uint64_t seconds, bool established)
 	// And between planes and handles.
 	if (knobs.kind_every > 0 && established && seconds % knobs.kind_every == 0)
 		toggle_kind();
+	// And to the output named, once, as the chord would.
+	if (knobs.output != NULL && established && !_named) {
+		_named = true;
+		ask_outputs();
+	}
 }
 
 lowlat_client *client()

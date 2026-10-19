@@ -24,7 +24,9 @@
 // what the decoder takes before anything is declared; `LOWLAT_SWITCH_EVERY`
 // walks them every that many seconds, as the chord does by hand,
 // `LOWLAT_DECODER_EVERY` walks the decoders the same way, and
-// `LOWLAT_KIND_EVERY` switches between planes and handles. The full range is
+// `LOWLAT_KIND_EVERY` switches between planes and handles. `LOWLAT_OUTPUT`
+// asks for the host's output of that identity once the session is up, as
+// Ctrl+Shift+D does for the next one. The full range is
 // asked for too, because the renderer takes each picture's range;
 // `LOWLAT_FULL_RANGE=0` asks for the video range instead.
 // `LOWLAT_FPS` asks the host for that rate through the application
@@ -115,6 +117,9 @@ struct Settings {
 	uint64_t switch_every;
 	uint64_t decoder_every;
 	uint64_t kind_every;
+	// An output asked for by its identity once the session is up, in place
+	// of the chord's next one; null for none.
+	const char *output;
 	// The preferences the first attempt starts with.
 	lowlat_client_video_config video;
 
