@@ -696,15 +696,24 @@ impl Media for WebSession {
         let threshold = self.level.rtt_mult * self.srtt_ms + self.level.base_ms;
         let now_ms = self.now_ms;
         // The window is everything queued and not yet delivered, in
-        // fragments. Stale within it: what has not been handed to the path
-        // at all, as an unsent fragment is natively, and what was handed
-        // over whole longer ago than the level's threshold. A message part
-        // way onto the wire is fresh for the part that is there.
-        let (mut window, mut pending, mut stale) = (0u32, 0u32, 0u32);
+        // fragments. Stale within it: what was handed over whole longer ago
+        // than the level's threshold, and what has waited in the association
+        // longer than that and is still not on the wire. A message the
+        // association is still releasing is fresh until then: its window
+        // grows only while it is kept full, so it settles at about one
+        // picture and holds the rest of every larger one back for a round
+        // trip or two, and that pacing is not congestion. Natively an
+        // unsent fragment is stale at once, because there the shell empties
+        // the ring within the pass and one left behind means the path
+        // refused it.
+        let (mut window, mut late, mut stale) = (0u32, 0u32, 0u32);
         for sent in self.inflight.iter().filter(|s| s.channel == channel) {
             window = window.saturating_add(sent.fragments);
             match sent.sent_ms {
-                None => pending = pending.saturating_add(sent.fragments),
+                None if now_ms - sent.queued_ms > threshold => {
+                    late = late.saturating_add(sent.fragments);
+                }
+                None => {}
                 Some(sent_ms) if now_ms - sent_ms > threshold => {
                     stale = stale.saturating_add(sent.fragments);
                 }
@@ -712,7 +721,7 @@ impl Media for WebSession {
             }
         }
         let unsent = fragments_of(self.assoc.buffered(channel));
-        stale = stale.saturating_add(unsent.min(pending));
+        stale = stale.saturating_add(unsent.min(late));
         let metrics = self.assoc.metrics();
         let rtx = metrics.as_ref().map_or(0, |m| m.rtx_packets_count as u64);
         let rtx_bytes = metrics.as_ref().map_or(0, |m| m.rtx_bytes_count);
@@ -969,6 +978,38 @@ mod tests {
         let pressure = client.send_pressure(1).unwrap();
         assert_eq!(pressure.acked_bytes, frame.len() as u64);
         assert_eq!(pressure.window, 0, "delivered but still counted in flight");
+    }
+
+    /// A picture the association is still releasing is not stale for having
+    /// been queued a moment ago: the window paces it, and pacing is not
+    /// congestion. Once it has waited past the threshold, what is still not
+    /// on the wire is.
+    #[test]
+    fn a_picture_the_window_is_still_releasing_is_fresh_until_it_is_late() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        // Larger than the initial window, so most of it waits in the
+        // association for acknowledgements nothing here exchanges.
+        let picture = vec![0x5Au8; 100 * 1024];
+        client.send_message(1, b"VIDEO-HDR!", &picture).unwrap();
+        let fragments = fragments_of(picture.len());
+        let unsent = fragments_of(client.assoc.buffered(1));
+        assert!(unsent > 0, "the whole picture went out at once");
+
+        let fresh = client.send_pressure(1).unwrap();
+        assert_eq!(fresh.window, fragments);
+        assert_eq!(fresh.stale, 0, "a picture queued just now read as stale");
+
+        // Past the threshold with nothing exchanged: the remainder is late.
+        let threshold = client.level.rtt_mult * client.srtt_ms() + client.level.base_ms;
+        client.poll(client.now_ms + threshold + 1.0);
+        let late = client.send_pressure(1).unwrap();
+        assert_eq!(late.window, fragments);
+        assert_eq!(
+            late.stale, unsent,
+            "what is still unsent is stale once late"
+        );
     }
 
     #[test]
