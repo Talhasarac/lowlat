@@ -1286,8 +1286,11 @@ pointer cache; every update that carries a picture carries the whole picture.
 encode-latency report of §11.2 goes out every two seconds on the clock from the moment the
 path exists, whatever the frame rate, so a still desktop does not look dead. The host's own
 liveness on this stack is progress: an authenticated data record arriving, or a message the
-association reports delivered, stamps it, with the same soft and hard timeouts as §9, and a
-message sent and not delivered past the delivery deadline of §9 is undeliverable. A closed record layer, or an association the peer aborts, ends the
+association reports delivered, stamps it, with the same soft and hard timeouts as §9, and
+something queued for the peer with nothing delivered to it for the whole of the delivery
+deadline of §9 is undeliverable, as a native channel with data outstanding and no
+acknowledgement movement is; a queue that drains slowly while deliveries keep arriving is
+slow, not undeliverable. A closed record layer, or an association the peer aborts, ends the
 attempt with a fault the host reports as a failed handshake or an aborted association.
 
 The congestion controller of §10 runs unchanged on this stack; what it reads is synthesized

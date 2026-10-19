@@ -3,9 +3,20 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
-## 2026-10-19 - the browser pipe's figures: pacing is fresh, and the association's clock is the session's
+## 2026-10-19 - the browser pipe's figures and its deadline, as the native pipe reads them
 
 ### Fixed
+- **The delivery deadline runs on delivery.** The session called a message undeliverable
+  once it had been queued for the deadline and put on the wire, whatever the association
+  delivered meanwhile, so a deep queue draining slowly on a policed path ended the guest with
+  a line saying nothing had been acknowledged: eighty pictures onto a path carrying one record
+  a tick, a picture delivered about every third of a second, read undeliverable at fifteen
+  seconds with forty-six delivered and the last of them a tenth of a second earlier. The rule
+  is the native one now, something queued and nothing delivered for the whole of the deadline,
+  the stamp refreshed by every delivery and by every poll that finds the queue empty. It also
+  reaches a message the association has not put on the wire, which the old rule could not:
+  the event that says a message was sent is seen only when the output is polled, so a queue
+  nothing was ever asked for read as alive for ever.
 - **The association's timeline follows the session's clock at every call that carries
   it.** The association keeps a timeline of its own and moves it only when told; the session
   told it on the housekeeping pass alone, which the shell runs after it has fed the pass's
@@ -43,6 +54,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   read the client's clock in between, sets the round trip to 210 ms; before the fix the
   estimate stayed at the initial 500. A message queued at a wake 40 ms after the last pass,
   acknowledged 210 ms later, measures 210 and not 250.
+- Eighty pictures onto a path carrying one record a tick stay alive through the twenty
+  seconds they take to cross, which read undeliverable at fifteen before; one message queued
+  with nothing crossing reads alive until the deadline and undeliverable at it, which read
+  alive throughout before.
 
 ## 2026-10-18 - the client's encode and decode figures, each what it says
 
