@@ -32,11 +32,18 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   conversion (4.38 and 6.69) -- not taken.
 - The host's own display read in place under a load at 120 refreshes: no read caught in time; 19
   of 20 caught with each picture handed over 30 ms late.
+- Live, a monitor of the integrated GPU at 1920x1080 and 60 a second under colour noise:
+  composition to hand-over 8.15 ms at p50 with the duplication's frame held until the next look,
+  0.88 ms once it goes back as the loop collects -- as through the host's conversion (0.89) --
+  and the encode 4.0 ms at p50 for H.264 and 4.2 for ten-bit HEVC.
 
 ### Found
 - The encoder takes BGRA into Main10 without an error and writes every level at the eight-bit
   scale; its conversion's matrix is BT.709 whatever profile it is told, the range alone following
   the statement.
+- A duplication's frame held across a composition delays the system's copy of the next picture
+  by a whole period of the compositor's clock, so a frame read in place goes back as soon as the
+  encoder is done with it.
 
 ## 2026-10-19 - W2.7 probed: AMD's encoder, and it converts what it is given
 

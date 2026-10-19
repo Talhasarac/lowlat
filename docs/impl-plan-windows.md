@@ -548,12 +548,16 @@ once, here.
   while it encodes and a still desktop's refresh picture encodes the same image again.
   *Amended 2026-10-19, at W2.7's build:* **held until the encoder is done with it.** The loop takes
   the next picture before it collects the last, so the frame goes back -- and the next is taken --
-  only once the encoder's engine has nothing in it. The system writes the desktop's changes into
-  an image once it is given back, so a picture encoded after a look found nothing new reads it as
-  given back, which holds while the desktop stays still: the first change after a still spell can
-  show half written in that one picture, and the next corrects it. A copy into a texture of the
-  host's own would avoid that, and was measured on the integrated GPU: 0.47 and 0.83 ms of it at
-  1080p and 1440p, slower to the output than the conversion, so it is not taken.
+  only once the encoder's engine has nothing in it, and it goes back as soon as the loop has
+  collected what the encoder made: held across the next composition, the system's copy of the next
+  picture waits a whole period of the compositor's clock -- composition to hand-over 8.15 ms at p50
+  against 0.88, measured at 1920x1080 and 60 a second under colour noise. The system writes the
+  desktop's changes into an image once it is given back, so a picture encoded after a look found
+  nothing new reads it as given back, which holds while the desktop stays still: the first change
+  after a still spell can show half written in that one picture, and the next corrects it. A copy
+  into a texture of the host's own would avoid that, and was measured on the integrated GPU: 0.47
+  and 0.83 ms of it at 1080p and 1440p, slower to the output than the conversion, so it is not
+  taken.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
