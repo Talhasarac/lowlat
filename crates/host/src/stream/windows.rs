@@ -141,31 +141,30 @@ pub(super) fn build(
     }
 }
 
-/// Whether the encoder codes full chroma at the running depth, or which gate
-/// refused it.
+/// Whether the encoder of the output being captured codes full chroma at the
+/// running depth, or which gate refused it.
 ///
-/// **Only from the display's conversion**, which writes the packed words the
-/// encoder takes on this device -- AYUV at eight bits, Y410 at ten, each
-/// carried through a decoder and back -- where the generator's frames carry
-/// two planes. Asked once per run of the device: the answers are its
-/// properties.
+/// **That output's encoder alone**, the output found as the run finds it: a
+/// move onto an output whose encoder cannot code full chroma drops it at that
+/// rebuild (D11). **Only from the display's conversion**, which writes the
+/// packed words the encoder takes on this device -- AYUV at eight bits, Y410
+/// at ten, each carried through a decoder and back -- where the generator's
+/// frames carry two planes. Asked once per run of the device: the answers are
+/// its properties.
 pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
     if !config.display {
         return Err("the synthetic source, whose frames carry two planes");
     }
+    let Some(output) = Display::locate(config.output.as_deref()) else {
+        return Err("the output, which is not part of the desktop");
+    };
+    if !encodes_on(&output.adapter) {
+        return Err("the output's GPU, which has no encoder for full chroma here");
+    }
     let Ok(d3d11) = lowlat_encode::d3d11::D3d11::load() else {
         return Err("the graphics libraries, which could not be loaded");
     };
-    let Some(adapter) = d3d11.adapters().ok().and_then(|adapters| {
-        adapters
-            .into_iter()
-            .find(|adapter| adapter.decodes_here() && adapter.vendor == NVIDIA)
-    }) else {
-        // **Absent is not a refusal**: a machine without the vendor's GPU
-        // never builds this encoder, so there is no part to fail the census.
-        return Ok(());
-    };
-    let Ok(device) = d3d11.open(adapter.luid) else {
+    let Ok(device) = d3d11.open(output.adapter.luid) else {
         return Err("the vendor's device, which would not open");
     };
     let Ok(api) = lowlat_encode::nvenc::Api::load() else {

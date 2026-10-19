@@ -31,8 +31,8 @@ pub enum lowlat_chroma {
     /// runs at until a guest asks otherwise.
     LOWLAT_CHROMA_420 = 1,
     /// Colour at full resolution. Reported once a guest has asked for it and
-    /// the offer has been granted, which needs the second codec and every
-    /// encoder this host could select to be able to code it.
+    /// the offer has been granted, which needs the second codec and the
+    /// captured output's encoder to be able to code it.
     LOWLAT_CHROMA_444 = 2,
 }
 

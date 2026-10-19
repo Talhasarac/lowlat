@@ -673,8 +673,8 @@ impl Codec {
 /// How much chroma a session codes.
 ///
 /// **Settled by what the guests declare, never configured.** Full chroma is
-/// granted only past the census over every encoder this host could select, so
-/// a session runs at the default until a guest asks and the offer is granted.
+/// granted only past the census of the captured output's encoder, so a session
+/// runs at the default until a guest asks and the offer is granted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Chroma {
     #[default]

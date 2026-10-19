@@ -1165,10 +1165,10 @@ pub struct Config {
     pub ten_bit: bool,
     /// Whether the stream codes chroma at full resolution.
     ///
-    /// **Settled the same way as the depth, and gated harder.** Every encoder
-    /// this host could select has to be able to code it, or the offer is
-    /// refused with the gate named, because a later output move onto a part
-    /// that cannot would end the session rather than downgrade (D11).
+    /// **Settled the same way as the depth, and gated harder.** The encoder of
+    /// the output being captured has to be able to code it, or the offer is
+    /// refused with the gate named; a move onto an output whose encoder cannot
+    /// drops it at that rebuild (D11).
     pub chroma_444: bool,
     /// Which encoder to build, or **nothing to follow the display**.
     ///
@@ -3565,11 +3565,11 @@ fn encode_loop<E: Encoder + FromDevice>(
         // decoder from what it declared and does not switch on what arrives.
         let wanted_ten_bit = asked & lowlat_core::init::FLAG_10BIT != 0
             && not_emitted(wanted) & lowlat_core::init::FLAG_10BIT == 0;
-        // **Full chroma is the census gate on top of the codec rule.** Every
-        // encoder this host could select has to be able to code it, asked once
-        // and remembered, and the refusal names the gate -- once, when the
-        // census is taken: a guest goes on asking on every pass, and a line
-        // per pass was thousands a minute.
+        // **Full chroma is the census gate on top of the codec rule.** The
+        // encoder of the output being captured has to be able to code it,
+        // asked once a run and remembered, and the refusal names the gate --
+        // once, when the census is taken: a guest goes on asking on every
+        // pass, and a line per pass was thousands a minute.
         let mut wanted_chroma = false;
         if asked & lowlat_core::init::FLAG_COLOR444 != 0 {
             if full_chroma_census.is_none() {
@@ -6410,20 +6410,81 @@ mod tests {
         );
     }
 
-    /// **A mixed selection refuses the offer, with the gate named**, which is
-    /// the D11 rule in action: one encode serves every seat and a later output
-    /// move onto a part that cannot code full chroma would end the session
-    /// rather than degrade. Off by default because the answer is the
-    /// machine's; on a machine whose census passes there is nothing to say.
+    /// A configuration that follows the display and captures `output`.
+    #[cfg(any(target_os = "linux", windows))]
+    fn capturing(output: &str) -> Config {
+        Config {
+            display: true,
+            backend: None,
+            output: Some(output.to_owned()),
+            ..test_config(Codec::H265)
+        }
+    }
+
+    /// **The census answers for the captured output's encoder alone**: each
+    /// output asked about by name, and a refusal naming that output's own
+    /// encoder -- the vendor's on the vendor's driver, the open stack's
+    /// elsewhere -- never another part's. Off by default because the answers
+    /// are the machine's; one with outputs on two kinds of part says the most.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "the answer is the machine's"]
-    fn a_mixed_machine_refuses_full_chroma_with_the_gate_named() {
-        if let Err(gate) = sys::chroma_census(&test_config(Codec::H265)) {
-            assert!(
-                gate.contains("open encoder") || gate.contains("vendor encoder"),
-                "the refusal named {gate:?}, which is not a part"
-            );
+    #[ignore = "the answers are the machine's"]
+    fn the_census_answers_for_the_captured_outputs_encoder() {
+        let outputs = crate::display::Display::outputs();
+        assert!(!outputs.is_empty(), "no output to ask about");
+        for output in outputs {
+            let vendor =
+                crate::display::Display::driver(Some(&output.id)).as_deref() == Some("nvidia");
+            let answer = sys::chroma_census(&capturing(&output.id));
+            println!("{} (vendor {vendor}): {answer:?}", output.id);
+            if let Err(gate) = answer {
+                let own = if vendor {
+                    "vendor encoder"
+                } else {
+                    "open encoder"
+                };
+                assert!(
+                    gate.contains(own),
+                    "{}: the refusal named {gate:?}, not its own encoder",
+                    output.id
+                );
+            }
+        }
+    }
+
+    /// **The census answers for the captured output's encoder alone**: each
+    /// output of the desktop asked about by name -- granted or refused by the
+    /// vendor's encoder on an output of the vendor's GPU, refused naming the
+    /// output's GPU on any other. Off by default because the answers are the
+    /// machine's; one with outputs on two vendors' GPUs says the most.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "the answers are the machine's"]
+    fn the_census_answers_for_the_captured_outputs_encoder() {
+        let outputs = crate::display::Display::outputs();
+        assert!(!outputs.is_empty(), "no output to ask about");
+        for output in outputs {
+            let adapter = crate::display::Display::locate(Some(&output.id))
+                .expect("a listed output")
+                .adapter;
+            let answer = sys::chroma_census(&capturing(&output.id));
+            println!("{} on {}: {answer:?}", output.id, adapter.description);
+            // The vendor's own GPU, written out.
+            if adapter.vendor == 0x10de {
+                if let Err(gate) = answer {
+                    assert!(
+                        gate.contains("vendor encoder"),
+                        "{}: the refusal named {gate:?}",
+                        output.id
+                    );
+                }
+            } else {
+                assert!(
+                    answer.is_err_and(|gate| gate.contains("output's GPU")),
+                    "{}: not refused for its own GPU",
+                    output.id
+                );
+            }
         }
     }
 

@@ -111,19 +111,29 @@ pub(super) fn build(
 /// Anything that is not the vendor's own driver is served by the open stack,
 /// including the open driver for the same hardware.
 fn follow_display(config: &Config) -> Backend {
+    let (backend, driver) = followed(config);
+    if config.display {
+        lowlat_common::log_info!(
+            "stream: the display is on {}, encoding with {backend:?}",
+            driver.as_deref().unwrap_or("a device that did not say")
+        );
+    }
+    backend
+}
+
+/// [`follow_display`]'s answer, unsaid, with the driver that decided it. The
+/// census asks it too, so the two cannot disagree about which encoder serves
+/// the output.
+fn followed(config: &Config) -> (Backend, Option<String>) {
     if !config.display {
-        return Backend::Open;
+        return (Backend::Open, None);
     }
     let driver = crate::display::Display::driver(config.output.as_deref());
     let backend = match driver.as_deref() {
         Some("nvidia") => Backend::Vendor,
         _ => Backend::Open,
     };
-    lowlat_common::log_info!(
-        "stream: the display is on {}, encoding with {backend:?}",
-        driver.as_deref().unwrap_or("a device that did not say")
-    );
-    backend
+    (backend, driver)
 }
 
 /// Capability bits a peer can declare that this pipeline does not emit.
@@ -151,16 +161,17 @@ fn colour_of(config: &Config) -> lowlat_capture::convert::Depth {
     }
 }
 
-/// Whether every encoder this host could select codes full chroma at the
+/// Whether the encoder of the output being captured codes full chroma at the
 /// running depth, or which gate refused it.
 ///
-/// **A census, not a capability list.** One encode serves every seat and the
-/// configuration is settled once (D11), so a part this host might later land
-/// on that cannot code full chroma would end the session rather than degrade.
-/// The offer is refused up front on such a machine, with the gate named, so a
-/// guest that asks is answered without an encoder being built for a promise
-/// the machine cannot keep. Checked once per run: the answers are device
-/// properties and nothing here changes them.
+/// **That output's encoder alone**, resolved as the run resolves it. A move
+/// onto an output whose encoder cannot code full chroma drops it at that
+/// rebuild, as a refused depth is dropped (D11), so asking every encoder this
+/// host could select bought nothing and refused full chroma on any machine
+/// with one such part lit, whichever output a guest watched. The refusal names
+/// the gate, so a guest that asks is answered without an encoder being built
+/// for a promise the device cannot keep. Checked once per run: a move is a new
+/// run.
 pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
     let ten_bit = config.ten_bit;
     // **A probe knob, loudly on purpose.** A mixed machine refuses the offer
@@ -172,7 +183,7 @@ pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
     }
     match config.backend {
         Some(Backend::Vendor) => vendor_census(ten_bit),
-        Some(Backend::Open) => open_census(ten_bit),
+        Some(Backend::Open) => open_census(config, ten_bit),
         None => {
             // **The third interface codes no full chroma on any part measured
             // here**, so preferring it is a refusal and the preference is the
@@ -183,64 +194,41 @@ pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
             {
                 return Err("the third encoder, which no measured part serves full chroma");
             }
-            // **Both display-following backends are candidates wherever the
-            // output may move**, not just where it is now: a move onto a part
-            // that cannot code full chroma would end the session, which is
-            // the exact failure this census exists to keep unannounced.
-            open_census(ten_bit)?;
-            vendor_census(ten_bit)
+            match followed(config).0 {
+                Backend::Vendor => vendor_census(ten_bit),
+                Backend::Open => open_census(config, ten_bit),
+            }
         }
     }
 }
 
-/// The open backend, on every node an output could move onto.
-///
-/// **Only nodes that would serve the stream are asked about full chroma.** A
-/// node with no second-codec encoder at this depth cannot serve the stream at
-/// all, full chroma or not, which is a refusal the subsampled stream already
-/// owns; the census adds only what full chroma adds.
-fn open_census(ten_bit: bool) -> Result<(), &'static str> {
+/// The open backend, on the node it would encode the output through.
+fn open_census(config: &Config, ten_bit: bool) -> Result<(), &'static str> {
     let Ok(runtime) = lowlat_encode::vaapi::Vaapi::load() else {
         return Err("the open runtime, which could not be loaded");
     };
-    let Ok(nodes) = std::fs::read_dir("/dev/dri") else {
-        return Err("the node directory, which could not be walked");
+    let named = open_node(config);
+    let Ok(display) =
+        lowlat_encode::vaapi::Display::open(&runtime, named.as_deref().unwrap_or(FIRST_NODE))
+    else {
+        return Err("the open encoder's node, which would not open");
     };
-    for entry in nodes.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !name.starts_with("renderD") {
-            continue;
-        }
-        let path = entry.path();
-        // **A node the vendor driver owns is served by the vendor encoder**,
-        // never the open one, so the open census does not ask it; the vendor
-        // census covers it.
-        if crate::display::driver_of(&path).as_deref() == Some("nvidia") {
-            continue;
-        }
-        let Ok(asked) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
-            continue;
-        };
-        let Ok(display) = lowlat_encode::vaapi::Display::open(&runtime, &asked) else {
-            continue;
-        };
-        // **A node without the second codec at this depth cannot serve the
-        // stream at all**, so it is not asked about full chroma; the refusal
-        // there belongs to the subsampled stream it cannot code either.
-        if display
-            .caps_at(lowlat_encode::vaapi::Codec::H265, ten_bit)
-            .is_err()
-        {
-            continue;
-        }
-        if display.caps_444(ten_bit).is_err() {
-            return Err("the open encoder on a node the output could move onto");
-        }
+    if display.caps_444(ten_bit).is_err() {
+        return Err("the open encoder on the output's node");
     }
     Ok(())
+}
+
+/// The node the open backend takes with no display to follow.
+const FIRST_NODE: &std::ffi::CStr = c"/dev/dri/renderD128";
+
+/// The render node the open backend encodes through: the one on the device
+/// the display is on, or `None` with no display to follow, where
+/// [`FIRST_NODE`] is as good an answer as any. The census asks it too.
+fn open_node(config: &Config) -> Option<std::ffi::CString> {
+    let node = crate::display::Display::render_node_of(config.output.as_deref())
+        .filter(|_| config.display)?;
+    std::ffi::CString::new(node.as_os_str().as_encoded_bytes()).ok()
 }
 
 /// The vendor backend, on the device it would encode with.
@@ -554,12 +542,8 @@ fn run_open(
     // nothing in the log to say so.
     // Without a display there is nothing to follow, and the first node is as
     // good an answer as any.
-    let node = crate::display::Display::render_node_of(config.output.as_deref())
-        .filter(|_| config.display);
-    let named = node
-        .as_deref()
-        .and_then(|node| std::ffi::CString::new(node.as_os_str().as_encoded_bytes()).ok());
-    let asked = named.as_deref().unwrap_or(c"/dev/dri/renderD128");
+    let named = open_node(&config);
+    let asked = named.as_deref().unwrap_or(FIRST_NODE);
     lowlat_common::log_info!(
         "stream: encoding through {}, {}",
         asked.to_string_lossy(),

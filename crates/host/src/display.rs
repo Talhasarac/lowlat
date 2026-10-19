@@ -22,8 +22,6 @@ pub(crate) mod own;
 
 #[cfg(target_os = "linux")]
 pub use sys::Register;
-#[cfg(target_os = "linux")]
-pub(crate) use sys::driver_of;
 pub use sys::{Display, Error, Registration};
 
 /// What the host's own display is asked for by, whatever the system numbers
