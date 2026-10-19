@@ -1,5 +1,5 @@
-//! AMD's own video runtime, opened at run time: its decoder, on a device the
-//! caller made.
+//! AMD's own video runtime, opened at run time: its decoder and its encoders,
+//! on a device the caller made.
 //!
 //! **The runtime is the display driver's**, in the system directory, and it
 //! answers whatever version it is initialised with, so nothing here is decided
@@ -24,6 +24,15 @@
 //! once the picture is decoded. It takes some thirty units before it pushes
 //! back, and then it spins in the submit, so a caller keeps its own count of
 //! what is unfinished.
+//!
+//! **An encoder takes a texture of the device as its input**, wrapped once
+//! and submitted again as often as the caller likes, and hands each picture
+//! out as a unit in host memory. It reads RGB as well as two-plane YUV and
+//! converts RGB in the video engine itself. Three of its settings behave in
+//! ways a caller must know: the usage is a preset that resets whatever was set
+//! before it; how long a query waits for a picture is read only when the
+//! encoder is initialised; and a picture's own properties -- a forced type,
+//! the delimiter -- stay on its input until written again.
 
 use core::ffi::{CStr, c_void};
 use core::fmt;
@@ -32,7 +41,8 @@ use core::ptr::NonNull;
 
 use lowlat_common::dynlib::Library;
 
-use crate::d3d11::Device;
+use crate::d3d11::{Com, Device};
+use crate::ffi::d3d11::ID3D11Texture2D;
 
 /// A call's result, as the runtime numbers it.
 pub type Status = i32;
@@ -55,6 +65,10 @@ const MEMORY_HOST: i32 = 1;
 const DX11_0: i32 = 110;
 const VARIANT_BOOL: i32 = 1;
 const VARIANT_INT64: i32 = 2;
+const VARIANT_SIZE: i32 = 5;
+const VARIANT_RATE: i32 = 7;
+/// The acceleration a component reports when its engine is the hardware's.
+const ACCELERATION_HARDWARE: i32 = 0;
 /// Room for the longest name passed, with its terminator.
 const NAME_CAPACITY: usize = 64;
 
@@ -86,6 +100,8 @@ pub enum Error {
     Status(Status),
     /// More than a buffer or a name holds.
     TooLarge,
+    /// A setting read back as something other than the number asked for.
+    NotANumber,
 }
 
 impl fmt::Display for Error {
@@ -95,6 +111,7 @@ impl fmt::Display for Error {
             Self::MissingSymbol => f.write_str("AMD video runtime is missing an entry point"),
             Self::Status(s) => write!(f, "AMD video runtime returned status {s}"),
             Self::TooLarge => f.write_str("more than an AMD video buffer holds"),
+            Self::NotANumber => f.write_str("an AMD video setting read back as no number"),
         }
     }
 }
@@ -111,20 +128,231 @@ fn check(status: Status) -> Result<()> {
     }
 }
 
-/// The decoders built, by codec.
+/// The codecs, each with a decoder and an encoder of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
     H264,
     /// Both depths: a ten-bit stream is told apart by the layout the
-    /// decoder is initialised with.
+    /// decoder is initialised with, and an encoder is told its depth.
     Hevc,
 }
 
 impl Codec {
-    const fn id(self) -> &'static str {
+    const fn decoder_id(self) -> &'static str {
         match self {
             Self::H264 => "AMFVideoDecoderUVD_H264_AVC",
             Self::Hevc => "AMFVideoDecoderHW_H265_HEVC",
+        }
+    }
+
+    const fn encoder_id(self) -> &'static str {
+        match self {
+            Self::H264 => "AMFVideoEncoderVCE_AVC",
+            Self::Hevc => "AMFVideoEncoderHW_HEVC",
+        }
+    }
+
+    /// What this codec's encoder calls its settings, and the values some of
+    /// them take.
+    pub const fn names(self) -> &'static Names {
+        match self {
+            Self::H264 => &H264_NAMES,
+            Self::Hevc => &HEVC_NAMES,
+        }
+    }
+}
+
+/// What an encoder calls a setting, for one codec: the two components name
+/// the same settings differently and number some of their values
+/// differently, so a caller writes each setting once and takes its name and
+/// value from here.
+#[derive(Debug)]
+pub struct Names {
+    /// The preset every other setting is written after.
+    pub usage: &'static str,
+    pub profile: &'static str,
+    pub frame_size: &'static str,
+    pub frame_rate: &'static str,
+    pub quality_preset: &'static str,
+    pub rate_control: &'static str,
+    pub target_bitrate: &'static str,
+    pub peak_bitrate: &'static str,
+    /// The rate's buffer, in bits.
+    pub vbv_buffer_size: &'static str,
+    /// The buffer's fullness at the start, 0 to [`VBV_FULL`].
+    pub vbv_initial_fullness: &'static str,
+    /// The largest picture, in bits.
+    pub max_au_size: &'static str,
+    pub filler: &'static str,
+    pub skip_frame: &'static str,
+    pub max_reference_frames: &'static str,
+    pub slices: &'static str,
+    /// The quantiser floor: one setting on H.264, one per picture kind on
+    /// HEVC.
+    pub min_qp: &'static [&'static str],
+    /// How long a query waits for a picture, in milliseconds; read only when
+    /// the encoder is initialised.
+    pub query_timeout: &'static str,
+    /// A pass ahead of the encode for the rate's sake: an integer on H.264,
+    /// a flag on HEVC.
+    pub preencode: &'static str,
+    /// The full-range flag of the output, which both take as a flag.
+    pub full_range: &'static str,
+    pub in_color_profile: &'static str,
+    pub out_color_profile: &'static str,
+    pub in_primaries: &'static str,
+    pub out_primaries: &'static str,
+    pub in_transfer: &'static str,
+    pub out_transfer: &'static str,
+    pub color_bit_depth: &'static str,
+    /// A rolling intra refresh's size per slot; zero is none.
+    pub intra_refresh: &'static str,
+    /// The settings that schedule keyframes; zero in each schedules none.
+    pub keyframe_period: &'static [&'static str],
+    /// Where the encoder puts the parameter sets by itself, where it can be
+    /// told.
+    pub header_insertion: Option<&'static str>,
+    /// A picture's own: its forced type.
+    pub force_picture_type: &'static str,
+    /// A picture's own: whether an access-unit delimiter leads it.
+    pub insert_aud: &'static str,
+    /// A picture's own: the parameter sets put ahead of it.
+    pub insert_headers: &'static [&'static str],
+    /// A unit's own: the kind of picture it carries.
+    pub output_data_type: &'static str,
+    /// A capability: whether a query can wait for a picture.
+    pub cap_query_timeout: &'static str,
+    /// The profile for eight bits, and for ten where the codec has one.
+    pub profile_8: i64,
+    pub profile_10: Option<i64>,
+    /// The rate control that bounds each picture by the buffer.
+    pub rate_latency_constrained: i64,
+    pub preset_speed: i64,
+    pub preset_quality: i64,
+}
+
+/// The ultra-low-latency usage, the same number on both codecs.
+pub const USAGE_ULTRA_LOW_LATENCY: i64 = 1;
+/// A forced picture type: none, and an IDR picture.
+pub const PICTURE_NONE: i64 = 0;
+pub const PICTURE_IDR: i64 = 2;
+/// The kinds a unit reports: an IDR picture and an intra one are keyframes.
+pub const OUTPUT_IDR: i64 = 0;
+pub const OUTPUT_I: i64 = 1;
+/// BT.709, as the colour profile (studio range), the primaries and the
+/// transfer each number it.
+pub const BT709: i64 = 1;
+/// A full buffer at the start.
+pub const VBV_FULL: i64 = 64;
+/// HEVC's parameter sets ahead of every IDR picture.
+pub const HEADERS_AT_IDR: i64 = 2;
+
+const H264_NAMES: Names = Names {
+    usage: "Usage",
+    profile: "Profile",
+    frame_size: "FrameSize",
+    frame_rate: "FrameRate",
+    quality_preset: "QualityPreset",
+    rate_control: "RateControlMethod",
+    target_bitrate: "TargetBitrate",
+    peak_bitrate: "PeakBitrate",
+    vbv_buffer_size: "VBVBufferSize",
+    vbv_initial_fullness: "InitialVBVBufferFullness",
+    max_au_size: "MaxAUSize",
+    filler: "FillerDataEnable",
+    skip_frame: "RateControlSkipFrameEnable",
+    max_reference_frames: "MaxNumRefFrames",
+    slices: "SlicesPerFrame",
+    min_qp: &["MinQP"],
+    query_timeout: "QueryTimeout",
+    preencode: "RateControlPreanalysisEnable",
+    full_range: "FullRangeColor",
+    in_color_profile: "InColorProfile",
+    out_color_profile: "OutColorProfile",
+    in_primaries: "InColorPrimaries",
+    out_primaries: "OutColorPrimaries",
+    in_transfer: "InColorTransferChar",
+    out_transfer: "OutColorTransferChar",
+    color_bit_depth: "ColorBitDepth",
+    intra_refresh: "IntraRefreshMBsNumberPerSlot",
+    keyframe_period: &["IDRPeriod"],
+    header_insertion: None,
+    force_picture_type: "ForcePictureType",
+    insert_aud: "InsertAUD",
+    insert_headers: &["InsertSPS", "InsertPPS"],
+    output_data_type: "OutputDataType",
+    cap_query_timeout: "QueryTimeoutSupport",
+    profile_8: 100,
+    profile_10: None,
+    rate_latency_constrained: 3,
+    preset_speed: 1,
+    preset_quality: 2,
+};
+
+const HEVC_NAMES: Names = Names {
+    usage: "HevcUsage",
+    profile: "HevcProfile",
+    frame_size: "HevcFrameSize",
+    frame_rate: "HevcFrameRate",
+    quality_preset: "HevcQualityPreset",
+    rate_control: "HevcRateControlMethod",
+    target_bitrate: "HevcTargetBitrate",
+    peak_bitrate: "HevcPeakBitrate",
+    vbv_buffer_size: "HevcVBVBufferSize",
+    vbv_initial_fullness: "HevcInitialVBVBufferFullness",
+    max_au_size: "HevcMaxAUSize",
+    filler: "HevcFillerDataEnable",
+    skip_frame: "HevcRateControlSkipFrameEnable",
+    max_reference_frames: "HevcMaxNumRefFrames",
+    slices: "HevcSlicesPerFrame",
+    min_qp: &["HevcMinQP_I", "HevcMinQP_P"],
+    query_timeout: "HevcQueryTimeout",
+    preencode: "HevcRateControlPreAnalysisEnable",
+    full_range: "HevcNominalRange",
+    in_color_profile: "HevcInColorProfile",
+    out_color_profile: "HevcOutColorProfile",
+    in_primaries: "HevcInColorPrimaries",
+    out_primaries: "HevcOutColorPrimaries",
+    in_transfer: "HevcInColorTransferChar",
+    out_transfer: "HevcOutColorTransferChar",
+    color_bit_depth: "HevcColorBitDepth",
+    intra_refresh: "HevcIntraRefreshCTBsNumberPerSlot",
+    keyframe_period: &["HevcGOPSize", "HevcGOPSPerIDR"],
+    header_insertion: Some("HevcHeaderInsertionMode"),
+    force_picture_type: "HevcForcePictureType",
+    insert_aud: "HevcInsertAUD",
+    insert_headers: &["HevcInsertHeader"],
+    output_data_type: "HevcOutputDataType",
+    cap_query_timeout: "HevcQueryTimeoutSupport",
+    profile_8: 1,
+    profile_10: Some(2),
+    rate_latency_constrained: 1,
+    preset_speed: 10,
+    preset_quality: 0,
+};
+
+/// What an encoder is initialised to take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// Eight bits, a luma plane and an interleaved chroma plane.
+    Nv12,
+    /// Ten bits in the high bits of sixteen, the same two planes.
+    P010,
+    /// Eight-bit RGB, converted by the encoder itself.
+    Bgra,
+    Rgba,
+    /// Ten-bit RGB, converted by the encoder itself.
+    Rgb10A2,
+}
+
+impl Format {
+    const fn code(self) -> i32 {
+        match self {
+            Self::Nv12 => 1,
+            Self::Bgra => 3,
+            Self::Rgba => 5,
+            Self::P010 => 10,
+            Self::Rgb10A2 => 13,
         }
     }
 }
@@ -226,10 +454,53 @@ struct Variant {
 union Value {
     boolean: u8,
     int64: i64,
+    /// A rate's numerator and denominator.
+    rate: [u32; 2],
+    /// A size's width and height.
+    size: [i32; 2],
     wide: [u64; 2],
 }
 
 impl Variant {
+    /// A value for a read to fill: no kind yet.
+    fn empty() -> Self {
+        Self {
+            kind: 0,
+            value: Value { wide: [0; 2] },
+        }
+    }
+
+    fn rate(num: u32, den: u32) -> Self {
+        let mut v = Value { wide: [0; 2] };
+        v.rate = [num, den];
+        Self {
+            kind: VARIANT_RATE,
+            value: v,
+        }
+    }
+
+    fn size(width: i32, height: i32) -> Self {
+        let mut v = Value { wide: [0; 2] };
+        v.size = [width, height];
+        Self {
+            kind: VARIANT_SIZE,
+            value: v,
+        }
+    }
+
+    /// The integer a read gave, a flag read as zero or one; `None` for a
+    /// value of another kind, which a read of an integer setting never
+    /// gives.
+    fn integer(&self) -> Option<i64> {
+        match self.kind {
+            // SAFETY: the member the kind names.
+            VARIANT_INT64 => Some(unsafe { self.value.int64 }),
+            // SAFETY: as above.
+            VARIANT_BOOL => Some(i64::from(unsafe { self.value.boolean })),
+            _ => None,
+        }
+    }
+
     fn boolean(value: bool) -> Self {
         let mut v = Value { wide: [0; 2] };
         v.boolean = u8::from(value);
@@ -269,6 +540,25 @@ struct FactoryTable {
     rest: [usize; 5],
 }
 
+/// The property storage's ten, which follow the base interface's in every
+/// table that stores properties: a component's, a surface's, a buffer's and
+/// the capabilities'.
+#[repr(C)]
+struct StorageTable {
+    set_property: unsafe extern "system" fn(*mut c_void, *const u16, Variant) -> Status,
+    get_property: unsafe extern "system" fn(*mut c_void, *const u16, *mut Variant) -> Status,
+    has_property: unsafe extern "system" fn(*mut c_void, *const u16) -> u8,
+    rest: [usize; 7],
+}
+
+/// The beginning every property storage's table shares, which is all a read
+/// or a write of a property needs.
+#[repr(C)]
+struct PropertyTable {
+    base: BaseTable,
+    storage: StorageTable,
+}
+
 #[repr(C)]
 struct ContextTable {
     base: BaseTable,
@@ -278,14 +568,21 @@ struct ContextTable {
     init_dx11: unsafe extern "system" fn(*mut c_void, *mut c_void, i32) -> Status,
     devices: [usize; 24],
     alloc_buffer: unsafe extern "system" fn(*mut c_void, i32, usize, *mut *mut c_void) -> Status,
-    rest: [usize; 11],
+    surfaces: [usize; 5],
+    create_surface_from_dx11_native: unsafe extern "system" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut *mut c_void,
+        *mut c_void,
+    ) -> Status,
+    rest: [usize; 5],
 }
 
 #[repr(C)]
 struct ComponentTable {
     base: BaseTable,
     set_property: unsafe extern "system" fn(*mut c_void, *const u16, Variant) -> Status,
-    get_property: usize,
+    get_property: unsafe extern "system" fn(*mut c_void, *const u16, *mut Variant) -> Status,
     has_property: unsafe extern "system" fn(*mut c_void, *const u16) -> u8,
     storage: [usize; 11],
     init: unsafe extern "system" fn(*mut c_void, i32, i32, i32) -> Status,
@@ -294,29 +591,50 @@ struct ComponentTable {
     drain_flush: [usize; 2],
     submit_input: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Status,
     query_output: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Status,
-    rest: [usize; 4],
+    context_allocator: [usize; 2],
+    get_caps: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Status,
+    optimize: usize,
 }
 
 /// A buffer's: the data interface's, then its own.
 #[repr(C)]
 struct BufferTable {
     base: BaseTable,
-    storage: [usize; 10],
+    storage: StorageTable,
     data: [usize; 6],
     set_pts: unsafe extern "system" fn(*mut c_void, i64),
     get_pts: usize,
     duration: [usize; 2],
     set_size: unsafe extern "system" fn(*mut c_void, usize) -> Status,
-    get_size: usize,
+    get_size: unsafe extern "system" fn(*mut c_void) -> usize,
     get_native: unsafe extern "system" fn(*mut c_void) -> *mut c_void,
     observers: [usize; 2],
+}
+
+/// A component's capabilities: properties, then its own three.
+#[repr(C)]
+struct CapsTable {
+    base: BaseTable,
+    storage: StorageTable,
+    get_acceleration_type: unsafe extern "system" fn(*mut c_void) -> i32,
+    get_input_caps: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Status,
+    get_output_caps: usize,
+}
+
+/// What one side of a component takes or gives.
+#[repr(C)]
+struct IoCapsTable {
+    base: BaseTable,
+    get_width_range: unsafe extern "system" fn(*mut c_void, *mut i32, *mut i32),
+    get_height_range: unsafe extern "system" fn(*mut c_void, *mut i32, *mut i32),
+    rest: [usize; 6],
 }
 
 /// A surface's: the data interface's, then its own.
 #[repr(C)]
 struct SurfaceTable {
     base: BaseTable,
-    storage: [usize; 10],
+    storage: StorageTable,
     data: [usize; 6],
     set_pts: usize,
     get_pts: unsafe extern "system" fn(*mut c_void) -> i64,
@@ -358,6 +676,40 @@ unsafe fn release(this: NonNull<c_void>) {
     let base = unsafe { table::<BaseTable>(this) };
     // SAFETY: as above.
     unsafe { (base.release)(this.as_ptr()) };
+}
+
+/// Write the setting `name` of the object at `this`.
+///
+/// # Safety
+///
+/// `this` is a live object whose table begins as a property storage's.
+unsafe fn write_on(this: NonNull<c_void>, name: &str, value: Variant) -> Result<()> {
+    let name = Name::new(name)?;
+    // SAFETY: the caller's contract; the name is terminated and the value
+    // is plain data passed by value.
+    check(unsafe {
+        (table::<PropertyTable>(this).storage.set_property)(this.as_ptr(), name.as_ptr(), value)
+    })
+}
+
+/// Read the setting `name` of the object at `this`, a number or a flag.
+///
+/// # Safety
+///
+/// As [`write_on`]. A setting held as a string or an interface would leave
+/// its value for the caller to clear, so only numbers are read here.
+unsafe fn read_on(this: NonNull<c_void>, name: &str) -> Result<i64> {
+    let name = Name::new(name)?;
+    let mut value = Variant::empty();
+    // SAFETY: the caller's contract; the output is a live local.
+    check(unsafe {
+        (table::<PropertyTable>(this).storage.get_property)(
+            this.as_ptr(),
+            name.as_ptr(),
+            &raw mut value,
+        )
+    })?;
+    value.integer().ok_or(Error::NotANumber)
 }
 
 /// The loaded runtime and the factory it handed out.
@@ -432,7 +784,7 @@ impl Amf {
     /// A decoder for `codec` in `context`, not yet initialised, which the
     /// context outlives.
     pub fn decoder<'c>(&self, context: &'c Context<'_>, codec: Codec) -> Result<Component<'c>> {
-        let id = Name::new(codec.id())?;
+        let id = Name::new(codec.decoder_id())?;
         let mut raw: *mut c_void = core::ptr::null_mut();
         // SAFETY: a live factory and context; the name and the output are
         // live for the call.
@@ -446,6 +798,28 @@ impl Amf {
         })?;
         Ok(Component {
             raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
+            _context: PhantomData,
+        })
+    }
+
+    /// An encoder for `codec` in `context`, not yet initialised, which the
+    /// context outlives.
+    pub fn encoder<'c>(&self, context: &'c Context<'_>, codec: Codec) -> Result<Encoder<'c>> {
+        let id = Name::new(codec.encoder_id())?;
+        let mut raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a live factory and context; the name and the output are
+        // live for the call.
+        check(unsafe {
+            (self.factory().create_component)(
+                self.factory.as_ptr(),
+                context.raw.as_ptr(),
+                id.as_ptr(),
+                &raw mut raw,
+            )
+        })?;
+        Ok(Encoder {
+            raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
+            codec,
             _context: PhantomData,
         })
     }
@@ -487,6 +861,27 @@ impl<'d> Context<'d> {
             raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
             capacity,
             _context: PhantomData,
+        })
+    }
+
+    /// `texture`, which must be the context's device's, wrapped for an
+    /// encoder to read: made once and submitted as often as the caller
+    /// likes, each time read as the texture is then.
+    pub fn input<'a>(&'a self, texture: &'a Com<ID3D11Texture2D>) -> Result<Input<'a>> {
+        let mut raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a live context and a live texture, which the wrapper's
+        // lifetime keeps alive; no observer; the output is a live local.
+        check(unsafe {
+            (self.table().create_surface_from_dx11_native)(
+                self.raw.as_ptr(),
+                texture.as_ptr().cast(),
+                &raw mut raw,
+                core::ptr::null_mut(),
+            )
+        })?;
+        Ok(Input {
+            raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
+            _borrowed: PhantomData,
         })
     }
 }
@@ -735,6 +1130,293 @@ impl Drop for Surface<'_> {
     }
 }
 
+const IID_BUFFER: Guid = Guid {
+    data1: 0xb04b_7248,
+    data2: 0xb6f0,
+    data3: 0x4321,
+    data4: [0xb6, 0x91, 0xba, 0xa4, 0x74, 0x0f, 0x9f, 0xcb],
+};
+
+/// An encoder in the context it borrows: terminated and released on drop.
+pub struct Encoder<'c> {
+    raw: NonNull<c_void>,
+    codec: Codec,
+    _context: PhantomData<&'c ()>,
+}
+
+impl fmt::Debug for Encoder<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Encoder")
+            .field("codec", &self.codec)
+            .finish()
+    }
+}
+
+impl<'c> Encoder<'c> {
+    fn table(&self) -> &ComponentTable {
+        // SAFETY: a live encoder, whose table is the component's.
+        unsafe { table(self.raw) }
+    }
+
+    /// The codec it encodes, whose [`Codec::names`] name its settings.
+    pub fn codec(&self) -> Codec {
+        self.codec
+    }
+
+    /// Whether the encoder has the setting `name`: how a runtime is asked
+    /// what it can do.
+    pub fn has(&self, name: &str) -> bool {
+        let Ok(name) = Name::new(name) else {
+            return false;
+        };
+        // SAFETY: a live encoder and a terminated name.
+        unsafe { (self.table().has_property)(self.raw.as_ptr(), name.as_ptr()) != 0 }
+    }
+
+    pub fn set_bool(&self, name: &str, value: bool) -> Result<()> {
+        // SAFETY: a live encoder, whose table begins as a property storage's.
+        unsafe { write_on(self.raw, name, Variant::boolean(value)) }
+    }
+
+    pub fn set_int(&self, name: &str, value: i64) -> Result<()> {
+        // SAFETY: as above.
+        unsafe { write_on(self.raw, name, Variant::int64(value)) }
+    }
+
+    /// A rate, as `num` pictures in `den` seconds.
+    pub fn set_rate(&self, name: &str, num: u32, den: u32) -> Result<()> {
+        // SAFETY: as above.
+        unsafe { write_on(self.raw, name, Variant::rate(num, den)) }
+    }
+
+    pub fn set_size(&self, name: &str, width: u32, height: u32) -> Result<()> {
+        let width = i32::try_from(width).map_err(|_| Error::TooLarge)?;
+        let height = i32::try_from(height).map_err(|_| Error::TooLarge)?;
+        // SAFETY: as above.
+        unsafe { write_on(self.raw, name, Variant::size(width, height)) }
+    }
+
+    /// A setting's value, a number or a flag.
+    pub fn get_int(&self, name: &str) -> Result<i64> {
+        // SAFETY: as above.
+        unsafe { read_on(self.raw, name) }
+    }
+
+    /// What the encoder can do, asked before it is initialised.
+    pub fn caps(&self) -> Result<Caps<'c>> {
+        let mut raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a live encoder; the output is a live local.
+        check(unsafe { (self.table().get_caps)(self.raw.as_ptr(), &raw mut raw) })?;
+        Ok(Caps {
+            raw: NonNull::new(raw).ok_or(Error::Unavailable)?,
+            _context: PhantomData,
+        })
+    }
+
+    /// Initialise the encoder for pictures of `width` x `height` in
+    /// `format`, after every setting that is read only now.
+    pub fn init(&self, format: Format, width: u32, height: u32) -> Result<()> {
+        let width = i32::try_from(width).map_err(|_| Error::TooLarge)?;
+        let height = i32::try_from(height).map_err(|_| Error::TooLarge)?;
+        // SAFETY: a live encoder.
+        check(unsafe { (self.table().init)(self.raw.as_ptr(), format.code(), width, height) })
+    }
+
+    /// Hand `input` over for one picture. The encoder holds it until the
+    /// unit it gives for it is collected.
+    pub fn submit(&self, input: &Input<'_>) -> Result<Submitted> {
+        // SAFETY: a live encoder and a live input.
+        Component::submitted(unsafe {
+            (self.table().submit_input)(self.raw.as_ptr(), input.raw.as_ptr())
+        })
+    }
+
+    /// The next unit, if one is ready: at once, or after waiting as long as
+    /// the encoder was told before it was initialised.
+    pub fn query(&self) -> Result<Option<Unit<'c>>> {
+        let mut data: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a live encoder; the output is a live local.
+        let status = unsafe { (self.table().query_output)(self.raw.as_ptr(), &raw mut data) };
+        match status {
+            OK => {}
+            REPEAT | EOF => return Ok(None),
+            other => return Err(Error::Status(other)),
+        }
+        let Some(data) = NonNull::new(data) else {
+            return Ok(None);
+        };
+        // The data handed out is a buffer; its buffer interface is asked for,
+        // and the data's own reference given up.
+        let mut buffer: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a live object the call handed a reference on; the identity
+        // and the output are live.
+        let status = unsafe {
+            let base = table::<BaseTable>(data);
+            let status = (base.query_interface)(data.as_ptr(), &IID_BUFFER, &raw mut buffer);
+            release(data);
+            status
+        };
+        check(status)?;
+        Ok(Some(Unit {
+            raw: NonNull::new(buffer).ok_or(Error::Status(status))?,
+            _context: PhantomData,
+        }))
+    }
+}
+
+impl Drop for Encoder<'_> {
+    fn drop(&mut self) {
+        // SAFETY: a live encoder, terminated once and then released once.
+        unsafe {
+            (self.table().terminate)(self.raw.as_ptr());
+            release(self.raw);
+        }
+    }
+}
+
+/// A texture wrapped for an encoder, which borrows the texture and the
+/// context: released on drop. **What it carries for one picture -- a forced
+/// type, the delimiter -- stays on it until written again**, so a caller
+/// writes them with every picture.
+pub struct Input<'a> {
+    raw: NonNull<c_void>,
+    _borrowed: PhantomData<&'a ()>,
+}
+
+impl fmt::Debug for Input<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Input")
+    }
+}
+
+impl Input<'_> {
+    pub fn set_bool(&self, name: &str, value: bool) -> Result<()> {
+        // SAFETY: a live surface, whose table begins as a property storage's.
+        unsafe { write_on(self.raw, name, Variant::boolean(value)) }
+    }
+
+    pub fn set_int(&self, name: &str, value: i64) -> Result<()> {
+        // SAFETY: as above.
+        unsafe { write_on(self.raw, name, Variant::int64(value)) }
+    }
+}
+
+impl Drop for Input<'_> {
+    fn drop(&mut self) {
+        // SAFETY: a live surface this holds one reference on.
+        unsafe { release(self.raw) };
+    }
+}
+
+/// A unit an encoder handed out, in host memory: released on drop.
+pub struct Unit<'c> {
+    raw: NonNull<c_void>,
+    _context: PhantomData<&'c ()>,
+}
+
+impl fmt::Debug for Unit<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Unit")
+            .field("len", &self.bytes().len())
+            .finish()
+    }
+}
+
+impl Unit<'_> {
+    fn table(&self) -> &BufferTable {
+        // SAFETY: a live buffer, whose table is the buffer's.
+        unsafe { table(self.raw) }
+    }
+
+    /// The coded access unit, whole, borrowed while the unit is held.
+    pub fn bytes(&self) -> &[u8] {
+        // SAFETY: a live buffer.
+        let (size, native) = unsafe {
+            (
+                (self.table().get_size)(self.raw.as_ptr()),
+                (self.table().get_native)(self.raw.as_ptr()),
+            )
+        };
+        if native.is_null() || size == 0 {
+            return &[];
+        }
+        // SAFETY: the buffer's host memory, `size` bytes, which nothing writes
+        // while the unit holds the buffer, and which lives as long as it.
+        unsafe { core::slice::from_raw_parts(native.cast::<u8>(), size) }
+    }
+
+    /// A number the unit carries, such as the kind of picture.
+    pub fn get_int(&self, name: &str) -> Result<i64> {
+        // SAFETY: a live buffer, whose table begins as a property storage's.
+        unsafe { read_on(self.raw, name) }
+    }
+}
+
+impl Drop for Unit<'_> {
+    fn drop(&mut self) {
+        // SAFETY: a live buffer this holds one reference on.
+        unsafe { release(self.raw) };
+    }
+}
+
+/// What an encoder can do: released on drop.
+pub struct Caps<'c> {
+    raw: NonNull<c_void>,
+    _context: PhantomData<&'c ()>,
+}
+
+impl fmt::Debug for Caps<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Caps")
+    }
+}
+
+impl Caps<'_> {
+    fn table(&self) -> &CapsTable {
+        // SAFETY: live capabilities, whose table is the capabilities'.
+        unsafe { table(self.raw) }
+    }
+
+    /// Whether the encoder's engine is the hardware's.
+    pub fn hardware(&self) -> bool {
+        // SAFETY: live capabilities.
+        unsafe { (self.table().get_acceleration_type)(self.raw.as_ptr()) == ACCELERATION_HARDWARE }
+    }
+
+    /// The pictures it takes: the least and the most width, then height.
+    pub fn input_size(&self) -> Result<((i32, i32), (i32, i32))> {
+        let mut io: *mut c_void = core::ptr::null_mut();
+        // SAFETY: live capabilities; the output is a live local.
+        check(unsafe { (self.table().get_input_caps)(self.raw.as_ptr(), &raw mut io) })?;
+        let io = NonNull::new(io).ok_or(Error::Unavailable)?;
+        let (mut w0, mut w1, mut h0, mut h1) = (0, 0, 0, 0);
+        // SAFETY: a live object the call handed a reference on, whose table
+        // is the input capabilities'; the outputs are live locals; the
+        // reference is given up once.
+        unsafe {
+            let caps = table::<IoCapsTable>(io);
+            (caps.get_width_range)(io.as_ptr(), &raw mut w0, &raw mut w1);
+            (caps.get_height_range)(io.as_ptr(), &raw mut h0, &raw mut h1);
+            release(io);
+        }
+        Ok(((w0, w1), (h0, h1)))
+    }
+
+    /// A capability by its name, a number or a flag.
+    pub fn get_int(&self, name: &str) -> Result<i64> {
+        // SAFETY: live capabilities, whose table begins as a property
+        // storage's.
+        unsafe { read_on(self.raw, name) }
+    }
+}
+
+impl Drop for Caps<'_> {
+    fn drop(&mut self) {
+        // SAFETY: live capabilities this holds one reference on.
+        unsafe { release(self.raw) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +1466,212 @@ mod tests {
 
         assert_eq!(offset_of!(PlaneTable, get_native), slot(4));
         assert_eq!(size_of::<PlaneTable>(), slot(13));
+
+        // The encoders' half, counted from the same headers.
+        assert_eq!(offset_of!(StorageTable, get_property), slot(1));
+        assert_eq!(offset_of!(StorageTable, has_property), slot(2));
+        assert_eq!(size_of::<StorageTable>(), slot(10));
+        assert_eq!(offset_of!(PropertyTable, storage), slot(3));
+        assert_eq!(
+            offset_of!(ContextTable, create_surface_from_dx11_native),
+            slot(49)
+        );
+        assert_eq!(offset_of!(ComponentTable, get_property), slot(4));
+        assert_eq!(offset_of!(ComponentTable, get_caps), slot(26));
+        assert_eq!(offset_of!(BufferTable, storage), slot(3));
+        assert_eq!(offset_of!(BufferTable, get_size), slot(24));
+        assert_eq!(offset_of!(SurfaceTable, storage), slot(3));
+        assert_eq!(offset_of!(CapsTable, storage), slot(3));
+        assert_eq!(offset_of!(CapsTable, get_acceleration_type), slot(13));
+        assert_eq!(offset_of!(CapsTable, get_input_caps), slot(14));
+        assert_eq!(size_of::<CapsTable>(), slot(16));
+        assert_eq!(offset_of!(IoCapsTable, get_width_range), slot(3));
+        assert_eq!(offset_of!(IoCapsTable, get_height_range), slot(4));
+        assert_eq!(size_of::<IoCapsTable>(), slot(11));
+    }
+
+    /// A rate and a size go over as two numbers in the value's first eight
+    /// bytes, each under its own kind; a read gives a number back only for
+    /// the two kinds that are numbers.
+    #[test]
+    fn a_rate_and_a_size_are_two_numbers_of_their_own_kinds() {
+        let rate = Variant::rate(60, 1);
+        assert_eq!(rate.kind, VARIANT_RATE);
+        // SAFETY: reading back the member just written.
+        assert_eq!(unsafe { rate.value.rate }, [60, 1]);
+        let size = Variant::size(1920, 1080);
+        assert_eq!(size.kind, VARIANT_SIZE);
+        // SAFETY: as above.
+        assert_eq!(unsafe { size.value.size }, [1920, 1080]);
+        assert_eq!(Variant::int64(5).integer(), Some(5));
+        assert_eq!(Variant::boolean(true).integer(), Some(1));
+        assert_eq!(rate.integer(), None);
+        assert_eq!(Variant::empty().integer(), None);
+    }
+
+    /// Every name either codec's encoder is called by goes over whole, and
+    /// the two tables differ where the components do.
+    #[test]
+    fn both_encoders_names_go_over_whole() {
+        for codec in [Codec::H264, Codec::Hevc] {
+            let n = codec.names();
+            let mut all = vec![
+                n.usage,
+                n.profile,
+                n.frame_size,
+                n.frame_rate,
+                n.quality_preset,
+                n.rate_control,
+                n.target_bitrate,
+                n.peak_bitrate,
+                n.vbv_buffer_size,
+                n.vbv_initial_fullness,
+                n.max_au_size,
+                n.filler,
+                n.skip_frame,
+                n.max_reference_frames,
+                n.slices,
+                n.query_timeout,
+                n.preencode,
+                n.full_range,
+                n.in_color_profile,
+                n.out_color_profile,
+                n.in_primaries,
+                n.out_primaries,
+                n.in_transfer,
+                n.out_transfer,
+                n.color_bit_depth,
+                n.intra_refresh,
+                n.force_picture_type,
+                n.insert_aud,
+                n.output_data_type,
+                n.cap_query_timeout,
+            ];
+            all.extend(n.min_qp);
+            all.extend(n.keyframe_period);
+            all.extend(n.insert_headers);
+            all.extend(n.header_insertion);
+            for name in all {
+                assert!(Name::new(name).is_ok(), "{codec:?}: {name}");
+            }
+        }
+        let (avc, hevc) = (Codec::H264.names(), Codec::Hevc.names());
+        assert_eq!((avc.min_qp.len(), hevc.min_qp.len()), (1, 2));
+        assert_eq!(
+            (avc.header_insertion, hevc.header_insertion.is_some()),
+            (None, true)
+        );
+        assert_eq!((avc.profile_10, hevc.profile_10), (None, Some(2)));
+        assert_eq!(
+            (avc.rate_latency_constrained, hevc.rate_latency_constrained),
+            (3, 1)
+        );
+        assert_eq!(Codec::H264.encoder_id(), "AMFVideoEncoderVCE_AVC");
+        assert_eq!(Codec::Hevc.encoder_id(), "AMFVideoEncoderHW_HEVC");
+    }
+
+    /// The formats an encoder is initialised with go over as the runtime
+    /// numbers them.
+    #[test]
+    fn an_encoders_format_is_numbered_as_the_runtime_numbers_it() {
+        assert_eq!(Format::Nv12.code(), 1);
+        assert_eq!(Format::Bgra.code(), 3);
+        assert_eq!(Format::Rgba.code(), 5);
+        assert_eq!(Format::P010.code(), 10);
+        assert_eq!(Format::Rgb10A2.code(), 13);
+    }
+
+    /// The type of the first unit in `bytes` led by a start code.
+    fn first_unit_type(bytes: &[u8], codec: Codec) -> Option<u8> {
+        let at = bytes.windows(3).position(|w| w == [0, 0, 1])?;
+        let header = *bytes.get(at + 3)?;
+        Some(match codec {
+            Codec::H264 => header & 0x1f,
+            Codec::Hevc => (header >> 1) & 0x3f,
+        })
+    }
+
+    /// On a machine with AMD's runtime and GPU: both encoders build on a
+    /// device of ours, report hardware, sizes to 4096x2160 and a query that
+    /// can wait, and each turns one texture of ours, forced, into a keyframe
+    /// whose first unit is a parameter set with no delimiter ahead of it.
+    #[test]
+    #[ignore = "requires AMD's runtime and GPU"]
+    fn the_runtime_builds_both_encoders_and_each_codes_a_keyframe() {
+        use crate::ffi::d3d11::{
+            D3D11_BIND_UNORDERED_ACCESS, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
+        };
+        let d3d11 = D3d11::load().unwrap();
+        let adapter = d3d11
+            .adapters()
+            .unwrap()
+            .into_iter()
+            .find(|a| a.decodes_here() && a.maker() == Some("AMD"))
+            .expect("an AMD GPU");
+        let device = d3d11.open(adapter.luid).unwrap();
+        let amf = Amf::load().unwrap();
+        let context = amf.context(&device).unwrap();
+        let texture = device
+            .texture(&D3D11_TEXTURE2D_DESC {
+                Width: 1280,
+                Height: 720,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: u32::try_from(D3D11_BIND_UNORDERED_ACCESS).unwrap(),
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            })
+            .unwrap();
+        for codec in [Codec::H264, Codec::Hevc] {
+            let n = codec.names();
+            let encoder = amf.encoder(&context, codec).unwrap();
+            let caps = encoder.caps().unwrap();
+            assert!(caps.hardware(), "{codec:?}");
+            let ((_, width), (_, height)) = caps.input_size().unwrap();
+            assert!(
+                width >= 4096 && height >= 2160,
+                "{codec:?}: {width}x{height}"
+            );
+            assert_eq!(caps.get_int(n.cap_query_timeout).unwrap(), 1, "{codec:?}");
+            drop(caps);
+            encoder.set_int(n.usage, USAGE_ULTRA_LOW_LATENCY).unwrap();
+            encoder.set_size(n.frame_size, 1280, 720).unwrap();
+            encoder.set_rate(n.frame_rate, 60, 1).unwrap();
+            encoder.set_int(n.query_timeout, 1000).unwrap();
+            if let Some(mode) = n.header_insertion {
+                encoder.set_int(mode, HEADERS_AT_IDR).unwrap();
+            }
+            encoder.init(Format::Nv12, 1280, 720).unwrap();
+            let input = context.input(&texture).unwrap();
+            input.set_int(n.force_picture_type, PICTURE_IDR).unwrap();
+            input.set_bool(n.insert_aud, false).unwrap();
+            for header in n.insert_headers {
+                input.set_bool(header, true).unwrap();
+            }
+            assert_eq!(encoder.submit(&input).unwrap(), Submitted::Taken);
+            let unit = encoder
+                .query()
+                .unwrap()
+                .expect("a unit within the query's wait");
+            assert_eq!(unit.get_int(n.output_data_type).unwrap(), OUTPUT_IDR);
+            let parameter_set = match codec {
+                Codec::H264 => 7,
+                Codec::Hevc => 32,
+            };
+            assert_eq!(
+                first_unit_type(unit.bytes(), codec),
+                Some(parameter_set),
+                "{codec:?}: {} bytes",
+                unit.bytes().len()
+            );
+        }
     }
 
     /// A property's value is its kind and then sixteen bytes, eight-aligned:
