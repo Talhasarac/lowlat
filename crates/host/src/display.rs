@@ -85,4 +85,8 @@ pub struct Acquired {
     /// How long before `at` the system composed the picture, where the
     /// display says: what the loop places its next deadline against.
     pub composed_before_ms: Option<f64>,
+    /// **A picture already sent was read half written**, so this one goes
+    /// out as a keyframe: what went out cannot be taken back, and nothing
+    /// after it should lean on it.
+    pub keyframe: bool,
 }

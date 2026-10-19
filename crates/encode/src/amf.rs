@@ -21,7 +21,7 @@
 
 use core::time::Duration;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 
 use lowlat_common::spsc::Ring;
@@ -165,6 +165,12 @@ struct Shared {
     submitted: AtomicU32,
     /// Pictures submitted and not yet collected by the thread.
     in_engine: AtomicUsize,
+    /// When the last unit came out of the engine, on the performance counter
+    /// in microseconds: the end of the last read of a texture handed over.
+    out_us: AtomicU64,
+    /// A probe's: how much later each unit is handed over than it came out,
+    /// in microseconds, as if the engine had read its picture that long.
+    late_us: AtomicU64,
     stop: AtomicBool,
     /// The runtime's status when a query failed, else zero.
     failed: AtomicI32,
@@ -189,6 +195,13 @@ impl Engine {
     /// engine may still be reading its texture.
     pub fn busy(&self) -> bool {
         self.0.in_engine.load(Ordering::Acquire) > 0
+    }
+
+    /// When the last unit came out, on the performance counter in
+    /// microseconds ([`lowlat_common::clock::monotonic_us`]): a texture handed
+    /// over was read no later than this. Zero before the first.
+    pub fn out_us(&self) -> u64 {
+        self.0.out_us.load(Ordering::Acquire)
     }
 }
 
@@ -309,6 +322,8 @@ impl<'c> Encoder<'c> {
             ready: AtomicU32::new(0),
             submitted: AtomicU32::new(0),
             in_engine: AtomicUsize::new(0),
+            out_us: AtomicU64::new(0),
+            late_us: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             failed: AtomicI32::new(0),
         });
@@ -351,6 +366,15 @@ impl<'c> Encoder<'c> {
     /// textures handed over.
     pub fn engine(&self) -> Engine {
         Engine(Arc::clone(&self.shared))
+    }
+
+    /// **A probe's knob**: each unit handed over `late` after it came out, as
+    /// if the engine had gone on reading its picture that long -- for a check
+    /// that a reader in place catches a read that ran past the picture's
+    /// buffer being written again. Zero, the default, is none.
+    pub fn hand_over_late(&self, late: Duration) {
+        let late_us = u64::try_from(late.as_micros()).unwrap_or(u64::MAX);
+        self.shared.late_us.store(late_us, Ordering::Release);
     }
 
     /// `texture`, which something else on the encoder's device writes -- a
@@ -621,6 +645,15 @@ fn collect(shared: &Shared, query: &QueryHandle) {
         }
         match query.query() {
             Ok(Some(mut unit)) => {
+                let late_us = shared.late_us.load(Ordering::Acquire);
+                if late_us > 0 {
+                    std::thread::sleep(Duration::from_micros(late_us));
+                }
+                // **The read's end before the count**, so a reader that finds
+                // the engine idle finds when it went idle too.
+                shared
+                    .out_us
+                    .store(lowlat_common::clock::monotonic_us(), Ordering::Release);
                 shared.in_engine.fetch_sub(1, Ordering::AcqRel);
                 // The ring holds as many as the encoder does, so this finds
                 // room; a unit is never dropped, it carries the stream.

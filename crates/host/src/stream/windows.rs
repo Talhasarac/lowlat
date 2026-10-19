@@ -434,9 +434,8 @@ fn run_amd(
     };
     // **Eight bits read the capture as it is**, the encoder converting in its
     // own hardware; ten go through our conversion into P010, which the
-    // encoder's own cannot write, and so does the host's own display read
-    // from its driver, whose buffers are converted as they are taken.
-    let in_place = !config.ten_bit && !Display::captures_own(config.output.as_deref());
+    // encoder's own cannot write.
+    let in_place = !config.ten_bit;
     let source = if in_place {
         lowlat_encode::amf::Source::Rgb
     } else {

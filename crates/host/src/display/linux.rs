@@ -1330,6 +1330,7 @@ impl Display {
             at,
             changed,
             composed_before_ms: None,
+            keyframe: false,
         }))
     }
 

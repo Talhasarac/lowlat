@@ -3797,6 +3797,7 @@ fn encode_loop<E: Encoder + FromDevice>(
                         at: began,
                         changed: false,
                         composed_before_ms: None,
+                        keyframe: false,
                     }),
                     Err(error) => {
                         lowlat_common::log_warn!(
@@ -3806,6 +3807,7 @@ fn encode_loop<E: Encoder + FromDevice>(
                             at: began,
                             changed: false,
                             composed_before_ms: None,
+                            keyframe: false,
                         })
                     }
                 },
@@ -3935,6 +3937,9 @@ fn encode_loop<E: Encoder + FromDevice>(
             // **The generator has no summary and its frames all differ**, so a
             // stream without a display is untouched by any of this.
             let changed = ready.is_none_or(|got| got.changed);
+            // **A picture already sent that was read half written** is
+            // followed by a keyframe: what went out cannot be taken back.
+            force_keyframe |= ready.is_some_and(|got| got.keyframe);
             // **What the acquire cost, not when the picture is stamped.** A
             // display reports the moment it began, because that is when the
             // picture on screen was the one being taken and it is what the

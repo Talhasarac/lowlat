@@ -27,7 +27,7 @@ use lowlat_capture::duplication::{
 use lowlat_capture::{Placement, Pointer, Reported};
 use lowlat_common::clock::{self, Time};
 use lowlat_core::video::Rotation;
-use lowlat_drivers::d3d11::{Com, D3d11, Device, Fence, Output, Span, Timer};
+use lowlat_drivers::d3d11::{Com, D3d11, Device, Event, Fence, Output, Span, Timer};
 use lowlat_drivers::ffi::d3d11::{
     DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_ROTATE270,
     ID3D11ShaderResourceView, ID3D11Texture2D, IDXGIOutput,
@@ -194,6 +194,14 @@ struct InPlace {
     /// Waits that found the engine still reading and held off the next
     /// frame: how often the guard is what kept a picture whole.
     deferred: u64,
+    /// The driver's picture whose buffer was last handed over, by generation
+    /// and sequence, until what the encoder read of it is checked.
+    reading: Option<(u64, u64)>,
+    /// Pictures read from a buffer the system had begun writing again: sent
+    /// half written, each followed by a keyframe.
+    torn: u64,
+    /// A keyframe owed for one of those, carried by the next picture.
+    owe_keyframe: bool,
 }
 
 /// Whether `wanted` names `name`: the system's own name, its `\\.\` prefix
@@ -772,10 +780,37 @@ struct Direct {
     /// The system's number for the pointer's shape last taken; zero before
     /// any.
     shape: u32,
+    /// What a picture handed to an encoder in place waits on: the system's
+    /// write of its buffer finished. Made at the first such picture.
+    written: Option<Event>,
     /// How long a take stalls after queuing its conversion: a reader made
     /// late on purpose, which the freshness check must catch.
     #[cfg(test)]
     stall_ms: u64,
+}
+
+/// How long a picture handed over in place waits for the system's write of
+/// its buffer before the tick takes nothing: the write is queued before the
+/// driver publishes, so this is a bound on a stall, not a pace.
+const WRITTEN_WAIT: core::time::Duration = core::time::Duration::from_millis(20);
+
+/// A picture whose buffer is handed to an encoder that reads it in place.
+struct Handed {
+    texture: Com<ID3D11Texture2D>,
+    generation: u64,
+    sequence: u64,
+    /// The driver's acquire time, by the performance counter.
+    acquired: i64,
+}
+
+/// What a hand-over of the direct source found.
+enum Handing {
+    Picture(Handed),
+    /// The same picture as the last, or none yet, or one whose write did not
+    /// finish in time.
+    Same,
+    /// Another size than the display was built for.
+    Resized,
 }
 
 /// Whether a picture of frame number `frame` is the one taken last.
@@ -811,6 +846,7 @@ impl Direct {
             pending: false,
             again: 0,
             shape: 0,
+            written: None,
             #[cfg(test)]
             stall_ms: 0,
         })
@@ -953,6 +989,67 @@ impl Direct {
             }
         }
         Ok(converted.map_or(Took::Same, Took::Picture))
+    }
+
+    /// The latest picture's buffer, for an encoder that reads it in place,
+    /// unless it is the one taken last. **Handed over only once the system's
+    /// write of it has finished**, waited for here rather than on the device:
+    /// the encoder reads in an engine of its own, which the device's queue
+    /// does not order.
+    fn hand(&mut self, device: &Device, size: (u32, u32)) -> Result<Handing, Error> {
+        let Some(snapshot) = self.page.read() else {
+            return Ok(Handing::Same);
+        };
+        if snapshot.generation == 0 || snapshot.picture.sequence == 0 {
+            return Ok(Handing::Same);
+        }
+        if (snapshot.width, snapshot.height) != size {
+            return Ok(Handing::Resized);
+        }
+        if !self.fresh(&snapshot) {
+            return Ok(Handing::Same);
+        }
+        let picture = snapshot.picture;
+        let same = the_same_picture(self.taken, picture.frame);
+        self.taken = Some((snapshot.generation, picture.sequence, picture.frame));
+        if same || !self.renew(device, &snapshot)? {
+            return Ok(Handing::Same);
+        }
+        if self.view(device, &snapshot, picture.index)?.is_none() {
+            return Ok(Handing::Same);
+        }
+        let at = usize::try_from(picture.index).unwrap_or(usize::MAX);
+        let Some((texture, _)) = self.buffers.get(at).and_then(Option::as_ref) else {
+            return Ok(Handing::Same);
+        };
+        let texture = texture.clone_ref();
+        if self.written.is_none() {
+            self.written = Some(Event::new()?);
+        }
+        let (Some(fence), Some(written)) = (&self.fence, &self.written) else {
+            return Ok(Handing::Same);
+        };
+        // **Until the fence has the value, not until the event is set**: a
+        // wait that gave up leaves its notice to set the event later, which
+        // would end the next wait early.
+        let began = Time::now();
+        while fence.completed() < picture.sequence {
+            let waited = core::time::Duration::from_secs_f64(clock::elapsed_ms(began) / 1000.0);
+            let Some(left) = WRITTEN_WAIT
+                .checked_sub(waited)
+                .filter(|left| !left.is_zero())
+            else {
+                return Ok(Handing::Same);
+            };
+            fence.notify_at(picture.sequence, written)?;
+            written.wait(left);
+        }
+        Ok(Handing::Picture(Handed {
+            texture,
+            generation: snapshot.generation,
+            sequence: picture.sequence,
+            acquired: i64::try_from(picture.acquired).unwrap_or(i64::MAX),
+        }))
     }
 
     /// Queue the conversion of `snapshot`'s picture behind the driver's fence:
@@ -1197,6 +1294,9 @@ impl Display {
                 presented: None,
                 held: false,
                 deferred: 0,
+                reading: None,
+                torn: 0,
+                owe_keyframe: false,
             }),
             Register::Nvenc(_) | Register::Amd(_) => None,
         };
@@ -1238,11 +1338,8 @@ impl Display {
         remember(name);
         // **The host's own display is read straight from its driver whenever
         // the driver answers** -- which it does to the system account the
-        // host runs as -- and duplicated otherwise, as any display is. **An
-        // encoder reading in place takes the duplication**: the driver's
-        // buffers are converted, and it has no targets to convert into.
+        // host runs as -- and duplicated otherwise, as any display is.
         let attached = match direct {
-            _ if display.in_place.is_some() => None,
             Some(slot) => Some((slot, Direct::attach(slot)?)),
             None => own_slot(&display.output.name).and_then(|slot| match Direct::attach(slot) {
                 Ok(attached) => Some((slot, attached)),
@@ -1511,6 +1608,7 @@ impl Display {
                 at: kept.at,
                 changed: true,
                 composed_before_ms: Some(kept.age_ms),
+                keyframe: false,
             });
             return Ok(kept.at);
         }
@@ -1546,6 +1644,7 @@ impl Display {
             at: kept.at,
             changed: true,
             composed_before_ms: Some(kept.age_ms),
+            keyframe: false,
         });
         Ok(kept.at)
     }
@@ -1603,6 +1702,9 @@ impl Display {
         {
             self.mode_refresh = refresh;
             self.repace();
+        }
+        if self.in_place.is_some() {
+            return self.hand_direct();
         }
         let Some(direct) = self.direct.as_mut() else {
             return Ok(Time::now());
@@ -1669,6 +1771,83 @@ impl Display {
             at,
             changed: true,
             composed_before_ms: Some(age_ms),
+            keyframe: false,
+        });
+        Ok(at)
+    }
+
+    /// [`Display::acquire`] for the host's own display read from its driver
+    /// by an encoder that reads in place: the latest picture's buffer handed
+    /// over as it is. **What the encoder read is checked once it is done**: a
+    /// buffer the system began writing again before the engine had finished
+    /// reading it went out half written -- counted, and the next picture sent
+    /// as a keyframe. Measured margins say it does not happen: the system
+    /// comes back to a buffer only after as many refreshes as it has buffers,
+    /// less one, and an encode is a fraction of one.
+    fn hand_direct(&mut self) -> Result<Time, Error> {
+        let (Some(direct), Some(in_place)) = (self.direct.as_mut(), self.in_place.as_mut()) else {
+            return Ok(Time::now());
+        };
+        direct.pending = false;
+        if let Some((generation, sequence)) = in_place.reading
+            && !in_place.engine.busy()
+            && let Some(now) = direct.page.read()
+            && now.overtaken(generation, sequence)
+        {
+            in_place.reading = None;
+            // **Written again before the engine was done** when even the
+            // latest picture -- at or past the one whose acquire gave the
+            // buffer back to the system -- came before the last unit did.
+            let out_us = clock::monotonic_us().saturating_sub(in_place.engine.out_us());
+            let out_ms = f64::from(u32::try_from(out_us).unwrap_or(u32::MAX)) / 1000.0;
+            let latest = i64::try_from(now.picture.acquired).unwrap_or(i64::MAX);
+            if in_place.engine.out_us() != 0 && duplication::age_ms(latest) > out_ms {
+                in_place.torn += 1;
+                in_place.owe_keyframe = true;
+                lowlat_common::log_warn!(
+                    "display: {} was read half written by the encoder, {} time(s) so far; a \
+                     keyframe follows",
+                    self.output.name,
+                    in_place.torn
+                );
+            }
+        }
+        let handed = match direct.hand(&self.device, self.size)? {
+            Handing::Picture(handed) => handed,
+            Handing::Same => return Ok(Time::now()),
+            Handing::Resized => {
+                lowlat_common::log_info!(
+                    "display: {} is another size now, was {}x{}",
+                    self.output.name,
+                    self.size.0,
+                    self.size.1
+                );
+                self.resized = true;
+                return Ok(Time::now());
+            }
+        };
+        let at = Time::now();
+        let age_ms = duplication::age_ms(handed.acquired);
+        in_place.presented = Some(Registration::Captured(handed.texture));
+        in_place.reading = Some((handed.generation, handed.sequence));
+        let keyframe = core::mem::take(&mut in_place.owe_keyframe);
+        self.next = self.next.wrapping_add(1);
+        self.timing.handed.record(age_ms);
+        self.timing.queued.record(age_ms);
+        self.timing.report(&self.output.name);
+        if self.timing.pictures % REPORT_EVERY == 0 {
+            lowlat_common::log_info!(
+                "display: {} read in place from its driver, {} of {} pictures half written",
+                self.output.name,
+                in_place.torn,
+                self.timing.pictures
+            );
+        }
+        self.flight = Some(Acquired {
+            at,
+            changed: true,
+            composed_before_ms: Some(age_ms),
+            keyframe,
         });
         Ok(at)
     }
@@ -2393,6 +2572,40 @@ mod tests {
         );
     }
 
+    /// AMD's encoder for a `width` x `height` picture at `hz`, eight-bit HEVC
+    /// reading `source`, as the tests here build it.
+    fn amd_config(
+        width: u32,
+        height: u32,
+        hz: u32,
+        source: lowlat_encode::amf::Source,
+    ) -> lowlat_encode::amf::Config {
+        lowlat_encode::amf::Config {
+            codec: lowlat_encode::amf::Codec::H265,
+            width,
+            height,
+            fps: hz.max(1),
+            bitrate_bps: 20_000_000,
+            min_qp: lowlat_encode::DEFAULT_MIN_QP,
+            thorough: false,
+            depth: lowlat_encode::amf::Depth::Eight,
+            source,
+        }
+    }
+
+    /// AMD's encoder handed what a display reading in place presents: the
+    /// capture's own texture, as the stream's own submit hands it over.
+    fn in_place(
+        encoder: &mut lowlat_encode::amf::Encoder<'_>,
+        made: &Registration,
+        force: bool,
+    ) -> bool {
+        match made {
+            Registration::Captured(texture) => encoder.submit_texture(texture, force).is_ok(),
+            Registration::Nvenc(_) | Registration::Amd(_) => false,
+        }
+    }
+
     /// The loop's own sequence over `display` at `hz`, each converted picture
     /// handed to `encoder` through `submit` and its access unit collected:
     /// [`the_desktop_converts_and_encodes_at_the_displays_pace`] for either
@@ -2515,7 +2728,7 @@ mod tests {
     #[test]
     #[ignore = "requires the display driver, the vendor's GPU and the system account"]
     fn the_hosts_own_display_converts_straight_from_its_driver() {
-        use lowlat_encode::nvenc;
+        use lowlat_encode::{amf, nvenc};
         use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
 
         let _timer = clock::TimerResolution::raise();
@@ -2551,6 +2764,32 @@ mod tests {
         let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
         let d3d11 = D3d11::load().expect("the system's libraries");
         let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        // AMD's, written out: eight bits read in place, as the stream reads
+        // them, at the same pace and with the same checks.
+        if output.adapter.vendor == 0x1002 {
+            let runtime = lowlat_drivers::amf::Amf::load().expect("AMD's runtime");
+            let context = runtime.context(&device).expect("a context");
+            let mut encoder = amf::Encoder::new(
+                &runtime,
+                &context,
+                amd_config(width, height, hz, amf::Source::Rgb),
+            )
+            .expect("an encoder");
+            let mut display = Display::open_direct(
+                &device,
+                &output.name,
+                Layout::Nv12,
+                (width, height),
+                Register::Captured(encoder.engine()),
+                monitor.slot,
+            )
+            .expect("the display, read from its driver");
+            at_the_displays_pace(&mut display, &mut encoder, hz, in_place);
+            let torn = display.in_place.as_ref().map_or(0, |read| read.torn);
+            println!("{torn} read half written");
+            assert_eq!(torn, 0, "a picture on time was read half written");
+            return;
+        }
         let api = nvenc::Api::load().expect("the encoder's runtime");
         let mut display: Display;
         let session = api.open_session(Arc::clone(&device)).expect("a session");
@@ -2878,6 +3117,107 @@ mod tests {
             Some(latest.picture.frame),
             "the picture converted is not the page's latest"
         );
+    }
+
+    /// **A read in place that ran past its buffer's turn is caught**, reading
+    /// the host's own display straight from its driver on AMD's GPU with a
+    /// load presenting on it (`LOWLAT_LOAD`, as the comparison below) at 120:
+    /// on time, no picture is read half written and no keyframe owed; with
+    /// each unit handed over 30 ms after it came out -- past two refreshes,
+    /// the system's way back to a buffer with three -- nearly every read is
+    /// caught, and the picture after it asks for a keyframe.
+    #[test]
+    #[ignore = "requires the display driver on AMD's GPU, a load and the system account"]
+    fn a_read_in_place_that_ran_long_is_caught() {
+        use lowlat_encode::amf;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        /// The loop's own order, a picture at a time -- wait, take, hand over,
+        /// collect -- and how many takes owed a keyframe.
+        fn take(display: &mut Display, encoder: &mut amf::Encoder<'_>, takes: usize) -> u64 {
+            let mut keyframes = 0;
+            for tick in 0..takes {
+                while display.wait_present(50) != Some(true) {}
+                display.acquire().expect("an acquire");
+                if display
+                    .converted()
+                    .expect("the take")
+                    .is_some_and(|got| got.keyframe)
+                {
+                    keyframes += 1;
+                }
+                if let Some(made) = display.presented() {
+                    assert!(in_place(encoder, made, tick == 0), "a submit");
+                    while !matches!(
+                        encoder.poll().expect("a collect"),
+                        lowlat_encode::Poll::Ready { .. }
+                    ) {
+                        encoder.wait_finished(core::time::Duration::from_millis(100));
+                    }
+                }
+            }
+            keyframes
+        }
+
+        let _timer = clock::TimerResolution::raise();
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1920, 1080, 120), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        let load = Load::on(&monitor.name).expect("a load");
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        assert_eq!(
+            output.adapter.vendor, 0x1002,
+            "the driver's monitor is not on AMD's GPU"
+        );
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let runtime = lowlat_drivers::amf::Amf::load().expect("AMD's runtime");
+        let context = runtime.context(&device).expect("a context");
+        let mut encoder = amf::Encoder::new(
+            &runtime,
+            &context,
+            amd_config(width, height, hz, amf::Source::Rgb),
+        )
+        .expect("an encoder");
+        let mut display = Display::open_direct(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            Register::Captured(encoder.engine()),
+            monitor.slot,
+        )
+        .expect("the display, read from its driver");
+        let torn = |display: &Display| display.in_place.as_ref().map_or(0, |read| read.torn);
+
+        let keyframes = take(&mut display, &mut encoder, 120);
+        println!(
+            "on time: {} read half written, {keyframes} keyframe(s) owed",
+            torn(&display)
+        );
+        assert_eq!(
+            (torn(&display), keyframes),
+            (0, 0),
+            "a read on time was caught"
+        );
+        encoder.hand_over_late(core::time::Duration::from_millis(30));
+        let keyframes = take(&mut display, &mut encoder, 20);
+        let caught = torn(&display);
+        println!(
+            "handed over 30 ms late: {caught} read half written, {keyframes} keyframe(s) owed"
+        );
+        assert!(
+            caught >= 15,
+            "a read that ran long was not caught: {caught} of 20"
+        );
+        assert!(
+            keyframes + 1 >= caught,
+            "a read caught owed no keyframe: {keyframes} for {caught}"
+        );
+        drop(load);
     }
 
     /// **Two readers at once are both served**: one monitor of the driver with
