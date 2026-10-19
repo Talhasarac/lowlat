@@ -3,6 +3,20 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-19 - W2.7 planned: AMD's encoder on Windows
+
+### Decided
+- **AMD's encoder joins NVIDIA's on Windows** ([impl-plan-windows.md](impl-plan-windows.md)
+  W2.7): AMD's own runtime on the D3D11 device of an output the AMD renders, a monitor or the
+  host's own display, in H.264 and HEVC and ten-bit HEVC where the part codes it, fed by the
+  host's own conversion; the encoder follows the captured output's GPU. A probe of the runtime
+  comes before any of it is built, and the checks that need an AMD GPU alone run on a second
+  machine with nothing installed there.
+- **The full-chroma census asks the encoder of the output being captured**, on both platforms
+  ([00 D7](00-overview.md) amended): a move onto an output whose encoder cannot code full
+  chroma drops it at that rebuild and keeps the screen ([05 §6.1](05-host.md)), so asking every
+  encoder the host could select only refused full chroma on machines that mix the two.
+
 ## 2026-10-19 - the browser pipe's figures and its deadline, as the native pipe reads them
 
 ### Fixed

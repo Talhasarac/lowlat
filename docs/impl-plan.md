@@ -1577,6 +1577,10 @@ The conversion shapes are settled, asked of the devices rather than guessed:
   failing part refuses the offer with the part named. On the rig the census refuses because
   one card codes no full chroma, which is the forced refusal the gate asked for -- and the
   preferred-third-encoder refusal is a committed machine-independent test.*
+  *Amended 2026-10-19 ([impl-plan-windows.md](impl-plan-windows.md) W2.7, [00 D7](00-overview.md)):
+  the census asks the encoder of the output being captured -- on the open stack, that output's
+  node -- since a move onto a part that cannot code full chroma now drops it at that rebuild
+  rather than ending the session ([05 §6.1](05-host.md)). Built with W2.7.*
 - [x] **The chroma is negotiated, not configured.** A guest declares bit 1, the consensus is
   the intersection across seated guests, a reinitialization request rebuilds the encoder, and
   a refusal names the gate. The per-frame video header carries no chroma bit, so the stream
@@ -2107,6 +2111,13 @@ push. Every fuzz target ran (15.1, 15.2).
 
 Newest first. Record approach changes and gate revisions here; per-commit detail belongs in
 [changelog.md](changelog.md).
+
+- 2026-10-19: **The full-chroma census asks the encoder of the output being captured**, on both
+  platforms, where it asked every encoder the host could select (11.6; [00 D7](00-overview.md)
+  amended). Colour degrades at a rebuild since 2026-09-01, so the move the census guarded
+  against no longer ends a session, and the old rule refused full chroma on every machine with a
+  part that cannot code it, whichever output was captured. Decided at W2.7's plan
+  ([impl-plan-windows.md](impl-plan-windows.md)) and built there.
 
 - 2026-10-06: **15.7 added: the client says what translation sits in front of its port**, at
   minor 23, rather than leaving an application to find out for itself. Under a confirmed

@@ -7,7 +7,8 @@ planned at its own interview on 2026-10-15, and its first step, the driver and i
 built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3.6 -- the
 controller as a program of its own -- and W3.7 -- the review's fixes -- are built, and W3's gate
 waits for W2.5, reviewed the same day. *Amended 2026-10-18:* W2.5, the service, is built,
-checked on the development machine and closed; W3's gate is next.
+checked on the development machine and closed; W3's gate is next. *Amended 2026-10-19:* W2.7,
+AMD's encoder, is added and planned at its interview; it waits on no other step.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -476,6 +477,11 @@ once, here.
   measured on W3's display, which renders on any GPU, or on outputs given a display. No Vulkan
   encoder and no system encoder on Windows: the vendor runtimes take D3D11 textures directly,
   and the Vulkan encoder's tails were the longest on Linux.
+  *Amended 2026-10-19, at W2.7's plan:* **AMD's encoder joins it** (W2.7). The development
+  machine now has a monitor on the AMD's integrated GPU, and the host's own display renders there
+  when its driver is told to, so that encoder is given pictures on its own device and measured as
+  itself. The encoder follows the captured output's GPU: NVIDIA's on an NVIDIA GPU, AMD's on an
+  AMD one. Intel's stays deferred.
 - **Desktop duplication, converted straight from the acquired image.** The conversion reads the
   duplicated image into the encoder's registered input and the frame is released as soon as the
   conversion is queued: no copy, so two passes after composition, the system's duplication copy
@@ -925,6 +931,39 @@ once, here.
   and how it keeps a clock in a quiet room are its own review. Until then a person sends that
   program to another output in the system's per-application settings, or mutes it
   ([05 §9.5](05-host.md)).
+- [ ] **W2.7 AMD's encoder** (*added and planned 2026-10-19, at its interview; not in the gate
+  below, it has its own*): AMD's own runtime, loaded at run time, encoding on the D3D11 device of
+  an output the AMD renders -- a monitor through desktop duplication, the host's own display read
+  straight from its driver -- in H.264 and HEVC, and HEVC at ten bits where the part codes it,
+  from the host's own conversion. The encoder follows the captured output's GPU.
+  *Decided at the interview:* **the full-chroma census asks the encoder of the output being
+  captured**, on both platforms ([00 D7](00-overview.md), amended). AMD's encoder codes no full
+  chroma, so asking every encoder the host could select would refuse it on any machine with a
+  monitor on its integrated GPU beside an NVIDIA card, whichever output a guest watched; and a
+  move onto an output whose encoder cannot code it drops it at that rebuild, the screen kept
+  ([05 §6.1](05-host.md)). **The checks that need an AMD GPU alone run on a second machine** that
+  has no other GPU: the host run there for each check with nothing installed, and an established
+  host measured beside it on the same machine.
+  *Planned with it:* the encoder's surfaces made once over the conversion's targets; the rate held
+  as on the NVIDIA encoder -- variable within a peak equal to the target, the same buffer of at
+  most 3.1 frames and 768 kbit, the quantiser floor and the effort of [05 §4.1](05-host.md) -- and
+  changed live; keyframes only when asked, each with its parameter sets; BT.709 in the video range;
+  a finished picture collected as it finishes rather than on a timer's tick; the library's
+  interface unchanged, its vendor encoder meaning the vendor of the output's GPU on Windows. **A
+  probe comes first**, before any of it is built: how the runtime says a picture is finished,
+  whether a surface made once is taken again, the encode's time paced against back to back, the
+  parameter sets it writes, live rate changes, the part's ceiling at 1920x1080 and 2560x1440, and
+  ten bits.
+  Checked by: on the development machine, from the monitor on the integrated GPU and from the
+  host's own display rendered there, ten minutes each of H.264 and HEVC to established clients on
+  macOS, Android and Windows, and ten-bit HEVC where the part codes it; once each mid-session, a
+  rate change under congestion with no keyframe, a keyframe after loss, a switch between the
+  NVIDIA's monitor and the AMD's with the guest kept, the AMD's driver restarted, the NVIDIA's
+  driver restarted with the host's display on the AMD, and the lock screen; full chroma granted on
+  the NVIDIA's monitor with the AMD's lit, and dropped on a move to the AMD's; the encode at p50,
+  p95 and p99 against an established host's on the same monitor, at or below it at p50 and p95;
+  on the machine with an AMD GPU alone, both codecs from its monitor, against an established host
+  there; both CI jobs and the Linux bar.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -1593,6 +1632,9 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-19: W2.7 added and planned at its interview: AMD's encoder, following the captured
+  output's GPU; the full-chroma census narrowed to the captured output's encoder on both
+  platforms ([00 D7](00-overview.md) amended).
 - 2026-10-18: W2.5 closed: the reboot checked; a host ended with its session telling its guests
   nothing recorded as a known gap and deferred.
 - 2026-10-18: W2.5: what a guest is told at a change of session measured on three clients -- the
