@@ -123,6 +123,9 @@ pub struct WebSession {
     now_ms: f64,
     last_progress_ms: f64,
     last_ack_in_ms: f64,
+    /// When the association last reported a message delivered, or the
+    /// queue was last seen empty: what the delivery deadline runs from.
+    delivered_ms: f64,
     srtt_ms: f64,
     rtt_samples: VecDeque<f64>,
     /// Messages refused for their payload identifier or their stream.
@@ -225,6 +228,7 @@ impl WebSession {
             now_ms,
             last_progress_ms: now_ms,
             last_ack_in_ms: now_ms,
+            delivered_ms: now_ms,
             srtt_ms: 0.0,
             rtt_samples: VecDeque::with_capacity(RTT_WINDOW),
             skipped: 0,
@@ -441,6 +445,7 @@ impl WebSession {
                         stream.acked_bytes += sent.len as u64;
                     }
                     self.last_ack_in_ms = now_ms;
+                    self.delivered_ms = now_ms;
                     self.last_progress_ms = now_ms;
                 }
             }
@@ -490,12 +495,15 @@ impl WebSession {
         }
     }
 
-    /// True when a message has been on the wire, unacknowledged, for the
-    /// whole of the delivery deadline.
+    /// True when something has been queued for the peer and nothing has
+    /// been delivered to it for the whole of the delivery deadline: the
+    /// native rule, data outstanding and no acknowledgement movement. A
+    /// queue that drains slowly while deliveries keep arriving is slow, not
+    /// undeliverable, however long its oldest message has waited; and a
+    /// message the association has not put on the wire counts, because the
+    /// event that says it was sent is seen only when the output is polled.
     fn undeliverable(&self, now_ms: f64) -> bool {
-        self.inflight
-            .iter()
-            .any(|sent| sent.sent_ms.is_some() && now_ms - sent.queued_ms >= DELIVERY_DEADLINE_MS)
+        !self.inflight.is_empty() && now_ms - self.delivered_ms >= DELIVERY_DEADLINE_MS
     }
 }
 
@@ -583,6 +591,11 @@ impl Media for WebSession {
 
     fn poll(&mut self, now_ms: f64) {
         self.clock(now_ms);
+        // The deadline runs from the last delivery, or from the last time
+        // there was nothing to deliver.
+        if self.inflight.is_empty() {
+            self.delivered_ms = now_ms;
+        }
         if self.state == State::Closed {
             return;
         }
@@ -1081,6 +1094,77 @@ mod tests {
             (srtt - 210.0).abs() < 1e-6,
             "round trip reads {srtt} ms: the message was stamped before the wake"
         );
+    }
+
+    /// The deadline is the native one: something queued for the peer and
+    /// nothing delivered to it for the whole of the deadline. A queue that
+    /// drains slowly while deliveries keep arriving is slow, not
+    /// undeliverable, however long its oldest message has waited.
+    #[test]
+    fn a_slow_queue_that_keeps_delivering_is_not_undeliverable() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        // Eighty pictures queued at once onto a path that carries one record
+        // a tick: the last is delivered some twenty seconds later, well past
+        // the deadline, while one completes about every quarter second.
+        let picture = vec![0x5Au8; 30 * 1024];
+        for _ in 0..80 {
+            client.send_message(1, b"VIDEO-HDR!", &picture).unwrap();
+        }
+        let mut wire = [0u8; WIRE];
+        let mut scratch = [0u8; WIRE];
+        let mut delivered = 0usize;
+        let mut last_delivery = now;
+        let queued_at = now;
+        while now < queued_at + 30_000.0 {
+            client.poll(now);
+            server.poll(now);
+            assert_ne!(
+                client.health(now),
+                Health::Undeliverable,
+                "undeliverable at {now} ms with {delivered} delivered, the last at {last_delivery}"
+            );
+            if let Some(Ok(len)) = client.get_output(now, &mut wire) {
+                let _ = server.process_input(&wire[..len], now, &mut scratch);
+            }
+            exchange(&mut server, &mut client, now);
+            while take(&mut server, 1).is_some() {
+                delivered += 1;
+                last_delivery = now;
+            }
+            if delivered == 80 && client.inflight.is_empty() {
+                break;
+            }
+            now += 10.0;
+        }
+        assert_eq!(delivered, 80);
+        assert!(
+            now - queued_at >= DELIVERY_DEADLINE_MS,
+            "the queue drained in {} ms, before the deadline could matter",
+            now - queued_at
+        );
+        assert_eq!(client.health(now), Health::Alive);
+    }
+
+    /// The other half of the rule: something queued and nothing delivered
+    /// for the whole of the deadline is undeliverable, whether or not the
+    /// association has put it on the wire yet.
+    #[test]
+    fn a_queue_nothing_is_delivered_from_is_undeliverable() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        client.send_message(1, b"VIDEO-HDR!", b"picture").unwrap();
+        // Nothing crosses: the peer neither receives nor acknowledges.
+        let queued_at = now;
+        while now - queued_at < DELIVERY_DEADLINE_MS {
+            client.poll(now);
+            assert_ne!(client.health(now), Health::Undeliverable, "at {now} ms");
+            now += 1000.0;
+        }
+        client.poll(now);
+        assert_eq!(client.health(now), Health::Undeliverable);
     }
 
     #[test]
