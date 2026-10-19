@@ -173,7 +173,15 @@ static void cycle_output()
 			at = (i + 1) % n;
 	}
 	if (at == n) {
-		printf("demo: the host lists no output %s\n", wanted);
+		// What it does list, so the name it goes by can be given instead.
+		printf("demo: the host lists no output %s; it lists", wanted);
+		for (uint32_t i = 0; i < n; i++) {
+			const MTY_JSON *item = MTY_JSONArrayGetItem(_outputs, i);
+			const char *id = MTY_JSONStringPtr(MTY_JSONObjGetItem(item, "id"));
+			const char *name = MTY_JSONStringPtr(MTY_JSONObjGetItem(item, "name"));
+			printf(" \"%s\" (%s)", id != NULL ? id : "?", name != NULL ? name : "?");
+		}
+		printf("\n");
 		MTY_JSONDestroy(&_outputs);
 		MTY_JSONDestroy(&_host_config);
 		return;
