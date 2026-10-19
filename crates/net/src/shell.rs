@@ -317,6 +317,9 @@ impl<'a, M: Media> Shell<'a, M> {
         } else {
             false
         };
+        // The reading reaches the endpoint before the application does, so
+        // what the application queues is stamped with this pass.
+        self.endpoint.woke(now_ms);
         app(&mut self.endpoint);
 
         let received = if ready.socket {

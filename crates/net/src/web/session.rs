@@ -302,6 +302,15 @@ impl WebSession {
         }
     }
 
+    /// The clock, as every call that carries it reads it. The association's
+    /// own timeline follows at once, so what it stamps -- a message queued,
+    /// a packet produced, an acknowledgement arriving -- carries this
+    /// reading and not the one before it.
+    fn clock(&mut self, now_ms: f64) {
+        self.now_ms = now_ms;
+        self.assoc.advance(now_ms);
+    }
+
     /// Run the record layer until it has nothing more, staging every record
     /// it produces. Application data goes to the association as it appears.
     fn pump(&mut self, now_ms: f64, buf: &mut [u8]) {
@@ -509,7 +518,7 @@ impl Media for WebSession {
     type Inbound = Inbound;
 
     fn path_ready(&mut self, now_ms: f64) {
-        self.now_ms = now_ms;
+        self.clock(now_ms);
         if self.state != State::AwaitingPath {
             return;
         }
@@ -531,6 +540,10 @@ impl Media for WebSession {
         }
     }
 
+    fn woke(&mut self, now_ms: f64) {
+        self.clock(now_ms);
+    }
+
     fn process_input(
         &mut self,
         datagram: &[u8],
@@ -543,7 +556,7 @@ impl Media for WebSession {
         if datagram.len() < 13 || !matches!(datagram.first(), Some(0x14..=0x17)) {
             return Err(Error::Malformed);
         }
-        self.now_ms = now_ms;
+        self.clock(now_ms);
         let Some(link) = self.link.as_mut() else {
             return Err(Error::Malformed);
         };
@@ -569,11 +582,10 @@ impl Media for WebSession {
     }
 
     fn poll(&mut self, now_ms: f64) {
-        self.now_ms = now_ms;
+        self.clock(now_ms);
         if self.state == State::Closed {
             return;
         }
-        self.assoc.advance(now_ms);
         if let Some(link) = self.link.as_mut()
             && let Err(error) = link.tick(now_ms)
         {
@@ -598,7 +610,7 @@ impl Media for WebSession {
     }
 
     fn get_output(&mut self, now_ms: f64, out: &mut [u8]) -> Option<Result<usize>> {
-        self.now_ms = now_ms;
+        self.clock(now_ms);
         if let Some(record) = self.staged.pop_front() {
             let Some(room) = out.get_mut(..record.len()) else {
                 self.staged.push_front(record);
@@ -1009,6 +1021,65 @@ mod tests {
         assert_eq!(
             late.stale, unsent,
             "what is still unsent is stale once late"
+        );
+    }
+
+    /// The association keeps a timeline of its own, moved only when the
+    /// session passes the clock on. An acknowledgement that arrives after a
+    /// quiet interval is timed at its arrival, so the round trip it measures
+    /// is the real one and not zero.
+    #[test]
+    fn an_acknowledgement_is_timed_at_its_arrival_not_at_the_last_poll() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        client.poll(now);
+        server.poll(now);
+        // No sample yet: the association reports its initial timeout.
+        let before = client.srtt_ms();
+
+        client.send_message(1, b"VIDEO-HDR!", b"picture").unwrap();
+        exchange(&mut client, &mut server, now);
+        // The peer answers on its delayed acknowledgement timer. Nothing
+        // reads the client's clock between the send and the arrival, so a
+        // sample timed against the last reading would be zero; timed at the
+        // arrival it is 210 ms, and the first sample sets the estimate.
+        let acked_at = now + 210.0;
+        server.poll(acked_at);
+        let moved = exchange(&mut server, &mut client, acked_at);
+        assert!(moved > 0, "no acknowledgement left the peer");
+        client.poll(acked_at);
+        let after = client.srtt_ms();
+        assert!(
+            (after - 210.0).abs() < 1e-6,
+            "round trip {before} -> {after} ms: the sample was timed against a stale reading"
+        );
+    }
+
+    /// A message queued after a quiet interval is stamped with the wake the
+    /// shell reports before it pulls the application, not with the pass
+    /// before it, so the round trip its acknowledgement measures does not
+    /// include the time the loop slept.
+    #[test]
+    fn a_message_queued_at_a_wake_is_stamped_with_it() {
+        let (mut client, mut server) = pair(0.0);
+        let mut now = 0.0;
+        run(&mut client, &mut server, &mut now, 20);
+        client.poll(now);
+        server.poll(now);
+        // The loop slept 40 ms, then woke to queue a message.
+        let woke_at = now + 40.0;
+        client.woke(woke_at);
+        client.send_message(1, b"VIDEO-HDR!", b"picture").unwrap();
+        exchange(&mut client, &mut server, woke_at);
+        let acked_at = woke_at + 210.0;
+        server.poll(acked_at);
+        assert!(exchange(&mut server, &mut client, acked_at) > 0);
+        client.poll(acked_at);
+        let srtt = client.srtt_ms();
+        assert!(
+            (srtt - 210.0).abs() < 1e-6,
+            "round trip reads {srtt} ms: the message was stamped before the wake"
         );
     }
 

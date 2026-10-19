@@ -92,6 +92,12 @@ pub trait Media: fmt::Debug {
     /// is emitted toward it. A transport with a handshake starts it here.
     fn path_ready(&mut self, _now_ms: f64) {}
 
+    /// The loop woke at `now_ms`, before the application is pulled and
+    /// before any record is fed. A transport that stamps what it is handed
+    /// takes the reading here, so a message queued after a quiet interval
+    /// carries the wake and not the pass before it.
+    fn woke(&mut self, _now_ms: f64) {}
+
     /// Feed one datagram the demultiplexer classed as a record.
     fn process_input(
         &mut self,
@@ -219,6 +225,11 @@ impl<'a, M: Media> Endpoint<'a, M> {
     /// Liveness of the media half.
     pub fn health(&self, now_ms: f64) -> Health {
         self.session.health(now_ms)
+    }
+
+    /// The loop woke, before anything is handed in or asked for.
+    pub fn woke(&mut self, now_ms: f64) {
+        self.session.woke(now_ms);
     }
 
     /// A failure of the media half the peer did not cause by leaving.
