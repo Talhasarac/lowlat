@@ -541,6 +541,10 @@ once, here.
   in 170 ms. So **a setting wakes the display as a stream starts, with that move, off by
   default**: a connection lights nothing at the desk by itself, and a guest's first input wakes
   the display otherwise.
+  *Amended 2026-10-19, at W2.7:* **on an AMD GPU the encoder reads the duplicated image itself**
+  and converts it in its own hardware ([05 §3](05-host.md)): one pass after composition, the
+  system's duplication copy, and the frame held until the next acquire, since the encoder reads it
+  while it encodes and a still desktop's refresh picture encodes the same image again.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -964,6 +968,25 @@ once, here.
   p95 and p99 against an established host's on the same monitor, at or below it at p50 and p95;
   on the machine with an AMD GPU alone, both codecs from its monitor, against an established host
   there; both CI jobs and the Linux bar.
+  *Probed 2026-10-19, before any of it was built*, on the development machine's AMD GPU. The
+  runtime hands a finished picture to a call that waits for it, but reads how long to wait only
+  when the encoder is made, so a collect that never blocks and a wait on the picture cannot share
+  it: **the encoder's own thread waits** and hands each picture to the loop, which sleeps on that,
+  7 us behind the picture where a timer's tick costs up to a millisecond. The low-latency usage is a
+  preset of everything set after it, and its **latency-constrained variable rate** held the rate to
+  1.0-1.25 times the target where the peak-constrained kind let a scene change reach thirty times
+  the buffer and the rate two and a half times the target; with the largest picture bounded by the
+  buffer, every other picture stayed under it. An access-unit delimiter is written by default and a
+  forced picture type stays on a surface used again, so both are written with every picture. The
+  parameter sets state no reordering on both codecs and ride every keyframe and nothing else; ten
+  bits from P010 decode as their source; 1920x1080 encodes in 2.9 ms and 2560x1440 in 4.9, four in
+  flight sustain about 370, 215 and 100 pictures a second at 1080p, 1440p and 4K, and the highest
+  setting's most thorough effort takes 12 ms for H.264 at 1440p. **Decided after it: the encoder
+  takes the captured picture as it is and converts it in its own hardware** ([05 §3](05-host.md),
+  amended), at no cost to the encode, where the host's conversion took 0.55-0.97 ms of this
+  integrated GPU and 1.4-1.8 ms of latency: no conversion targets on such a stream, the
+  duplication's frame held until the next acquire, the direct frame's freshness check after the
+  collect ([05 §2](05-host.md)).
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -1012,6 +1035,9 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   the swapchain has buffers less one; when it has, the buffer may have been written again, so the
   latest is converted instead, and counted. A still desktop's last picture stays the driver's
   until a newer one is acquired, so it is never written again while it is the latest.
+  *Amended 2026-10-19, at W2.7:* where the encoder reads the buffer itself (an AMD GPU), the check
+  follows the picture's collect, and a buffer found written again is already encoded: counted, and
+  the next picture a keyframe ([05 §2](05-host.md)).
 - **The hold is bounded well inside a frame period**, since a held buffer holds back the
   compositor. Past the bound the driver releases the buffer anyway and counts it.
   *Replaced 2026-10-16, at W3.3's review:* nothing is held (above); the system's own cycle of
@@ -1632,6 +1658,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-19: W2.7 probed: the encoder's own thread waits for each picture, latency-constrained
+  rate within the buffer, the delimiter and the forced type written with every picture; on an AMD
+  GPU the encoder converts the captured picture in its own hardware ([05 §3](05-host.md) amended;
+  W2's duplication and W3's frame decisions, 05 §2 and 11 §1.6 amended to match).
 - 2026-10-19: W2.7 added and planned at its interview: AMD's encoder, following the captured
   output's GPU; the full-chroma census narrowed to the captured output's encoder on both
   platforms ([00 D7](00-overview.md) amended).

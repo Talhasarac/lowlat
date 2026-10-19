@@ -120,6 +120,11 @@ Rules:
   conversion is queued the host checks that the driver has not acquired as many newer pictures as
   the swapchain has buffers, less one -- the system writes a buffer again only then -- and
   converts the latest instead when it has, counted.
+  *Amended 2026-10-19, at W2.7:* where the encoder reads the picture itself -- an AMD GPU, §3 --
+  the check follows the picture's collect, when the encoder has read it, and a buffer found
+  written again then is already encoded: it is counted and the next picture is a keyframe, since
+  an encoded picture is never dropped. A buffer stays intact for three refreshes and the encode
+  takes about 5 ms at 2560x1440, so it is not expected to fire.
   *Corrected 2026-10-16, at W3.5's build:* **the refresh bounds the wait before the first
   picture too.** Unbounded, a stream built while its display had no picture yet -- the host's own
   display plugged again a moment before, after its driver was updated, or asleep -- found no
@@ -166,6 +171,14 @@ Encoders want a planar format. Captures deliver packed. The conversion is ours.
   in long alternating blocks at the same power state. The rule stands for the rest of this
   section -- the matrix, the range and the colour description are ours to state, the layouts
   are ours to choose, and one conversion serves every encoder -- not for that cost.
+  *Amended 2026-10-19, at W2.7 ([impl-plan-windows.md](impl-plan-windows.md)):* **AMD's encoder
+  on Windows converts, in its own hardware.** Its runtime takes the captured BGRA as it is and
+  converts it in the video engine at no cost to the encode measured -- 2.97 ms at 1920x1080 and
+  4.90 at 2560x1440, as for its NV12 input -- where this conversion took 0.55 and 0.97 ms of an
+  integrated GPU that also composes the desktop, and 1.4 to 1.8 ms from queued to output. The
+  matrix, the range and the colour description stay ours, stated to the encoder as BT.709 in the
+  video range, and its result lands on the same values except at sharp colour edges, where its
+  chroma filter differs. Every other encoder takes this conversion.
 - **Planes are written by a compute shader**, addressing each plane as a separate view.
   Copying between subresources to move plane data drops chroma on more than one vendor's
   driver, produces green or smeared output, and looks like an encoder bug for as long as it

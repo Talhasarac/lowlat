@@ -3,6 +3,39 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-19 - W2.7 probed: AMD's encoder, and it converts what it is given
+
+### Decided
+- **On an AMD GPU the encoder takes the captured picture as it is** and converts it in its own
+  hardware ([05 §3](05-host.md) amended): no conversion targets on such a stream, the duplication's
+  frame held until the next acquire, the direct frame's freshness check after the picture's
+  collect, a buffer found written again then counted and followed by a keyframe
+  ([05 §2](05-host.md), [11 §1.6](11-drivers.md)). Every other encoder keeps the host's conversion.
+- **The encoder's own thread waits for each picture** and hands it to the loop, which sleeps on
+  that; **latency-constrained variable rate** within the buffer the NVIDIA encoder uses, the
+  largest picture bounded by it; the access-unit delimiter and the forced picture type written with
+  every picture ([impl-plan-windows.md](impl-plan-windows.md) W2.7).
+
+### Measured
+- On the development machine's integrated AMD GPU, paced at 60 or 120 a second: 1920x1080 in 2.9
+  ms and 2560x1440 in 4.9 ms, both codecs; four in flight, about 370, 215 and 100 pictures a second
+  at 1080p, 1440p and 4K. The encode takes RGB at the same cost as NV12; the host's conversion took
+  0.55 and 0.97 ms of the same GPU and 1.4 to 1.8 ms from queued to output.
+- A wait on the picture returns with it, 7 us later through a thread of the encoder's own; the
+  runtime reads how long a call may wait only when the encoder is made.
+- With a noise scene change every sixty pictures at 10 Mbit/s, latency-constrained variable rate
+  held 1.0-1.25 times the target, the scene change 2.6 times the buffer on HEVC and 9 on H.264,
+  every other picture under it once the largest picture was bounded; peak-constrained variable rate
+  let the scene change reach thirty times the buffer and the rate two and a half times the target.
+- The low-latency usage's alternative holds a picture back a whole frame, 18.7 ms at 2560x1440 and
+  60 a second.
+
+### Found
+- An access-unit delimiter is written by default, and only a value written with each picture
+  removes it; a forced picture type stays on a surface submitted again until it is cleared.
+- The parameter sets state no reordering on both codecs and ride every keyframe and nothing else;
+  ten bits from P010 decode as their source.
+
 ## 2026-10-19 - W2.7 planned: AMD's encoder on Windows
 
 ### Decided

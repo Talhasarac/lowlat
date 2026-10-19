@@ -181,7 +181,10 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
 - **The host takes the latest picture**, waits for the fence on its device and converts into
   the encoder's input; after queuing the conversion it checks the driver's sequence, and when the
   driver has acquired as many newer pictures as the swapchain has buffers less one, the buffer may
-  have been written again, so the latest is converted instead, and counted.
+  have been written again, so the latest is converted instead, and counted. *Amended 2026-10-19:*
+  on an AMD GPU the encoder reads the buffer itself and converts it in its own hardware
+  ([05 §3](05-host.md)), so the check follows the picture's collect, and a buffer written again by
+  then is counted and the next picture made a keyframe.
 - **A still desktop's last picture stays readable**: an acquire that finds nothing new leaves the
   driver the buffer it has, so the latest picture is never written again while it is the latest.
 - **A picture's time is the driver's acquire.** The time the system attaches to a frame is when
