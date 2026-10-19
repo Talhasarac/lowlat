@@ -109,7 +109,67 @@ impl From<duplication::Error> for Error {
 
 /// What an encoder calls a converted frame it has been handed: one of its
 /// inputs, registered once.
-pub type Registration = lowlat_encode::nvenc::Input;
+///
+/// **An enum, as on Linux**: NVIDIA's encoder hands an input back for each
+/// texture, and AMD's keeps its inputs and answers with a place among them. A
+/// backend takes its own and refuses the other.
+pub enum Registration {
+    /// An input registered with NVIDIA's encoder.
+    Nvenc(lowlat_encode::nvenc::Input),
+    /// The place of an input AMD's encoder keeps.
+    Amd(usize),
+}
+
+impl core::fmt::Debug for Registration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Nvenc(_) => f.write_str("Nvenc"),
+            Self::Amd(input) => write!(f, "Amd({input})"),
+        }
+    }
+}
+
+/// Which encoder the targets are registered with, each once.
+pub enum Register<'a, 'c> {
+    /// NVIDIA's, which hands an input back for each.
+    Nvenc(&'a lowlat_encode::nvenc::Encoder<'c>),
+    /// AMD's, which keeps them and answers each with a place.
+    Amd(&'a mut lowlat_encode::amf::Encoder<'c>),
+}
+
+impl core::fmt::Debug for Register<'_, '_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Nvenc(_) => f.write_str("Nvenc"),
+            Self::Amd(_) => f.write_str("Amd"),
+        }
+    }
+}
+
+impl Register<'_, '_> {
+    /// How many pictures the encoder holds at once, so how many targets the
+    /// conversion turns through: a target is written again only once the
+    /// encoder is done reading it.
+    fn in_flight(&self) -> usize {
+        match self {
+            Self::Nvenc(_) => lowlat_encode::nvenc::IN_FLIGHT,
+            Self::Amd(_) => lowlat_encode::amf::IN_FLIGHT,
+        }
+    }
+
+    fn register(&mut self, texture: &Com<ID3D11Texture2D>) -> Result<Registration, Error> {
+        match self {
+            Self::Nvenc(encoder) => encoder
+                .register_texture(texture)
+                .map(Registration::Nvenc)
+                .map_err(|_| Error::Register),
+            Self::Amd(encoder) => encoder
+                .register_texture(texture)
+                .map(Registration::Amd)
+                .map_err(|_| Error::Register),
+        }
+    }
+}
 
 /// Whether `wanted` names `name`: the system's own name, its `\\.\` prefix
 /// optional, in any case, as the system treats it.
@@ -1044,9 +1104,10 @@ impl Display {
 
     /// Prepare to capture the output named `name` on `device`, its own
     /// adapter's, into targets in `layout` for a `size` picture, each
-    /// registered with `encoder` once. **The host's own display is read
-    /// straight from its driver** when the driver's frames can be taken, as
-    /// [`Display::open_direct`] reads it, and duplicated otherwise.
+    /// registered once with the encoder `register` names. **The host's own
+    /// display is read straight from its driver** when the driver's frames
+    /// can be taken, as [`Display::open_direct`] reads it, and duplicated
+    /// otherwise.
     ///
     /// **A desktop out of reach is not a failure here.** The lock screen or
     /// an elevation prompt may be up, and a process that cannot reach it
@@ -1057,9 +1118,9 @@ impl Display {
         name: &str,
         layout: Layout,
         size: (u32, u32),
-        encoder: &lowlat_encode::nvenc::Encoder<'_>,
+        register: Register<'_, '_>,
     ) -> Result<Self, Error> {
-        Self::open_with(device, name, layout, size, encoder, None)
+        Self::open_with(device, name, layout, size, register, None)
     }
 
     /// Prepare to capture the host's own display, whose output is `name`,
@@ -1072,10 +1133,10 @@ impl Display {
         name: &str,
         layout: Layout,
         size: (u32, u32),
-        encoder: &lowlat_encode::nvenc::Encoder<'_>,
+        register: Register<'_, '_>,
         slot: u8,
     ) -> Result<Self, Error> {
-        Self::open_with(device, name, layout, size, encoder, Some(slot))
+        Self::open_with(device, name, layout, size, register, Some(slot))
     }
 
     fn open_with(
@@ -1083,7 +1144,7 @@ impl Display {
         name: &str,
         layout: Layout,
         size: (u32, u32),
-        encoder: &lowlat_encode::nvenc::Encoder<'_>,
+        mut register: Register<'_, '_>,
         direct: Option<u8>,
     ) -> Result<Self, Error> {
         let aware = Aware::per_monitor();
@@ -1094,15 +1155,12 @@ impl Display {
             .filter(|(_, o)| o.attached && o.adapter.luid == device.adapter.luid)
             .ok_or(Error::NoOutput)?;
         let converter = Converter::new(device, layout)?;
-        let mut targets = Vec::with_capacity(lowlat_encode::nvenc::IN_FLIGHT);
-        let mut registrations = Vec::with_capacity(lowlat_encode::nvenc::IN_FLIGHT);
-        for _ in 0..lowlat_encode::nvenc::IN_FLIGHT {
+        let in_flight = register.in_flight();
+        let mut targets = Vec::with_capacity(in_flight);
+        let mut registrations = Vec::with_capacity(in_flight);
+        for _ in 0..in_flight {
             let target = Target::new(device, layout, size.0, size.1)?;
-            registrations.push(
-                encoder
-                    .register_texture(target.texture())
-                    .map_err(|_| Error::Register)?,
-            );
+            registrations.push(register.register(target.texture())?);
             targets.push(target);
         }
         let own = own().is_some_and(|own| own.eq_ignore_ascii_case(&output.name));
@@ -2107,35 +2165,33 @@ mod tests {
         assert_eq!(rotation_of(0), Rotation::None, "unspecified is upright");
     }
 
-    /// **The desktop as the loop drives it, without a network**: the primary
-    /// output opened on its own adapter's device with the vendor's encoder,
-    /// the first present taken at once, then the loop's own sequence -- wait
-    /// for a present, acquire, collect the conversion, submit the last
-    /// converted picture, collect the encode -- for `LOWLAT_TICKS` ticks
-    /// (default 240) at the display's own pace. Every tick must present
+    /// **The desktop as the loop drives it, without a network**: an output
+    /// opened on its own adapter's device with its GPU's encoder -- NVIDIA's
+    /// or AMD's own -- the first present taken at once, then the loop's own
+    /// sequence -- wait for a present, acquire, collect the conversion, submit
+    /// the last converted picture, collect the encode -- for `LOWLAT_TICKS`
+    /// ticks (default 240) at the display's own pace. Every tick must present
     /// within a refresh or two of asking, a still desktop included; the first
     /// picture must be the desktop and every submit an access unit.
-    /// `LOWLAT_LAYOUT` names the layout (nv12, p010, ayuv, y410). Needs the
-    /// vendor's GPU and an interactive desktop: `cargo test -p lowlat-host
-    /// display -- --ignored --nocapture`.
+    /// `LOWLAT_OUTPUT` names the output (the primary), `LOWLAT_LAYOUT` the
+    /// layout (nv12, p010, ayuv, y410). Needs an interactive desktop: `cargo
+    /// test -p lowlat-host display -- --ignored --nocapture`.
     #[test]
-    #[ignore = "requires the vendor's GPU, a display and an interactive desktop"]
+    #[ignore = "requires a GPU with an encoder, a display and an interactive desktop"]
     fn the_desktop_converts_and_encodes_at_the_displays_pace() {
-        use lowlat_encode::nvenc;
+        use lowlat_encode::{amf, nvenc};
         // As the library and the daemon hold it: without it every wait here
         // ends at the system's 15.6 ms tick.
         let _timer = clock::TimerResolution::raise();
-        let ticks: usize = std::env::var("LOWLAT_TICKS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(240);
         let layout = match std::env::var("LOWLAT_LAYOUT").as_deref() {
             Ok("p010") => Layout::P010,
             Ok("ayuv") => Layout::Ayuv,
             Ok("y410") => Layout::Y410,
             _ => Layout::Nv12,
         };
-        let output = Display::locate(None).expect("an output");
+        let ten = matches!(layout, Layout::P010 | Layout::Y410);
+        let wanted = std::env::var("LOWLAT_OUTPUT").ok();
+        let output = Display::locate(wanted.as_deref()).expect("an output");
         let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
         println!(
             "{} {width}x{height} at {hz} Hz on {}",
@@ -2143,7 +2199,52 @@ mod tests {
         );
         let d3d11 = D3d11::load().expect("the system's libraries");
         let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        // AMD's, written out.
+        if output.adapter.vendor == 0x1002 {
+            let runtime = lowlat_drivers::amf::Amf::load().expect("AMD's runtime");
+            let context = runtime.context(&device).expect("a context");
+            let mut encoder = amf::Encoder::new(
+                &runtime,
+                &context,
+                amf::Config {
+                    codec: amf::Codec::H265,
+                    width,
+                    height,
+                    fps: hz.max(1),
+                    bitrate_bps: 20_000_000,
+                    min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                    thorough: false,
+                    depth: if ten {
+                        amf::Depth::Ten
+                    } else {
+                        amf::Depth::Eight
+                    },
+                    source: amf::Source::Yuv,
+                },
+            )
+            .expect("an encoder");
+            let mut display = Display::open(
+                &device,
+                &output.name,
+                layout,
+                (width, height),
+                Register::Amd(&mut encoder),
+            )
+            .expect("the display");
+            at_the_displays_pace(
+                &mut display,
+                &mut encoder,
+                hz,
+                |encoder, made, force| match made {
+                    Registration::Amd(input) => encoder.submit_registered(*input, force).is_ok(),
+                    Registration::Nvenc(_) => false,
+                },
+            );
+            return;
+        }
         let api = nvenc::Api::load().expect("the encoder's runtime");
+        // Declared before the encoder, so it outlives it, as the stream holds
+        // them.
         let mut display: Display;
         let session = api.open_session(Arc::clone(&device)).expect("a session");
         let mut encoder = session
@@ -2160,16 +2261,46 @@ mod tests {
                 } else {
                     nvenc::Chroma::Yuv420
                 },
-                depth: if matches!(layout, Layout::P010 | Layout::Y410) {
+                depth: if ten {
                     nvenc::Depth::Ten
                 } else {
                     nvenc::Depth::Eight
                 },
             })
             .expect("an encoder");
-        display = Display::open(&device, &output.name, layout, (width, height), &encoder)
-            .expect("the display");
+        display = Display::open(
+            &device,
+            &output.name,
+            layout,
+            (width, height),
+            Register::Nvenc(&encoder),
+        )
+        .expect("the display");
+        at_the_displays_pace(
+            &mut display,
+            &mut encoder,
+            hz,
+            |encoder, made, force| match made {
+                Registration::Nvenc(input) => encoder.submit_registered(input, force).is_ok(),
+                Registration::Amd(_) => false,
+            },
+        );
+    }
 
+    /// The loop's own sequence over `display` at `hz`, each converted picture
+    /// handed to `encoder` through `submit` and its access unit collected:
+    /// [`the_desktop_converts_and_encodes_at_the_displays_pace`] for either
+    /// encoder.
+    fn at_the_displays_pace<E: lowlat_encode::Encoder>(
+        display: &mut Display,
+        encoder: &mut E,
+        hz: u32,
+        submit: impl Fn(&mut E, &Registration, bool) -> bool,
+    ) {
+        let ticks: usize = std::env::var("LOWLAT_TICKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(240);
         let began = Time::now();
         let first = display.wait_present(150);
         println!(
@@ -2179,6 +2310,7 @@ mod tests {
         assert_eq!(first, Some(true), "the first present did not come at once");
         let interval = 1000.0 / f64::from(hz.max(1));
         let (mut changed, mut unchanged, mut units, mut late) = (0, 0, 0, 0);
+        let (mut submits, mut first) = (0, None);
         let mut waits = Stage::new();
         let mut deadline = clock::elapsed_ms(began);
         for tick in 0..ticks {
@@ -2212,10 +2344,11 @@ mod tests {
                     unchanged += 1;
                 }
             }
-            if let Some(input) = display.presented() {
-                encoder
-                    .submit_registered(input, tick == 0)
-                    .expect("a submit");
+            if let Some(made) = display.presented() {
+                let opening = first.is_none();
+                first.get_or_insert(tick);
+                assert!(submit(encoder, made, opening), "a submit");
+                submits += 1;
                 loop {
                     match encoder.poll().expect("a collect") {
                         lowlat_encode::Poll::Ready { bitstream, .. } => {
@@ -2250,7 +2383,16 @@ mod tests {
             handed.p50, handed.p95, handed.p99, queued.p50, queued.p95, queued.p99
         );
         assert!(changed >= 1, "the desktop was never converted");
-        assert_eq!(units, ticks, "a tick went unencoded");
+        // **Every tick from the first picture on is an access unit**; before
+        // it there is nothing to submit -- a still output's first present can
+        // come a composition before its first picture.
+        let first = first.expect("no picture was ever presented");
+        assert_eq!(
+            submits,
+            ticks - first,
+            "a tick after the first picture went unsubmitted"
+        );
+        assert_eq!(units, submits, "a submit went unencoded");
         assert_eq!(late, 0, "a present took longer than two refreshes");
     }
 
@@ -2324,7 +2466,7 @@ mod tests {
             &output.name,
             Layout::Nv12,
             (width, height),
-            &encoder,
+            Register::Nvenc(&encoder),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -2369,7 +2511,7 @@ mod tests {
                     unchanged += 1;
                 }
             }
-            if let Some(input) = display.presented() {
+            if let Some(Registration::Nvenc(input)) = display.presented() {
                 encoder
                     .submit_registered(input, tick == 0)
                     .expect("a submit");
@@ -2451,7 +2593,7 @@ mod tests {
             &output.name,
             Layout::Nv12,
             (1920, 1080),
-            &encoder,
+            Register::Nvenc(&encoder),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -2557,7 +2699,7 @@ mod tests {
             &output.name,
             Layout::Nv12,
             (width, height),
-            &encoder,
+            Register::Nvenc(&encoder),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -2684,7 +2826,7 @@ mod tests {
                         &name,
                         Layout::Nv12,
                         (width, height),
-                        &encoder,
+                        Register::Nvenc(&encoder),
                         slot,
                     )
                     .expect("the display, read from its driver");
@@ -2762,9 +2904,14 @@ mod tests {
                 depth: nvenc::Depth::Eight,
             })
             .expect("an encoder");
-        let mut display =
-            Display::open(&device, &output.name, Layout::Nv12, (1920, 1080), &encoder)
-                .expect("the display");
+        let mut display = Display::open(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (1920, 1080),
+            Register::Nvenc(&encoder),
+        )
+        .expect("the display");
         let source = if display.direct.is_some() {
             "direct"
         } else {
@@ -3097,14 +3244,20 @@ mod tests {
             first.initialize(config).expect("an encoder"),
             second.initialize(config).expect("an encoder"),
         );
-        let mut dup = Display::open(&device, &output.name, Layout::Nv12, (1920, 1080), &encoder)
-            .expect("the duplication");
+        let mut dup = Display::open(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (1920, 1080),
+            Register::Nvenc(&encoder),
+        )
+        .expect("the duplication");
         let mut direct = Display::open_direct(
             &device,
             &output.name,
             Layout::Nv12,
             (1920, 1080),
-            &other,
+            Register::Nvenc(&other),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -3349,7 +3502,7 @@ mod tests {
             &output.name,
             Layout::Nv12,
             (1920, 1080),
-            &encoder,
+            Register::Nvenc(&encoder),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -3431,7 +3584,7 @@ mod tests {
             &output.name,
             Layout::Nv12,
             (1920, 1080),
-            &encoder,
+            Register::Nvenc(&encoder),
             monitor.slot,
         )
         .expect("the display, read from its driver");
@@ -3571,7 +3724,7 @@ mod tests {
                 &output.name,
                 Layout::Nv12,
                 (width, height),
-                &encoder,
+                Register::Nvenc(&encoder),
                 monitor.slot,
             )
             .expect("the display, read from its driver");
@@ -3738,7 +3891,7 @@ mod tests {
                         &output.name,
                         Layout::Nv12,
                         (width, height),
-                        &encoder,
+                        Register::Nvenc(&encoder),
                         monitor.slot,
                     )
                 } else {
@@ -3747,7 +3900,7 @@ mod tests {
                         &output.name,
                         Layout::Nv12,
                         (width, height),
-                        &encoder,
+                        Register::Nvenc(&encoder),
                     )
                 }
                 .expect("the display");

@@ -70,6 +70,8 @@ pub enum Error {
     TenBitRgb,
     /// A texture in a layout the encoder was not built to read.
     Layout,
+    /// An input the encoder was never given.
+    Unregistered,
     /// As many pictures in flight as the encoder holds: back pressure.
     QueueFull,
     /// The device refused a texture or a mapping.
@@ -93,6 +95,7 @@ impl core::fmt::Display for Error {
                 f.write_str("AMD's encoder converts RGB into ten bits at the eight-bit scale")
             }
             Self::Layout => f.write_str("a texture AMD's encoder was not built to read"),
+            Self::Unregistered => f.write_str("an input AMD's encoder was never given"),
             Self::QueueFull => f.write_str("AMD's encoder holds as many pictures as it takes"),
             Self::Device(error) => write!(f, "{error}"),
             Self::Thread => f.write_str("AMD's encoder's collecting thread did not start"),
@@ -190,6 +193,9 @@ pub struct Encoder<'c> {
     /// The generator's inputs, empty for an encoder that reads the capture.
     slots: Vec<Slot<'c>>,
     next_slot: usize,
+    /// The inputs made over textures something else writes, each at the
+    /// place [`Encoder::register_texture`] answered.
+    registered: Vec<runtime::Input<'c>>,
     context: &'c Context<'c>,
     names: &'static Names,
     config: Config,
@@ -296,6 +302,7 @@ impl<'c> Encoder<'c> {
             thread: Some(thread),
             slots,
             next_slot: 0,
+            registered: Vec::new(),
             held: None,
             outstanding: 0,
             component,
@@ -315,14 +322,12 @@ impl<'c> Encoder<'c> {
     }
 
     /// `texture`, which something else on the encoder's device writes -- a
-    /// captured picture -- made an input once, to be submitted with
-    /// [`Encoder::submit_registered`] as often as it holds a picture. The
-    /// input is dropped after the encoder, or with none of its pictures in
-    /// flight.
-    pub fn register_texture(
-        &self,
-        texture: &Com<ID3D11Texture2D>,
-    ) -> Result<runtime::Input<'c>, Error> {
+    /// conversion's target, or a captured picture -- made an input the
+    /// encoder keeps, answered by its place among them: submitted by that
+    /// place with [`Encoder::submit_registered`] as often as it holds a
+    /// picture. Kept as long as the encoder, which gives back every picture
+    /// it holds before its inputs go.
+    pub fn register_texture(&mut self, texture: &Com<ID3D11Texture2D>) -> Result<usize, Error> {
         // SAFETY: plain data the call fills whole.
         let mut desc: D3D11_TEXTURE2D_DESC = unsafe { core::mem::zeroed() };
         // SAFETY: a live texture; the output is a live local.
@@ -335,26 +340,24 @@ impl<'c> Encoder<'c> {
         if !reads {
             return Err(Error::Layout);
         }
-        Ok(self.context.input(texture)?)
+        self.registered.push(self.context.input(texture)?);
+        Ok(self.registered.len() - 1)
     }
 
-    /// Hand over a picture already on the device, in an input made by
-    /// [`Encoder::register_texture`]. The texture must hold the picture
-    /// until the unit made from it is collected.
-    pub fn submit_registered(
-        &mut self,
-        input: &runtime::Input<'_>,
-        force_keyframe: bool,
-    ) -> Result<(), Error> {
+    /// Hand over a picture already on the device, in the input
+    /// [`Encoder::register_texture`] answered `input` for. The texture must
+    /// hold the picture until the unit made from it is collected.
+    pub fn submit_registered(&mut self, input: usize, force_keyframe: bool) -> Result<(), Error> {
         if self.outstanding >= IN_FLIGHT {
             return Err(Error::QueueFull);
         }
         self.failed()?;
+        let made = self.registered.get(input).ok_or(Error::Unregistered)?;
         queue(
             &self.component,
             self.names,
             &self.shared,
-            input,
+            made,
             force_keyframe,
         )?;
         self.outstanding += 1;

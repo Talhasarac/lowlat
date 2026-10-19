@@ -560,7 +560,7 @@ fn rgb_round_trip(
             );
         }
         encoder
-            .submit_registered(&input, index == 0)
+            .submit_registered(input, index == 0)
             .expect("submit");
         let (unit, _) = next_unit(encoder);
         decoder.feed(&unit).expect("feed");

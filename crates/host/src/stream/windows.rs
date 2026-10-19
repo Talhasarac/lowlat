@@ -1,7 +1,8 @@
-//! What a stream is built on, on Windows: the vendor's encoder on the D3D11
-//! device of the output being captured, fed by the display's conversion, or
-//! by the synthetic source where no display is asked for. The loop above is
-//! written once; a platform writes this module.
+//! What a stream is built on, on Windows: the encoder of the captured
+//! output's GPU -- NVIDIA's own or AMD's own -- on that output's D3D11
+//! device, fed by the display's conversion, or by the synthetic source where
+//! no display is asked for. The loop above is written once; a platform writes
+//! this module.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +18,7 @@ use super::{
     encode_loop, own_refresh, own_size, settle_pace, start_bps,
 };
 use crate::display::own::FIRST_SIZE;
-use crate::display::{Capturable, Display, VIRTUAL};
+use crate::display::{Capturable, Display, Register, Registration, VIRTUAL};
 
 /// How often the host's own display is looked at while nobody is seated.
 const OWN_LOOK_MS: f64 = 1000.0;
@@ -95,20 +96,22 @@ impl Own {
     }
 }
 
-/// The vendor whose encoder this platform builds.
+/// The vendors whose own encoders this platform builds.
 const NVIDIA: u32 = 0x10de;
+const AMD: u32 = 0x1002;
 
-/// Whether this platform builds an encoder on `adapter`: the vendor's, on a
-/// GPU that renders.
+/// Whether this platform builds an encoder on `adapter`: NVIDIA's or AMD's
+/// own, on a GPU of theirs that renders.
 fn encodes_on(adapter: &lowlat_drivers::d3d11::Adapter) -> bool {
-    adapter.vendor == NVIDIA && adapter.decodes_here()
+    matches!(adapter.vendor, NVIDIA | AMD) && adapter.decodes_here()
 }
 
 /// Build the stream's device and encoder for `config` and run it until it
 /// exits: with a display, everything on the device of the output's own
-/// adapter; without one, the vendor's encoder on a device of its own and the
-/// generator its source. The open backend by name is refused rather than
-/// answered with something else.
+/// adapter, with that GPU's encoder; without one, the encoder of the first
+/// GPU that has one on a device of its own, and the generator its source.
+/// The open backend by name is refused rather than answered with something
+/// else.
 pub(super) fn build(
     shared: &Arc<Shared>,
     arrivals: &mpsc::Receiver<Join>,
@@ -161,6 +164,11 @@ pub(super) fn chroma_census(config: &Config) -> Result<(), &'static str> {
     if !encodes_on(&output.adapter) {
         return Err("the output's GPU, which has no encoder for full chroma here");
     }
+    // **The engine has no full chroma at any depth**, so AMD's answer needs
+    // no device.
+    if output.adapter.vendor == AMD {
+        return Err("AMD's encoder on the output's GPU, which codes no full chroma");
+    }
     let Ok(d3d11) = lowlat_encode::d3d11::D3d11::load() else {
         return Err("the graphics libraries, which could not be loaded");
     };
@@ -210,6 +218,29 @@ fn encoder_config(config: &Config) -> lowlat_encode::nvenc::Config {
     }
 }
 
+/// AMD's encoder's configuration for `config`, reading two planes of YUV:
+/// the display's conversion, or the generator's frames.
+fn amd_config(config: &Config) -> lowlat_encode::amf::Config {
+    lowlat_encode::amf::Config {
+        codec: match config.codec {
+            Codec::H264 => lowlat_encode::amf::Codec::H264,
+            Codec::H265 => lowlat_encode::amf::Codec::H265,
+        },
+        width: config.width,
+        height: config.height,
+        fps: config.fps,
+        bitrate_bps: start_bps(config),
+        min_qp: config.quality.min_qp(),
+        thorough: config.quality.thorough(),
+        depth: if config.ten_bit {
+            lowlat_encode::amf::Depth::Ten
+        } else {
+            lowlat_encode::amf::Depth::Eight
+        },
+        source: lowlat_encode::amf::Source::Yuv,
+    }
+}
+
 /// The desktop: the output first, then its adapter, the device on it, the
 /// encoder at the output's size, and only then the duplication and the
 /// encoder's inputs on that device (docs/impl-plan-windows.md W2).
@@ -247,12 +278,12 @@ fn run_display(
             None => None,
         };
         if clock::elapsed_ms(began) >= DISPLAY_WAIT.as_secs_f64() * 1000.0 {
-            // **The encoder follows the output**, and only the vendor's is
-            // built here: an output another vendor's GPU renders is refused
+            // **The encoder follows the output**, and only NVIDIA's and AMD's
+            // own are built here: an output another GPU renders is refused
             // rather than copied across, which would measure the copy. A
             // virtual display's output is listed under the GPU that renders
             // it, so it is that GPU's like any other, and refused only where
-            // that GPU stays another vendor's.
+            // that GPU stays one without an encoder here.
             if let Some(output) = elsewhere {
                 lowlat_common::log_error!(
                     "stream: {} is on {}, which has no encoder this host builds",
@@ -312,6 +343,9 @@ fn run_display(
         fps: settle_pace(shared, shared.asked_fps(), refresh_hz),
         ..config
     };
+    if output.adapter.vendor == AMD {
+        return run_amd(shared, arrivals, config, roster, &device, &output);
+    }
     let Ok(api) = lowlat_encode::nvenc::Api::load() else {
         lowlat_common::log_error!("stream: encoder runtime unavailable");
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
@@ -344,7 +378,7 @@ fn run_display(
         &output.name,
         Layout::of(config.ten_bit, config.chroma_444),
         (width, height),
-        &encoder,
+        Register::Nvenc(&encoder),
     ) {
         Ok(desktop) => desktop,
         Err(crate::display::Error::NoOutput) => {
@@ -376,8 +410,77 @@ fn run_display(
     )
 }
 
-/// No display: the vendor's encoder on a device of its own, the generator
-/// its source.
+/// [`run_display`] on an AMD GPU: AMD's own encoder on the output's device,
+/// reading the display's conversion.
+fn run_amd(
+    shared: &Arc<Shared>,
+    arrivals: &mpsc::Receiver<Join>,
+    config: Config,
+    roster: &mut Roster,
+    device: &Arc<lowlat_encode::d3d11::Device>,
+    output: &lowlat_drivers::d3d11::Output,
+) -> Exit {
+    let Ok(runtime) = lowlat_drivers::amf::Amf::load() else {
+        lowlat_common::log_error!("stream: AMD's encoder runtime unavailable");
+        return Exit::Failed(status::ENCODER_UNAVAILABLE);
+    };
+    let context = match runtime.context(device) {
+        Ok(context) => context,
+        Err(error) => {
+            lowlat_common::log_error!("stream: AMD's runtime would not take the device, {error}");
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
+    let mut encoder =
+        match lowlat_encode::amf::Encoder::new(&runtime, &context, amd_config(&config)) {
+            Ok(encoder) => encoder,
+            Err(error) => {
+                lowlat_common::log_error!("stream: encoder could not be configured, {error}");
+                return Exit::Failed(status::ENCODER_UNAVAILABLE);
+            }
+        };
+    lowlat_common::log_info!(
+        "stream: quality={:?}, quantiser floor {}",
+        config.quality,
+        config.quality.min_qp()
+    );
+    let mut desktop = match Display::open(
+        device,
+        &output.name,
+        Layout::of(config.ten_bit, config.chroma_444),
+        (config.width, config.height),
+        Register::Amd(&mut encoder),
+    ) {
+        Ok(desktop) => desktop,
+        Err(crate::display::Error::NoOutput) => {
+            return Exit::Rediscover("the output moved before it could be opened");
+        }
+        Err(error) => {
+            lowlat_common::log_error!("stream: the display could not be opened, {error}");
+            return Exit::Failed(status::CAPTURE_UNAVAILABLE);
+        }
+    };
+    if config.wake_display {
+        desktop.wake();
+    }
+    lowlat_common::log_info!(
+        "stream: encoding {} on {} ({}) with AMD's encoder",
+        output.name,
+        output.adapter.description,
+        output.adapter.luid
+    );
+    encode_loop(
+        shared,
+        arrivals,
+        config,
+        roster,
+        &mut encoder,
+        Some(&mut desktop),
+    )
+}
+
+/// No display: the encoder of the first GPU with one, on a device of its
+/// own, the generator its source.
 fn run_vendor(
     shared: &Arc<Shared>,
     arrivals: &mpsc::Receiver<Join>,
@@ -388,14 +491,17 @@ fn run_vendor(
         lowlat_common::log_error!("stream: graphics libraries unavailable, nothing will encode");
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
     };
-    // **The first of the vendor's adapters that renders**, in the system's
-    // high-performance order: with nothing captured, nothing else decides.
-    let Some(adapter) = d3d11.adapters().ok().and_then(|adapters| {
-        adapters
-            .into_iter()
-            .find(|adapter| adapter.decodes_here() && adapter.vendor == NVIDIA)
-    }) else {
-        lowlat_common::log_error!("stream: no adapter of the encoder's vendor renders here");
+    // **The first adapter with an encoder of its vendor's that renders**, in
+    // the system's high-performance order: with nothing captured, nothing
+    // else decides.
+    let Some(adapter) = d3d11
+        .adapters()
+        .ok()
+        .and_then(|adapters| adapters.into_iter().find(encodes_on))
+    else {
+        lowlat_common::log_error!(
+            "stream: no adapter with an encoder this host builds renders here"
+        );
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
     };
     let device = match d3d11.open(adapter.luid) {
@@ -405,6 +511,9 @@ fn run_vendor(
             return Exit::Failed(status::ENCODER_UNAVAILABLE);
         }
     };
+    if adapter.vendor == AMD {
+        return synthetic_amd(shared, arrivals, config, roster, &device, &adapter);
+    }
     let Ok(api) = lowlat_encode::nvenc::Api::load() else {
         lowlat_common::log_error!("stream: encoder runtime unavailable");
         return Exit::Failed(status::ENCODER_UNAVAILABLE);
@@ -443,12 +552,67 @@ fn run_vendor(
     encode_loop(shared, arrivals, config, roster, &mut encoder, None)
 }
 
+/// [`run_vendor`] on an AMD GPU: AMD's own encoder on `device`, the
+/// generator's frames written into its inputs.
+fn synthetic_amd(
+    shared: &Arc<Shared>,
+    arrivals: &mpsc::Receiver<Join>,
+    config: Config,
+    roster: &mut Roster,
+    device: &lowlat_encode::d3d11::Device,
+    adapter: &lowlat_drivers::d3d11::Adapter,
+) -> Exit {
+    let Ok(runtime) = lowlat_drivers::amf::Amf::load() else {
+        lowlat_common::log_error!("stream: AMD's encoder runtime unavailable");
+        return Exit::Failed(status::ENCODER_UNAVAILABLE);
+    };
+    let context = match runtime.context(device) {
+        Ok(context) => context,
+        Err(error) => {
+            lowlat_common::log_error!("stream: AMD's runtime would not take the device, {error}");
+            return Exit::Failed(status::ENCODER_UNAVAILABLE);
+        }
+    };
+    lowlat_common::log_info!(
+        "stream: encoding on {} ({}) with AMD's encoder",
+        adapter.description,
+        adapter.luid
+    );
+    shared.publish_picture(config.width, config.height);
+    let config = Config {
+        fps: settle_pace(shared, shared.asked_fps(), 0),
+        ..config
+    };
+    let mut encoder =
+        match lowlat_encode::amf::Encoder::new(&runtime, &context, amd_config(&config)) {
+            Ok(encoder) => encoder,
+            Err(error) => {
+                lowlat_common::log_error!("stream: encoder could not be configured, {error}");
+                return Exit::Failed(status::ENCODER_UNAVAILABLE);
+            }
+        };
+    lowlat_common::log_info!(
+        "stream: quality={:?}, quantiser floor {}",
+        config.quality,
+        config.quality.min_qp()
+    );
+    encode_loop(shared, arrivals, config, roster, &mut encoder, None)
+}
+
 impl FromDevice for lowlat_encode::nvenc::Encoder<'_> {
-    fn submit_from_device(
-        &mut self,
-        registration: &crate::display::Registration,
-        force_keyframe: bool,
-    ) -> bool {
-        self.submit_registered(registration, force_keyframe).is_ok()
+    fn submit_from_device(&mut self, registration: &Registration, force_keyframe: bool) -> bool {
+        match registration {
+            Registration::Nvenc(input) => self.submit_registered(input, force_keyframe).is_ok(),
+            Registration::Amd(_) => false,
+        }
+    }
+}
+
+impl FromDevice for lowlat_encode::amf::Encoder<'_> {
+    fn submit_from_device(&mut self, registration: &Registration, force_keyframe: bool) -> bool {
+        match registration {
+            Registration::Amd(input) => self.submit_registered(*input, force_keyframe).is_ok(),
+            Registration::Nvenc(_) => false,
+        }
     }
 }

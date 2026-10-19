@@ -20,9 +20,7 @@ mod sys;
 #[path = "display/own.rs"]
 pub(crate) mod own;
 
-#[cfg(target_os = "linux")]
-pub use sys::Register;
-pub use sys::{Display, Error, Registration};
+pub use sys::{Display, Error, Register, Registration};
 
 /// What the host's own display is asked for by, whatever the system numbers
 /// its output. A display driver of the host's own exists on Windows alone

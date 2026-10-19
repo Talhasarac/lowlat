@@ -1,12 +1,12 @@
 //! The display's path on Windows without a display: a desktop-like picture,
 //! eight-bit BGRA on the device, converted by the host's conversion into the
-//! encoder's own inputs -- textures registered once -- encoded by the
-//! vendor's encoder and decoded by the library's own D3D11 decoder, each
-//! picture compared with the colour transform's definition. In every layout
-//! the conversion writes, the packed full-chroma ones included, whose
-//! pictures the encoder's registration alone cannot vouch for. Needs the
-//! vendor's GPU and driver, so off by default: `cargo test -p lowlat-decode
-//! --test conversion_round_trip -- --ignored --nocapture`.
+//! encoder's own inputs -- textures registered once -- encoded by NVIDIA's or
+//! AMD's own encoder on its GPU and decoded by the library's own D3D11
+//! decoder, each picture compared with the colour transform's definition. In
+//! every layout the conversion writes, the packed full-chroma ones included,
+//! whose pictures the encoder's registration alone cannot vouch for. Needs
+//! the vendor's GPU and driver, so off by default: `cargo test -p
+//! lowlat-decode --test conversion_round_trip -- --ignored --nocapture`.
 
 // The encoder and the conversion are bound to a D3D11 device on Windows alone.
 #![cfg(windows)]
@@ -24,17 +24,20 @@ use lowlat_drivers::ffi::d3d11::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC, ID3D11Resource, ID3D11Texture2D,
 };
 use lowlat_drivers::vcall;
-use lowlat_encode::{Poll, nvenc};
+use lowlat_encode::{Poll, amf, nvenc};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
 /// Long enough for drift to show: a reference chain that carried one wrong
 /// picture carries it on.
 const PICTURES: usize = 60;
-/// The vendor whose encoder this is.
+/// The vendors whose own encoders these are, as their adapters report them.
 const NVIDIA: u32 = 0x10de;
-/// Targets in rotation, one per picture the encoder may hold.
+const AMD: u32 = 0x1002;
+/// Targets in rotation, one per picture the encoder may hold: as many on
+/// either encoder.
 const TARGETS: usize = nvenc::IN_FLIGHT;
+const _: () = assert!(amf::IN_FLIGHT == TARGETS);
 
 /// Saturated colours that tell one matrix from another.
 const COLOURS: [[u8; 3]; 8] = [
@@ -143,10 +146,11 @@ fn sample(plane: &[u8], pitch: usize, x: usize, y: usize, ten_bit: bool) -> u16 
     }
 }
 
-/// Convert, encode and decode `PICTURES` pictures in `layout`, and answer the
-/// worst luma and chroma of any against the definition, and with full chroma
-/// the worst chroma of the detail alone.
-fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
+/// Convert, encode on `vendor`'s GPU with its own encoder and decode
+/// `PICTURES` pictures in `layout`, and answer the worst luma and chroma of
+/// any against the definition, and with full chroma the worst chroma of the
+/// detail alone.
+fn round_trip(vendor: u32, codec: Codec, layout: Layout) -> (f64, f64, f64) {
     let ten_bit = matches!(layout, Layout::P010 | Layout::Y410);
     let full = layout.full_chroma();
     let d3d11 = D3d11::load().expect("the system's libraries");
@@ -154,7 +158,7 @@ fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
         .adapters()
         .expect("the walk")
         .into_iter()
-        .find(|a| a.decodes_here() && a.vendor == NVIDIA)
+        .find(|a| a.decodes_here() && a.vendor == vendor)
         .expect("an adapter of the encoder's vendor");
     let device = Arc::new(d3d11.open(adapter.luid).expect("a device"));
     let source = device
@@ -180,6 +184,59 @@ fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
     let targets: Vec<Target> = (0..TARGETS)
         .map(|_| Target::new(&device, layout, WIDTH, HEIGHT).expect("a target"))
         .collect();
+    // A device of the decoder's own, as a client's is.
+    let decoding = d3d11.open(adapter.luid).expect("a second device");
+    let mut convert = |index: usize| {
+        draw(&device, &source, index, full);
+        let slot = index % TARGETS;
+        converter
+            .convert(&device, source.as_ptr(), &targets[slot])
+            .expect("convert");
+        slot
+    };
+    if vendor == AMD {
+        let runtime = lowlat_drivers::amf::Amf::load().expect("AMD's runtime");
+        let context = runtime.context(&device).expect("a context");
+        let mut encoder = amf::Encoder::new(
+            &runtime,
+            &context,
+            amf::Config {
+                codec: if codec == Codec::H264 {
+                    amf::Codec::H264
+                } else {
+                    amf::Codec::H265
+                },
+                width: WIDTH,
+                height: HEIGHT,
+                fps: 60,
+                bitrate_bps: 40_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                depth: if ten_bit {
+                    amf::Depth::Ten
+                } else {
+                    amf::Depth::Eight
+                },
+                source: amf::Source::Yuv,
+            },
+        )
+        .expect("an encoder");
+        let inputs: Vec<usize> = targets
+            .iter()
+            .map(|target| {
+                encoder
+                    .register_texture(target.texture())
+                    .expect("the target registered")
+            })
+            .collect();
+        return compare(&decoding, codec, layout, |index| {
+            let slot = convert(index);
+            encoder
+                .submit_registered(inputs[slot], index == 0)
+                .expect("submit");
+            unit(&mut encoder)
+        });
+    }
     let api = nvenc::Api::load().expect("encoder runtime");
     let session = api.open_session(Arc::clone(&device)).expect("session");
     let mut encoder = session
@@ -215,10 +272,38 @@ fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
                 .expect("the target registered")
         })
         .collect();
+    compare(&decoding, codec, layout, |index| {
+        let slot = convert(index);
+        encoder
+            .submit_registered(&inputs[slot], index == 0)
+            .expect("submit");
+        unit(&mut encoder)
+    })
+}
 
-    // A device of the decoder's own, as a client's is.
-    let decoding = d3d11.open(adapter.luid).expect("a second device");
-    let mut decoder = Backend::new(&decoding, (4096, 4096));
+/// The access unit of the picture last submitted, waited for.
+fn unit<E: lowlat_encode::Encoder>(encoder: &mut E) -> Vec<u8> {
+    loop {
+        match encoder.poll().expect("poll") {
+            Poll::Ready { bitstream, .. } => break bitstream.to_vec(),
+            Poll::Pending => std::hint::spin_loop(),
+        }
+    }
+}
+
+/// `PICTURES` access units from `encode`, which converts, submits and
+/// collects picture `index`, decoded on `decoding` and compared: the worst
+/// luma and chroma of any against the definition, and with full chroma the
+/// worst chroma of the detail alone.
+fn compare(
+    decoding: &Device,
+    codec: Codec,
+    layout: Layout,
+    mut encode: impl FnMut(usize) -> Vec<u8>,
+) -> (f64, f64, f64) {
+    let ten_bit = matches!(layout, Layout::P010 | Layout::Y410);
+    let full = layout.full_chroma();
+    let mut decoder = Backend::new(decoding, (4096, 4096));
     decoder
         .build(&VideoHeader {
             frame_id: 1,
@@ -242,20 +327,7 @@ fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
     let top = if ten_bit { 1023.0 } else { 255.0 };
     let mut decoded = 0usize;
     for index in 0..PICTURES {
-        draw(&device, &source, index, full);
-        let slot = index % TARGETS;
-        converter
-            .convert(&device, source.as_ptr(), &targets[slot])
-            .expect("convert");
-        encoder
-            .submit_registered(&inputs[slot], index == 0)
-            .expect("submit");
-        let unit = loop {
-            match encoder.poll().expect("poll") {
-                Poll::Ready { bitstream, .. } => break bitstream.to_vec(),
-                Poll::Pending => std::hint::spin_loop(),
-            }
-        };
+        let unit = encode(index);
         decoder.feed(&unit).expect("feed");
         if index + 1 == PICTURES {
             decoder.drain();
@@ -323,8 +395,8 @@ fn round_trip(codec: Codec, layout: Layout) -> (f64, f64, f64) {
     (worst_luma, worst_chroma, worst_detail)
 }
 
-fn check(name: &str, codec: Codec, layout: Layout) {
-    let (luma, chroma, detail) = round_trip(codec, layout);
+fn check(name: &str, vendor: u32, codec: Codec, layout: Layout) {
+    let (luma, chroma, detail) = round_trip(vendor, codec, layout);
     println!(
         "{name}: {PICTURES} pictures, worst luma {luma:.1} dB, worst chroma {chroma:.1} dB, \
          worst chroma of the detail {detail:.1} dB"
@@ -353,19 +425,19 @@ fn check(name: &str, codec: Codec, layout: Layout) {
 #[test]
 #[ignore = "requires the vendor's GPU and driver"]
 fn h264_from_the_conversion_comes_back_as_it_went_in() {
-    check("h264 nv12", Codec::H264, Layout::Nv12);
+    check("h264 nv12", NVIDIA, Codec::H264, Layout::Nv12);
 }
 
 #[test]
 #[ignore = "requires the vendor's GPU and driver"]
 fn hevc_from_the_conversion_comes_back_as_it_went_in() {
-    check("hevc nv12", Codec::H265, Layout::Nv12);
+    check("hevc nv12", NVIDIA, Codec::H265, Layout::Nv12);
 }
 
 #[test]
 #[ignore = "requires the vendor's GPU and driver"]
 fn ten_bit_hevc_from_the_conversion_comes_back_as_it_went_in() {
-    check("hevc p010", Codec::H265, Layout::P010);
+    check("hevc p010", NVIDIA, Codec::H265, Layout::P010);
 }
 
 /// **Full chroma at eight bits, from the packed word**: colour that changes
@@ -373,7 +445,7 @@ fn ten_bit_hevc_from_the_conversion_comes_back_as_it_went_in() {
 #[test]
 #[ignore = "requires the vendor's GPU and driver"]
 fn full_chroma_hevc_from_the_packed_word_comes_back_as_it_went_in() {
-    check("hevc ayuv", Codec::H265, Layout::Ayuv);
+    check("hevc ayuv", NVIDIA, Codec::H265, Layout::Ayuv);
 }
 
 /// **Full chroma at ten bits, from the packed ten-bit word**, which the
@@ -382,5 +454,27 @@ fn full_chroma_hevc_from_the_packed_word_comes_back_as_it_went_in() {
 #[test]
 #[ignore = "requires the vendor's GPU and driver"]
 fn ten_bit_full_chroma_hevc_from_the_packed_word_comes_back_as_it_went_in() {
-    check("hevc y410", Codec::H265, Layout::Y410);
+    check("hevc y410", NVIDIA, Codec::H265, Layout::Y410);
+}
+
+/// **AMD's encoder reading the conversion's targets**, registered with it:
+/// the same pictures back through the same targets.
+#[test]
+#[ignore = "requires AMD's GPU and runtime"]
+fn h264_from_the_conversion_comes_back_through_amds_encoder() {
+    check("amd h264 nv12", AMD, Codec::H264, Layout::Nv12);
+}
+
+#[test]
+#[ignore = "requires AMD's GPU and runtime"]
+fn hevc_from_the_conversion_comes_back_through_amds_encoder() {
+    check("amd hevc nv12", AMD, Codec::H265, Layout::Nv12);
+}
+
+/// **Ten bits on an AMD GPU go through the conversion**, since the encoder's
+/// own conversion writes them at the eight-bit scale.
+#[test]
+#[ignore = "requires AMD's GPU and runtime"]
+fn ten_bit_hevc_from_the_conversion_comes_back_through_amds_encoder() {
+    check("amd hevc p010", AMD, Codec::H265, Layout::P010);
 }
