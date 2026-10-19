@@ -25,6 +25,14 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   enable. [01 §14.2](01-protocol.md) says so now, and the host logs what the association
   negotiated, the interleaving and the peer's implementation as the association detects
   it, on the line that says the association is up, so a live run states it.
+- **The round-trip minimum is sampled per delivery, and both figures read zero before
+  one.** The session pushed the association's smoothed estimate into the minimum's window on
+  every poll, and the loop polls on every pass, so the window spanned milliseconds and the
+  minimum read the estimate: the gradient between them, which is the queue building and
+  the reason the minimum is read at all, read zero on this pipe. It also reported the
+  association's starting value, its initial timeout of 500 ms, as the round trip until the
+  first sample. The estimate is sampled into the window once per delivered message now, and
+  both figures read zero until the first delivery, as the native session's do.
 - **The association's timeline follows the session's clock at every call that carries
   it.** The association keeps a timeline of its own and moves it only when told; the session
   told it on the housekeeping pass alone, which the shell runs after it has fed the pass's
@@ -66,6 +74,9 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   seconds they take to cross, which read undeliverable at fifteen before; one message queued
   with nothing crossing reads alive until the deadline and undeliverable at it, which read
   alive throughout before.
+- Before the first delivery both round-trip figures read zero, which read 500 before; eight
+  rounds at 250 ms then eight at 390 with a hundred polls between each leave the minimum at
+  250 beside an estimate that rose past 300, where before the minimum followed the estimate.
 
 ## 2026-10-18 - the client's encode and decode figures, each what it says
 

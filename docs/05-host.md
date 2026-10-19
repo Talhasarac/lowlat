@@ -477,7 +477,7 @@ association reports, per channel:
 | acknowledged bytes | from the group acknowledgement | from the association's delivery notification per message |
 | resends by negative acknowledgement | counted at the retransmit | the association's retransmitted packet count, charged to video |
 | resends by timeout | counted at the retransmit | **always zero**: the association's timers are its own and are not distinguished |
-| round trip | from the acknowledgement | the association's smoothed estimate |
+| round trip | from the acknowledgement | the association's smoothed estimate, zero until a message has been delivered; the smallest recent sample is the smallest estimate over the last 64 deliveries |
 
 The mapping is the reason the controller, the gate and the multi-guest arithmetic above run
 unchanged on both pipes. Two observations from the loopback runs of 2026-09-13 are kept as
