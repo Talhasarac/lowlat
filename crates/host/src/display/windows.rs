@@ -1903,6 +1903,22 @@ impl Display {
         }
     }
 
+    /// The loop has collected what the encoder made: where the encoder reads
+    /// the duplication in place and is done with it, its frame goes back now.
+    /// **Held across the next composition, the system's copy of it waits a
+    /// whole period of the compositor's clock** -- 8 ms at 120 Hz, measured --
+    /// so it goes back before then, not at the next look.
+    pub fn encoded(&mut self) {
+        if let Some(in_place) = self.in_place.as_mut()
+            && in_place.held
+            && !in_place.engine.busy()
+            && let Some(source) = self.duplication.as_mut()
+        {
+            source.release();
+            in_place.held = false;
+        }
+    }
+
     /// What the last acquire converted, if it converted anything: nothing
     /// is a picture that did not change, which the loop reads as such.
     pub fn converted(&mut self) -> Result<Option<Acquired>, Error> {
@@ -2678,6 +2694,8 @@ mod tests {
                         lowlat_encode::Poll::Pending => std::hint::spin_loop(),
                     }
                 }
+                // As the loop does once it has collected.
+                display.encoded();
             }
             if let Some(pointer) = display.pointer() {
                 println!("  pointer message at tick {tick}: {:?}", pointer.reported);
@@ -3154,6 +3172,7 @@ mod tests {
                     ) {
                         encoder.wait_finished(core::time::Duration::from_millis(100));
                     }
+                    display.encoded();
                 }
             }
             keyframes
