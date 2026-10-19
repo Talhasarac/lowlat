@@ -184,7 +184,13 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
   have been written again, so the latest is converted instead, and counted. *Amended 2026-10-19:*
   on an AMD GPU the encoder reads the buffer itself and converts it in its own hardware
   ([05 §3](05-host.md)), so the check follows the picture's collect, and a buffer written again by
-  then is counted and the next picture made a keyframe.
+  then is counted and the next picture made a keyframe. *Amended 2026-10-19, at W2.7's build:*
+  at eight bits only -- a ten-bit stream converts as before. The buffer goes to the encoder once
+  the fence has the picture's value, waited for on the processor: the device's wait orders its own
+  queue, not the encoder's engine. The check runs once the engine is done -- the buffer written
+  again, and the newest picture acquired before the encoder's last picture came out -- so a read
+  in time is never counted: none under a load at 120 refreshes, 19 of 20 with each picture handed
+  over 30 ms late.
 - **A still desktop's last picture stays readable**: an acquire that finds nothing new leaves the
   driver the buffer it has, so the latest picture is never written again while it is the latest.
 - **A picture's time is the driver's acquire.** The time the system attaches to a frame is when

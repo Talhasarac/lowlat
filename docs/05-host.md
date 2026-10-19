@@ -125,6 +125,11 @@ Rules:
   written again then is already encoded: it is counted and the next picture is a keyframe, since
   an encoded picture is never dropped. A buffer stays intact for three refreshes and the encode
   takes about 5 ms at 2560x1440, so it is not expected to fire.
+  *Amended 2026-10-19, at W2.7's build:* the buffer goes to the encoder once the system's write of
+  it has finished, waited for on the processor, since the device's queue does not order the
+  encoder's own engine; and the check counts a picture only where the newest picture was acquired
+  before the encoder's last came out, so a read in time never is -- none under a load at 120
+  refreshes, 19 of 20 with each picture handed over 30 ms late ([11 §1.6](11-drivers.md)).
   *Corrected 2026-10-16, at W3.5's build:* **the refresh bounds the wait before the first
   picture too.** Unbounded, a stream built while its display had no picture yet -- the host's own
   display plugged again a moment before, after its driver was updated, or asleep -- found no
@@ -179,6 +184,11 @@ Encoders want a planar format. Captures deliver packed. The conversion is ours.
   matrix, the range and the colour description stay ours, stated to the encoder as BT.709 in the
   video range, and its result lands on the same values except at sharp colour edges, where its
   chroma filter differs. Every other encoder takes this conversion.
+  *Amended 2026-10-19, at W2.7's build:* **at eight bits only.** Into ten bits its conversion
+  writes every level at the eight-bit scale, without an error, so a ten-bit stream on an AMD GPU
+  takes this conversion into P010, which the encoder codes as its source. And its matrix is BT.709
+  whatever profile it is told -- at 1280x720 and below 720 lines alike -- only the range following
+  the statement, so the colour description stated is the picture's.
 - **Planes are written by a compute shader**, addressing each plane as a separate view.
   Copying between subresources to move plane data drops chroma on more than one vendor's
   driver, produces green or smeared output, and looks like an encoder bug for as long as it

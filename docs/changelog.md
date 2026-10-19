@@ -3,6 +3,41 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-19 - W2.7 built: AMD's encoder, reading the capture in place
+
+### Built
+- **AMD's encoder as a backend of its own**, on its own thread as probed; the full-chroma census
+  narrowed to the captured output's encoder on both platforms; the encoder chosen by the captured
+  output's GPU, the synthetic source taking the first GPU with one
+  ([impl-plan-windows.md](impl-plan-windows.md) W2.7).
+- **Eight bits read the capture in place**: the duplication's frame goes back, and the next is
+  taken, only once the encoder's engine has nothing in it; the host's own display's buffer goes
+  over once the system's write of it has finished, waited for on the processor, and each read is
+  checked once the engine is done -- one the system had begun writing again counted and followed
+  by a keyframe ([05 §2](05-host.md), [11 §1.6](11-drivers.md)).
+
+### Decided
+- **A ten-bit stream on an AMD GPU takes the host's conversion into P010**; eight bits keep the
+  encoder's own ([05 §3](05-host.md) amended).
+- **The duplication's image is read as given back** for the pictures encoded after a look found
+  nothing new, as it holds while the desktop stays still: the first change after a still spell
+  can show half written in one picture, corrected by the next.
+
+### Measured
+- Each codec and ten-bit HEVC through the library's decoder, worst luma 70-94 dB over 60
+  pictures; the captured picture against BT.709 48 dB at 1280x720 and 960x540; the host's
+  conversion through the encoder 60-66 dB; the encoder's wait 3.1 ms from submit to collect.
+- A copy of the captured picture into a texture of the host's own: 0.47 and 0.83 ms of the
+  integrated GPU at 1080p and 1440p, and 4.74 and 7.00 ms from queued to output, slower than the
+  conversion (4.38 and 6.69) -- not taken.
+- The host's own display read in place under a load at 120 refreshes: no read caught in time; 19
+  of 20 caught with each picture handed over 30 ms late.
+
+### Found
+- The encoder takes BGRA into Main10 without an error and writes every level at the eight-bit
+  scale; its conversion's matrix is BT.709 whatever profile it is told, the range alone following
+  the statement.
+
 ## 2026-10-19 - W2.7 probed: AMD's encoder, and it converts what it is given
 
 ### Decided

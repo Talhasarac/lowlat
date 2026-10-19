@@ -8,7 +8,8 @@ built the same day. *Amended 2026-10-17:* W3.0 to W3.5 are built and checked, W3
 controller as a program of its own -- and W3.7 -- the review's fixes -- are built, and W3's gate
 waits for W2.5, reviewed the same day. *Amended 2026-10-18:* W2.5, the service, is built,
 checked on the development machine and closed; W3's gate is next. *Amended 2026-10-19:* W2.7,
-AMD's encoder, is added and planned at its interview; it waits on no other step.
+AMD's encoder, is added and planned at its interview; it waits on no other step. Built the same
+day; its live checks are next.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -545,6 +546,14 @@ once, here.
   and converts it in its own hardware ([05 §3](05-host.md)): one pass after composition, the
   system's duplication copy, and the frame held until the next acquire, since the encoder reads it
   while it encodes and a still desktop's refresh picture encodes the same image again.
+  *Amended 2026-10-19, at W2.7's build:* **held until the encoder is done with it.** The loop takes
+  the next picture before it collects the last, so the frame goes back -- and the next is taken --
+  only once the encoder's engine has nothing in it. The system writes the desktop's changes into
+  an image once it is given back, so a picture encoded after a look found nothing new reads it as
+  given back, which holds while the desktop stays still: the first change after a still spell can
+  show half written in that one picture, and the next corrects it. A copy into a texture of the
+  host's own would avoid that, and was measured on the integrated GPU: 0.47 and 0.83 ms of it at
+  1080p and 1440p, slower to the output than the conversion, so it is not taken.
 - **The host is per-monitor DPI aware** (*added 2026-10-14, at W2.2's review*). On a thread
   that is not, the duplication call the host uses is refused outright, and every coordinate
   the system hands back is scaled at a display scale other than 100 percent (measured, at 125
@@ -987,6 +996,24 @@ once, here.
   integrated GPU and 1.4-1.8 ms of latency: no conversion targets on such a stream, the
   duplication's frame held until the next acquire, the direct frame's freshness check after the
   collect ([05 §2](05-host.md)).
+  *Built 2026-10-19, its live checks still to run*: the encoder on its own thread as probed, the
+  census narrowed on both platforms, the encoder chosen by the captured output's GPU and the
+  synthetic source taking the first GPU with one. **Ten bits from the captured picture come out
+  wrong** -- the encoder takes BGRA into Main10 without an error and writes every level at the
+  eight-bit scale -- so **a ten-bit stream on an AMD GPU takes the host's conversion into P010**,
+  and eight bits keep the encoder's own ([05 §3](05-host.md), amended). That conversion's matrix
+  is BT.709 whatever profile the encoder is told, the range alone following the statement. **What
+  the encoder reads in place it is asked about first**: the duplication's frame goes back, and the
+  next is taken, only once the encoder's engine has nothing in it; the host's own display's buffer
+  goes over once the system's write of it has finished, waited for on the processor, and each read
+  is checked once the engine is done. Checked on the development machine's AMD GPU: each codec and
+  ten-bit HEVC through the library's decoder, worst luma 70-94 dB over 60 pictures, the captured
+  picture against BT.709 at 1280x720 and 960x540 (48 dB), the host's conversion through the
+  encoder 60-66 dB; no keyframe across 120 rate changes and none unasked through 400 pictures;
+  nothing allocated per picture on the loop's side; the encoder's wait 3.1 ms from submit to
+  collect at p50; the desktop at its pace through each path; the host's own display read in place
+  as the system account, no read caught on time under a load at 120 and 19 of 20 with each picture
+  handed over 30 ms late; each check broken once.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
