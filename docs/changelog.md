@@ -44,6 +44,9 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - A duplication's frame held across a composition delays the system's copy of the next picture
   by a whole period of the compositor's clock, so a frame read in place goes back as soon as the
   encoder is done with it.
+- Ending AMD's encoder after its device was removed -- the GPU's driver restarted under a
+  stream -- crashed the host inside AMD's driver. The encoder is now let go unended when its
+  device is gone, and the stream rebuilds on the GPU's new device in 2.1 s, the guest kept.
 
 ## 2026-10-19 - W2.7 probed: AMD's encoder, and it converts what it is given
 

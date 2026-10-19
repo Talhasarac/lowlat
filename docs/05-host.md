@@ -59,6 +59,10 @@ Rules:
   rebuilds. And **the host's own display is plugged again while the stream waits** for a
   display, so its driver updated, restarted or ended under a stream costs a rebuild rather than
   the guests ([11 §1.8](11-drivers.md)).
+  *Added 2026-10-19, at W2.7's gate:* **AMD's encoder is let go without being ended once its
+  device is gone.** Ending it then copies on the device, and AMD's driver faults the process
+  rather than refusing; what the encoder holds stays held for the process's life, once per
+  loss. The rebuild after a restart of the GPU's driver measured 2.1 s, the guest kept.
 - The acquire timeout is one frame interval. A timeout is not an error; it means the screen
   did not change, and the correct response is to skip the iteration rather than to encode a
   duplicate.
