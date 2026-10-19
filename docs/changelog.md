@@ -3,6 +3,31 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-19 - the browser pipe's stale count reads the association's pacing as fresh
+
+### Fixed
+- **A picture the association is still releasing no longer reads as stale.** The pressure
+  synthesized for the controller on the browser pipe counted whatever a queued message had
+  not yet put on the wire as stale at once, the way the native scan counts a fragment the
+  shell left in the ring. The two are not the same thing: natively the shell empties the ring
+  within the pass, so a fragment left behind means the path refused it, while the
+  association's window grows only while it is kept full, settles at about one picture on a
+  sender that offers one picture per frame interval, and holds the rest of every larger
+  picture back for a round trip or two. Every picture past the window read as mostly stale at
+  the instant the host sampled it: a 100 KiB picture queued a moment ago on a clean pair read
+  82 of its 86 fragments stale. The unsent remainder now counts only once its message has
+  waited in the association longer than the level's threshold, which is what the threshold
+  means on the native pipe too. On the simulator's policed link the figures are unchanged,
+  4108 fragments at the peak with 4047 stale, because there every message waits far longer
+  than that. This fits the loopback ceiling recorded in [05 §5](05-host.md) and is its
+  likely mechanism; whether the rate now reaches the page's ceiling there is a live run to
+  make.
+
+### Testing
+- A picture larger than the association's initial window, queued on a pair that exchanges
+  nothing more: fresh, its window is the whole picture and its stale count zero, which read
+  82 before the fix; polled past the threshold, what is still unsent is stale.
+
 ## 2026-10-18 - the client's encode and decode figures, each what it says
 
 ### Fixed

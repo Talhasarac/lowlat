@@ -472,7 +472,7 @@ association reports, per channel:
 | Figure | Native source | Browser source |
 |---|---|---|
 | window | fragments sent and not yet acknowledged | fragments of every message queued and not yet delivered |
-| stale | fragments unsent or unacknowledged past the level's threshold | fragments fully handed to the association longer ago than the threshold and not yet delivered, plus what is still buffered unsent; a message part way onto the wire is fresh for the part that is there |
+| stale | fragments unsent or unacknowledged past the level's threshold | fragments fully handed to the association longer ago than the threshold and not yet delivered, plus what a message that has waited in the association longer than the threshold has still not put on the wire; a message the association is still releasing is fresh until then, because its window grows only while it is kept full and the pacing that follows is not congestion (*corrected 2026-10-19: the unsent remainder counted at once, as the native scan counts a fragment the shell left in the ring, and there the shell empties the ring within the pass*) |
 | bytes and packets sent | counted at the send | the bytes offered per stream, with the association's retransmitted bytes charged to the video channel |
 | acknowledged bytes | from the group acknowledgement | from the association's delivery notification per message |
 | resends by negative acknowledgement | counted at the retransmit | the association's retransmitted packet count, charged to video |
@@ -486,7 +486,13 @@ stale count still reads a large share of the window whenever a picture exceeds a
 fragments, and the rate the controller settles at is then the picture size times the frame
 rate -- 21 Mbit/s at 30 frames a second, 85 at 120 -- well under the ceiling the page asked
 for. Whether that is the threshold, the association's acknowledgement cadence or the
-delivery notification is not yet established.
+delivery notification is not yet established. *2026-10-19: a fourth cause was found and
+removed, and it fits the figures. The association grows its window only while the window is
+kept full, so a sender offering one picture per frame interval settles at about one
+picture's worth, and every larger picture was mostly unsent, and read as stale, at the
+instant the host sampled it. The unsent remainder counts only once its message has waited
+past the threshold now; whether the rate then reaches the page's ceiling on loopback, which
+would close this item, is still to be measured.*
 
 ## §6 Multi-guest delivery
 
