@@ -4,7 +4,8 @@
 the same day (W3.0), and its controller (W3.1); W3.2 to W3.5 built and checked 2026-10-16, and
 the controller as a program of its own (W3.6) and the review's fixes (W3.7) built 2026-10-17;
 every monitor read straight from the driver, and the desk's settings of the host's display left
-to it (W3.8), built and checked 2026-10-20; W3's gate to come. Built by
+to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
+built and checked live the same day; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -424,7 +425,11 @@ monitor before a plug returns. **Every monitor read from the driver is built and
 the system account and duplicated as a user; turned, duplicated with its turn declared, and a
 turn under a read from the driver rebuilt (§1.6); the host's own display keeping a refresh and a
 turn set at the desk, and a refresh saved there coming back with it (§1.5) -- each check failing
-with its fix undone.
+with its fix undone. **The turn of the host's own display is built and checked** (W3.9,
+2026-10-20): a turned monitor's driver picture the duplication's to the sample, its pointer's
+shape turned for the panel, so a turned monitor stays on the duplication; the host's display
+turned a quarter and put at another mode while turned, still turned; and live, an established
+client's rotate turning it and back, the stream following each way (§1.5).
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

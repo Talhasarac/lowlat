@@ -14,7 +14,7 @@ two faults found and fixed, and W2.7 closed; what the gate asked and was not run
 entry. *Amended 2026-10-20:* W3.8 -- every monitor of the driver read straight from it, and the
 desk's own settings of the host's display left to it -- added after a review of the driver,
 built and checked the same day; and W3.9, the turn of the host's own display, added, probed and
-built after it, its live check owed; W3's gate follows them.
+built and checked live after it; W3's gate follows them.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1724,7 +1724,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   premise was caught by the desk's check. The name's match, the upright test and the refresh
   rule are tests of their own, each broken once. Both bars: on Windows tests 1391 passed, none
   failed; on Linux 1385 passed with the two that need a `localhost` answering on both families.
-- [ ] **W3.9 the turn of the host's own display**: a guest's turn put once and never held, through
+- [x] **W3.9 the turn of the host's own display**: a guest's turn put once and never held, through
   `lowlatd`'s relay and the library's call (minor 31); the controller turning a monitor through
   the system's configuration and putting a mode on a turned one at the desktop's sides; a turned
   output duplicated at the panel's sides with no rebuild at its open; W3.8's comparisons opening
@@ -1749,7 +1749,14 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   then turned upright (the mode put without the swap replugged it and lost the turn); the
   desktop's sides and the library's turns tests of their own. Both bars: on Windows tests 1393
   passed, none failed; on Linux 1386 passed with the two that need a `localhost` answering on
-  both families; the ABI gates at minor 31. Owed: the live turn from an established client.
+  both families; the ABI gates at minor 31.
+  *Checked live 2026-10-20*, the service on this build with the host's own display captured:
+  an established client joined at 3420x2148 and asked 2560x1080 then 2560x1440, each put; its
+  rotate turned the display a quarter 53 ms after the ask, and the stream rebuilt onto the
+  duplication with the quarter declared -- the duplication made again three times as the turn
+  settled, then steady, no rebuild after; turned back, the display was upright 64 ms after the
+  ask and read straight from its driver again. The maintainer saw the turned picture working at
+  the client, and turned it back.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1795,10 +1802,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
-- 2026-10-20: W3.9 added, probed and built: a guest's turn of the host's display put once
-  (minor 31); turned monitors kept on the duplication, whose open of a turned output no longer
-  loops through rebuilds; W3.8's comparisons on a real duplication ([05 §2](05-host.md),
-  [06 §3, §11, §14](06-api.md) and [11 §1.5](11-drivers.md) amended).
+- 2026-10-20: W3.9 added, probed, built and checked live: a guest's turn of the host's display
+  put once (minor 31); turned monitors kept on the duplication, whose open of a turned output no
+  longer loops through rebuilds; W3.8's comparisons on a real duplication
+  ([05 §2](05-host.md), [06 §3, §11, §14](06-api.md) and [11 §1.5](11-drivers.md) amended).
 - 2026-10-20: W3.8 added, built and checked: every monitor of the driver read straight from it
   while upright, a turn under the read a rebuild; the host's own display keeping a refresh and a
   turn set at the desk; one GPU per adapter checked against the newest class

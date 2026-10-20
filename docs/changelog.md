@@ -3,7 +3,7 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
-## 2026-10-20 - W3.9 built: the turn of the host's own display
+## 2026-10-20 - W3.9 built and checked: the turn of the host's own display
 
 ### Changed
 - **A guest's turn of the host's own display is put once** ([06 §3](06-api.md)): `lowlatd`
@@ -35,6 +35,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
   luma samples differing. The Windows bar: fmt and clippy clean, tests 1393 passed, none failed;
   the Linux bar clean, tests 1386 passed with the two that need a `localhost` answering on both
   families; the ABI gates at minor 31.
+- **Live**, the service on this build capturing its own display: an established client's rotate
+  turned it a quarter 53 ms after the ask, the stream rebuilt onto the duplication with the turn
+  declared and held steady; turned back, upright 64 ms after the ask and read straight from its
+  driver again. Sizes asked from the same client before it were put as before.
 
 ### Measured
 - On a turned display the desktop's own interface lists every mode with its sides swapped,
