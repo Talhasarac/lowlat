@@ -13,14 +13,20 @@ use super::sys::publish_own;
 /// The size the display is first plugged at when nothing asked for one.
 pub(crate) const FIRST_SIZE: (u32, u32) = (1920, 1080);
 
+/// The refresh it is first plugged at when none is asked and the system
+/// restores none.
+const FIRST_HZ: u32 = 60;
+
 /// The host's own display.
 #[derive(Debug, Default)]
 pub(crate) struct Own {
     controller: Option<Controller>,
     /// The slot the monitor is in, while one is plugged.
     slot: Option<u8>,
-    /// The mode the host wants it at, once it wants one.
-    wanted: Option<Mode>,
+    /// The size the host wants it at, once it wants one.
+    wanted: Option<(u32, u32)>,
+    /// Turned at the desk when last looked at, said once.
+    turned: bool,
     /// Why the last attempt failed, said once rather than every pass.
     refused: Option<Error>,
 }
@@ -31,23 +37,30 @@ impl Own {
         self.slot.is_some()
     }
 
-    /// The mode the host wants, once it wants one.
-    pub(crate) fn wanted(&self) -> Option<Mode> {
+    /// The size the host wants, once it wants one.
+    pub(crate) fn wanted(&self) -> Option<(u32, u32)> {
         self.wanted
     }
 
-    /// Have the display at `mode`: plugged at it where there is none, else
-    /// put there when the system has it at anything else -- which another
-    /// monitor's arrival and a program leaving exclusive fullscreen both do,
-    /// putting a saved mode back. Answers whether it is at `mode` now.
-    pub(crate) fn hold(&mut self, mode: Mode) -> bool {
-        if !mode.is_valid() {
+    /// Have the display at `width` x `height`, and at `refresh` where one is
+    /// asked: plugged where there is none, else put there when the system has
+    /// it otherwise -- which another monitor's arrival and a program leaving
+    /// exclusive fullscreen both do, putting a saved mode back. Answers
+    /// whether it is as wanted now.
+    ///
+    /// **What nobody asked for is the desk's.** With no refresh asked, the
+    /// display keeps the refresh it has -- the one the system restores for it
+    /// as it is plugged, and one set in its display settings after -- and a
+    /// display turned there is left as it is, turned.
+    pub(crate) fn hold(&mut self, width: u32, height: u32, refresh: Option<u32>) -> bool {
+        let first = Mode::new(width, height, refresh.unwrap_or(FIRST_HZ));
+        if !first.is_valid() {
             self.refuse("a mode no monitor of this display may be", Error::Mode);
             return false;
         }
-        self.wanted = Some(mode);
+        self.wanted = Some((width, height));
         let (Some(slot), Some(controller)) = (self.slot, self.controller.as_mut()) else {
-            return self.plug(mode);
+            return self.plug(first, refresh.is_none());
         };
         let monitor = match controller.monitor(slot) {
             Ok(monitor) => monitor,
@@ -57,7 +70,7 @@ impl Own {
                 lowlat_common::log_warn!("display: the host's own display went, plugging it again");
                 self.slot = None;
                 publish_own(None);
-                return self.plug(mode);
+                return self.plug(first, refresh.is_none());
             }
             // **The driver went, and the handle with it** -- updated,
             // restarted, its process ended (docs/11-drivers.md section 1.8):
@@ -68,7 +81,7 @@ impl Own {
                     "display: the host's own display driver went, plugging the display again"
                 );
                 self.lost();
-                return self.plug(mode);
+                return self.plug(first, refresh.is_none());
             }
             Err(error) => {
                 self.refuse("the host's own display could not be read", error);
@@ -78,6 +91,16 @@ impl Own {
         if monitor.active && !monitor.name.is_empty() {
             publish_own(Some((monitor.name.as_str(), slot)));
         }
+        if monitor.active && monitor.turned {
+            if !core::mem::replace(&mut self.turned, true) {
+                lowlat_common::log_info!(
+                    "display: the host's own display is turned at the desk, left as it is"
+                );
+            }
+            return true;
+        }
+        self.turned = false;
+        let mode = Mode::new(width, height, refresh.unwrap_or(monitor.mode.refresh_hz));
         if monitor.active && monitor.mode == mode {
             return true;
         }
@@ -103,8 +126,10 @@ impl Own {
 
     /// Plug the monitor at `mode`, bound to this host, in the highest free
     /// slot: an application's first free one is never the host's, and the
-    /// host's display keeps one identity the system remembers it by.
-    fn plug(&mut self, mode: Mode) -> bool {
+    /// host's display keeps one identity the system remembers it by. With
+    /// `any_refresh`, at the refresh the system restores for that identity,
+    /// `mode`'s where it restores none.
+    fn plug(&mut self, mode: Mode, any_refresh: bool) -> bool {
         if self.controller.is_none() {
             match Controller::open() {
                 Ok(controller) => self.controller = Some(controller),
@@ -126,7 +151,12 @@ impl Own {
             .filter_map(|slot| u8::try_from(slot).ok())
             .filter(|slot| !taken.contains(slot));
         for slot in free {
-            match controller.plug(mode, Lifetime::Bound, false, Some(slot)) {
+            let plugged = if any_refresh {
+                controller.plug_at_size(mode, Some(slot))
+            } else {
+                controller.plug(mode, Lifetime::Bound, false, Some(slot))
+            };
+            match plugged {
                 Ok(monitor) => {
                     lowlat_common::log_info!(
                         "display: the host's own display plugged, slot={slot} {mode} {}",
@@ -213,14 +243,16 @@ mod tests {
             OpenProcess, PROCESS_TERMINATE, TerminateProcess,
         };
 
-        let mode = Mode::new(1920, 1080, 60);
         let process = |slot| {
             lowlat_vdd_ctl::FramePage::open(slot)
                 .expect("the driver's page")
                 .process_id()
         };
         let mut own = Own::default();
-        assert!(own.hold(mode), "the display was not plugged");
+        assert!(
+            own.hold(1920, 1080, Some(60)),
+            "the display was not plugged"
+        );
         let before = process(own.slot.expect("a slot"));
         let began = Instant::now();
         match std::env::var("LOWLAT_RESTART").ok() {
@@ -250,7 +282,7 @@ mod tests {
                 }
             }
         }
-        while !(own.hold(mode) && own.plugged()) {
+        while !(own.hold(1920, 1080, Some(60)) && own.plugged()) {
             assert!(
                 began.elapsed() < Duration::from_secs(10),
                 "the display did not come back"
@@ -264,5 +296,128 @@ mod tests {
             own.slot
         );
         assert_ne!(before, after, "the driver did not end");
+    }
+
+    /// The monitor at `slot`, as the system shows it now, until `ok` holds of
+    /// it or five seconds pass.
+    fn shown_until(
+        own: &Own,
+        slot: u8,
+        what: &str,
+        ok: impl Fn(&lowlat_vdd_ctl::Monitor) -> bool,
+    ) -> lowlat_vdd_ctl::Monitor {
+        use std::time::{Duration, Instant};
+
+        let began = Instant::now();
+        loop {
+            let monitor = own
+                .controller
+                .as_ref()
+                .expect("a handle")
+                .monitor(slot)
+                .expect("the monitor");
+            if ok(&monitor) {
+                return monitor;
+            }
+            assert!(
+                began.elapsed() < Duration::from_secs(5),
+                "{what} never came"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// **What nobody asked for is the desk's**: held with no refresh asked,
+    /// the host's own display keeps one set at the desk, and one asked is
+    /// put; turned at the desk it is left turned, its mode read unturned.
+    /// Run as a user, the driver installed; nothing is saved.
+    #[test]
+    #[ignore = "plugs and turns a monitor of the display driver"]
+    fn the_hosts_own_display_leaves_the_desk_its_refresh_and_its_turn() {
+        use super::super::sys::set_at_desk;
+        use std::time::Duration;
+
+        let mut own = Own::default();
+        assert!(own.hold(1920, 1080, None), "the display was not plugged");
+        let slot = own.slot.expect("a slot");
+        let name = shown_until(&own, slot, "the display", |m| m.active).name;
+        assert!(
+            set_at_desk(&name, (1920, 1080, 120), false, false),
+            "the desk's 120 refused"
+        );
+        shown_until(&own, slot, "the desk's 120", |m| m.mode.refresh_hz == 120);
+        assert!(own.hold(1920, 1080, None), "the held display refused");
+        std::thread::sleep(Duration::from_millis(500));
+        let kept = shown_until(&own, slot, "the display", |m| m.active).mode;
+        assert!(own.hold(1920, 1080, Some(60)), "the asked 60 refused");
+        shown_until(&own, slot, "the asked 60", |m| m.mode.refresh_hz == 60);
+        assert!(
+            set_at_desk(&name, (1920, 1080, 60), true, false),
+            "the desk's turn refused"
+        );
+        shown_until(&own, slot, "the desk's turn", |m| m.turned);
+        assert!(own.hold(1920, 1080, Some(60)), "the turned display refused");
+        std::thread::sleep(Duration::from_millis(500));
+        let turned = shown_until(&own, slot, "the display", |m| m.active);
+        assert!(
+            set_at_desk(&name, (1920, 1080, 60), false, false),
+            "the turn back refused"
+        );
+        println!("the desk's 120 held as {kept}, turned as {}", turned.mode);
+        assert_eq!(kept.refresh_hz, 120, "the desk's refresh put back");
+        assert!(turned.turned, "the desk's turn undone");
+        assert_eq!(
+            (turned.mode.width, turned.mode.height),
+            (1920, 1080),
+            "the mode read turned"
+        );
+    }
+
+    /// **A refresh saved at the desk comes back with the display**: put and
+    /// saved as the display settings save it, then the display unplugged with
+    /// its handle and plugged again with no refresh asked, it arrives at that
+    /// refresh. Saves the arrangement of this machine's monitors with the
+    /// display among them, as the display settings do, and saves it at 60
+    /// after. Run as a user, the driver installed.
+    #[test]
+    #[ignore = "plugs a monitor of the display driver and saves its arrangement"]
+    fn a_refresh_saved_at_the_desk_comes_back_with_the_hosts_own_display() {
+        use super::super::sys::set_at_desk;
+        use std::time::{Duration, Instant};
+
+        let mut own = Own::default();
+        assert!(own.hold(1920, 1080, None), "the display was not plugged");
+        let slot = own.slot.expect("a slot");
+        let name = shown_until(&own, slot, "the display", |m| m.active).name;
+        assert!(
+            set_at_desk(&name, (1920, 1080, 120), false, true),
+            "the desk's 120 refused"
+        );
+        shown_until(&own, slot, "the desk's 120", |m| m.mode.refresh_hz == 120);
+        drop(own);
+        std::thread::sleep(Duration::from_secs(2));
+        let mut again = Own::default();
+        assert!(
+            again.hold(1920, 1080, None),
+            "the display was not plugged again"
+        );
+        assert_eq!(again.slot, Some(slot), "another slot, another identity");
+        // **The system's restore can come seconds after the arrival.**
+        let began = Instant::now();
+        let mut back = shown_until(&again, slot, "the display", |m| m.active);
+        while back.mode.refresh_hz != 120 && began.elapsed() < Duration::from_secs(6) {
+            std::thread::sleep(Duration::from_millis(200));
+            back = shown_until(&again, slot, "the display", |m| m.active);
+        }
+        let saved_at_60 = set_at_desk(&back.name, (1920, 1080, 60), false, true);
+        println!(
+            "plugged again at {} after {:?}; saved at 60 after {saved_at_60}",
+            back.mode,
+            began.elapsed()
+        );
+        assert_eq!(
+            back.mode.refresh_hz, 120,
+            "the desk's saved refresh lost to the plug"
+        );
     }
 }

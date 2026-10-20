@@ -11,7 +11,6 @@ use std::sync::mpsc;
 use lowlat_capture::d3d11::Layout;
 use lowlat_common::clock::{self, Time};
 use lowlat_core::control::status;
-use lowlat_vdd_ctl::Mode;
 
 use super::{
     Backend, Codec, Config, DISPLAY_WAIT, Declared, Exit, FromDevice, Join, Roster, Shared,
@@ -80,19 +79,16 @@ impl Own {
             // **Plugged first**, at the size asked of it or the first size,
             // so the display a guest is about to watch exists to be asked.
             let (width, height) = own_size(FIRST_SIZE, asked, None);
-            if !self.display.hold(Mode::new(width, height, refresh)) && !self.display.plugged() {
+            if !self.display.hold(width, height, refresh) && !self.display.plugged() {
                 return;
             }
         }
-        let current = self
-            .display
-            .wanted()
-            .map_or(FIRST_SIZE, |mode| (mode.width, mode.height));
+        let current = self.display.wanted().unwrap_or(FIRST_SIZE);
         // **Only for the display the stream is about to capture**: a guest
         // arriving to watch another output says nothing about this one.
         let joining = joining.filter(|_| Display::captures_own(config.output.as_deref()));
         let (width, height) = own_size(current, asked, joining);
-        self.display.hold(Mode::new(width, height, refresh));
+        self.display.hold(width, height, refresh);
     }
 }
 

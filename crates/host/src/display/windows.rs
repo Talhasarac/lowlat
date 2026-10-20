@@ -29,10 +29,11 @@ use lowlat_common::clock::{self, Time};
 use lowlat_core::video::Rotation;
 use lowlat_drivers::d3d11::{Com, D3d11, Device, Event, Fence, Output, Span, Timer};
 use lowlat_drivers::ffi::d3d11::{
-    DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_ROTATE270,
-    ID3D11ShaderResourceView, ID3D11Texture2D, IDXGIOutput,
+    DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_ROTATE90,
+    DXGI_MODE_ROTATION_ROTATE270, DXGI_MODE_ROTATION_UNSPECIFIED, ID3D11ShaderResourceView,
+    ID3D11Texture2D, IDXGIOutput,
 };
-use lowlat_vdd_ctl::{FramePage, ShapeKind, Snapshot, Waited};
+use lowlat_vdd_ctl::{Controller, FramePage, ShapeKind, Snapshot, Waited};
 
 use super::{Acquired, Capturable, Selectable, VIRTUAL};
 use crate::timing::Stage;
@@ -398,6 +399,82 @@ fn own_slot(name: &str) -> Option<u8> {
         .map(|&(_, slot)| slot)
 }
 
+/// The slot of the driver's monitor whose output is named `name`, from the
+/// driver's list as pairs of the system's name for a monitor's output and its
+/// slot. **An unshown monitor's empty name names nothing.**
+fn slot_named<'a>(monitors: impl IntoIterator<Item = (&'a str, u8)>, name: &str) -> Option<u8> {
+    monitors
+        .into_iter()
+        .find(|(shown, _)| !shown.is_empty() && named(shown, name))
+        .map(|(_, slot)| slot)
+}
+
+/// The driver's slot of the output named `name`, when that output is one of
+/// the driver's monitors, whoever plugged it: the host's own display's as it
+/// was published, any other's from the driver's list.
+fn driver_slot(name: &str) -> Option<u8> {
+    own_slot(name).or_else(|| {
+        let monitors = Controller::open()
+            .and_then(|controller| controller.list())
+            .ok()?;
+        slot_named(monitors.iter().map(|m| (m.name.as_str(), m.slot)), name)
+    })
+}
+
+/// Whether an output stands as its panel does. **The driver is told nothing
+/// of a turn**, so the pictures of a turned monitor say nothing of it either:
+/// only an upright one is read from the driver (docs/05-host.md section 2).
+fn upright(rotation: DXGI_MODE_ROTATION) -> bool {
+    matches!(
+        rotation,
+        DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED
+    )
+}
+
+/// Put the display named `name`, `\\.\DISPLAYn`, at a mode as a person does
+/// in the system's display settings: `width` x `height` at `refresh_hz`, a
+/// quarter turned or upright, saved to the system's store or not.
+#[cfg(test)]
+pub(crate) fn set_at_desk(
+    name: &str,
+    (width, height, refresh_hz): (u32, u32, u32),
+    turned: bool,
+    save: bool,
+) -> bool {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CDS_UPDATEREGISTRY, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
+        DM_DISPLAYFREQUENCY, DM_DISPLAYORIENTATION, DM_PELSHEIGHT, DM_PELSWIDTH, DMDO_90,
+        DMDO_DEFAULT,
+    };
+
+    let wide: Vec<u16> = name.encode_utf16().chain(core::iter::once(0)).collect();
+    let mut dm = DEVMODEW {
+        dmSize: u16::try_from(size_of::<DEVMODEW>()).unwrap_or(0),
+        dmFields: DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_DISPLAYORIENTATION,
+        dmDisplayFrequency: refresh_hz,
+        ..Default::default()
+    };
+    // The pixels are the desktop's, whose sides a quarter turn swaps.
+    (dm.dmPelsWidth, dm.dmPelsHeight) = if turned {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    dm.Anonymous1.Anonymous2.dmDisplayOrientation = if turned { DMDO_90 } else { DMDO_DEFAULT };
+    let flags = if save { CDS_UPDATEREGISTRY } else { 0 };
+    // SAFETY: a terminated name and a filled structure; no window.
+    let status = unsafe {
+        ChangeDisplaySettingsExW(
+            wide.as_ptr(),
+            &raw const dm,
+            core::ptr::null_mut(),
+            flags,
+            core::ptr::null(),
+        )
+    };
+    status == DISP_CHANGE_SUCCESSFUL
+}
+
 /// What an output is asked for by: [`VIRTUAL`] for the host's own display,
 /// else the system's own name.
 fn id_of(name: &str) -> String {
@@ -757,10 +834,10 @@ impl Timing {
     }
 }
 
-/// The host's own display read straight from its driver (docs/11-drivers.md
-/// section 1.6): the system's own buffers, taken from the driver's process
-/// and opened on the stream's device once each, converted into the encoder's
-/// inputs. **Nothing here holds the driver up**: it publishes whether or not
+/// A monitor of the host's display driver read straight from it
+/// (docs/11-drivers.md section 1.6): the system's own buffers, taken from the
+/// driver's process and opened on the stream's device once each, converted
+/// into the encoder's inputs. **Nothing here holds the driver up**: it publishes whether or not
 /// this reads, and a picture taken too late is caught after its conversion
 /// is queued and the latest converted instead.
 struct Direct {
@@ -1087,10 +1164,13 @@ impl Direct {
 /// state last, after everything made under it.
 pub struct Display {
     duplication: Option<Duplication>,
-    /// The host's own display read straight from its driver, in place of the
-    /// duplication: opened so ([`Display::open_direct`]), or the host's own
-    /// display whose driver's frames could be taken.
+    /// A monitor of the host's display driver read straight from it, in
+    /// place of the duplication: opened so ([`Display::open_direct`]), or any
+    /// of the driver's monitors, upright, whose frames could be taken.
     direct: Option<Direct>,
+    /// A turn seen while read from the driver, by the slow look at the
+    /// output ([`Display::attached`]), for [`Display::take_resize`] to answer.
+    turned: core::cell::Cell<bool>,
     kept: Option<Kept>,
     /// The capture's own texture read by the encoder, in place of the
     /// conversion and its targets.
@@ -1229,8 +1309,9 @@ impl Display {
 
     /// Prepare to capture the output named `name` on `device`, its own
     /// adapter's, into targets in `layout` for a `size` picture, each
-    /// registered once with the encoder `register` names. **The host's own
-    /// display is read straight from its driver** when the driver's frames
+    /// registered once with the encoder `register` names. **A monitor of the
+    /// host's display driver is read straight from it** -- the host's own
+    /// display or any other -- when it stands upright and the driver's frames
     /// can be taken, as [`Display::open_direct`] reads it, and duplicated
     /// otherwise.
     ///
@@ -1248,11 +1329,11 @@ impl Display {
         Self::open_with(device, name, layout, size, register, None)
     }
 
-    /// Prepare to capture the host's own display, whose output is `name`,
-    /// straight from its driver's monitor at `slot` rather than through the
-    /// system's duplication of it (docs/11-drivers.md section 1.6), into the
-    /// same targets. **The process must be able to take handles from the
-    /// driver's**, which the system account can.
+    /// Prepare to capture the output `name`, a monitor of the host's display
+    /// driver, straight from the driver's monitor at `slot` rather than
+    /// through the system's duplication of it (docs/11-drivers.md section
+    /// 1.6), into the same targets. **The process must be able to take handles
+    /// from the driver's**, which the system account can.
     pub fn open_direct(
         device: &Arc<Device>,
         name: &str,
@@ -1304,6 +1385,7 @@ impl Display {
         let mut display = Self {
             duplication: None,
             direct: None,
+            turned: core::cell::Cell::new(false),
             kept: None,
             in_place,
             converter,
@@ -1336,18 +1418,28 @@ impl Display {
             _aware: aware,
         };
         remember(name);
-        // **The host's own display is read straight from its driver whenever
-        // the driver answers** -- which it does to the system account the
-        // host runs as -- and duplicated otherwise, as any display is.
+        // **Any monitor of the host's display driver is read straight from it
+        // whenever the driver answers** -- which it does to the system account
+        // the host runs as -- **while it stands upright**, and duplicated
+        // otherwise, as any display is.
         let attached = match direct {
             Some(slot) => Some((slot, Direct::attach(slot)?)),
-            None => own_slot(&display.output.name).and_then(|slot| match Direct::attach(slot) {
-                Ok(attached) => Some((slot, attached)),
-                Err(error) => {
+            None => driver_slot(&display.output.name).and_then(|slot| {
+                if !upright(display.output.rotation) {
                     lowlat_common::log_info!(
-                        "display: {name} duplicated, its driver's frames not taken, {error}"
+                        "display: {name} is turned, duplicated rather than read from its \
+                         driver, slot={slot}"
                     );
-                    None
+                    return None;
+                }
+                match Direct::attach(slot) {
+                    Ok(attached) => Some((slot, attached)),
+                    Err(error) => {
+                        lowlat_common::log_info!(
+                            "display: {name} duplicated, its driver's frames not taken, {error}"
+                        );
+                        None
+                    }
                 }
             }),
         };
@@ -1684,9 +1776,9 @@ impl Display {
         }
     }
 
-    /// [`Display::acquire`] for the host's own display read from its driver:
-    /// the latest picture converted into the next target, unless it is the
-    /// one taken last. Another size is a rebuild, as the duplication's is.
+    /// [`Display::acquire`] for a monitor read from its driver: the latest
+    /// picture converted into the next target, unless it is the one taken
+    /// last. Another size is a rebuild, as the duplication's is.
     fn acquire_direct(&mut self) -> Result<Time, Error> {
         // **The refresh comes with each swapchain**, and one can change with
         // the size unchanged: the pace and the deadlines settle again from
@@ -1776,9 +1868,8 @@ impl Display {
         Ok(at)
     }
 
-    /// [`Display::acquire`] for the host's own display read from its driver
-    /// by an encoder that reads in place: the latest picture's buffer handed
-    /// over as it is. **What the encoder read is checked once it is done**: a
+    /// [`Display::acquire`] for a monitor read from its driver by an encoder
+    /// that reads in place: the latest picture's buffer handed over as it is. **What the encoder read is checked once it is done**: a
     /// buffer the system began writing again before the engine had finished
     /// reading it went out half written -- counted, and the next picture sent
     /// as a keyframe. Measured margins say it does not happen: the system
@@ -1852,8 +1943,8 @@ impl Display {
         Ok(at)
     }
 
-    /// [`Display::wait_present`] for the host's own display read from its
-    /// driver: a picture published that has not been taken is a present; a
+    /// [`Display::wait_present`] for a monitor read from its driver: a
+    /// picture published that has not been taken is a present; a
     /// refresh past the deadline with none is a present of the same picture,
     /// as the duplication's wait has it -- **before the first picture too**,
     /// so the wait always answers within a refresh: unbounded, a stream built
@@ -2041,12 +2132,23 @@ impl Display {
     /// Whether the output being captured is still part of the desktop with a
     /// monitor behind it ([`lit`]), on the adapter it was opened on, and the
     /// device still there.
+    ///
+    /// **Read from its driver, a turn is noted here**: the driver is told
+    /// nothing of one, so nothing in its pictures says it happened, and the
+    /// rebuild [`Display::take_resize`] then asks for duplicates the turned
+    /// picture.
     pub fn attached(&self) -> bool {
         if self.device.lost() {
             return false;
         }
         match self.d3d11.output(&self.output.name) {
             Ok(Some((_, now))) => {
+                if self.direct.is_some() && !upright(now.rotation) && !self.turned.replace(true) {
+                    lowlat_common::log_info!(
+                        "display: {} was turned while read from its driver",
+                        self.output.name
+                    );
+                }
                 now.attached
                     && now.adapter.luid == self.output.adapter.luid
                     && duplication::monitored(&now.name)
@@ -2142,7 +2244,7 @@ impl Display {
 
     /// Whether the picture changed size or turn, clearing the answer.
     pub fn take_resize(&mut self) -> bool {
-        core::mem::replace(&mut self.resized, false)
+        core::mem::replace(&mut self.resized, false) | self.turned.take()
     }
 
     /// The picture the last message owed named, in the form the wire
@@ -2311,6 +2413,35 @@ mod tests {
         assert!(named("display1", "DISPLAY1"));
         assert!(!named("DISPLAY12", "DISPLAY1"));
         assert!(!named("DISPLAY", "DISPLAY1"));
+    }
+
+    /// **A monitor of the driver is found by its output's name**, as the
+    /// driver's list gives it -- prefixed, in its own case -- and a monitor
+    /// the system does not show, whose name is empty, is no output's.
+    #[test]
+    fn a_monitor_of_the_driver_is_found_by_its_outputs_name() {
+        let monitors = [(r"\\.\DISPLAY7", 3u8), ("", 5), (r"\\.\DISPLAY12", 9)];
+        assert_eq!(slot_named(monitors, "DISPLAY7"), Some(3));
+        assert_eq!(slot_named(monitors, "display12"), Some(9), "another case");
+        assert_eq!(slot_named(monitors, "DISPLAY1"), None, "a panel's");
+        assert_eq!(slot_named(monitors, ""), None, "an unshown monitor's");
+    }
+
+    /// **Only an upright output is read from its driver**: the driver is told
+    /// nothing of a turn, so a turned one is duplicated.
+    #[test]
+    fn only_an_upright_output_is_read_from_its_driver() {
+        use lowlat_drivers::ffi::d3d11::DXGI_MODE_ROTATION_ROTATE180;
+
+        assert!(upright(DXGI_MODE_ROTATION_IDENTITY));
+        assert!(upright(DXGI_MODE_ROTATION_UNSPECIFIED));
+        for turned in [
+            DXGI_MODE_ROTATION_ROTATE90,
+            DXGI_MODE_ROTATION_ROTATE180,
+            DXGI_MODE_ROTATION_ROTATE270,
+        ] {
+            assert!(!upright(turned), "turned {turned} read from its driver");
+        }
     }
 
     /// **The host's own display is asked for as `virtual`**, whatever the
@@ -3399,6 +3530,159 @@ mod tests {
         publish_own(None);
         assert_eq!(source, expect);
         assert!(pictured, "nothing presented");
+    }
+
+    /// Open the output `name` as a stream opens it -- on its own adapter's
+    /// device, NVIDIA's encoder at its picture's size -- and hand it to
+    /// `with`, the encoder outliving it.
+    fn on_nvenc<R>(name: &str, with: impl FnOnce(&mut Display) -> R) -> R {
+        use lowlat_encode::nvenc;
+
+        let output = Display::locate(Some(name)).expect("its output");
+        let (width, height, _) = Display::shape_of_display(Some(name)).expect("its picture");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width,
+                height,
+                fps: 60,
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        let mut display = Display::open(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            Register::Nvenc(&encoder),
+        )
+        .expect("the display");
+        with(&mut display)
+    }
+
+    /// A picture by the first present, as the loop's first tick takes one: a
+    /// present before any picture is one of the same picture, and the picture
+    /// is what the acquire converts.
+    fn a_picture(display: &mut Display) -> bool {
+        display.wait_present(500) == Some(true)
+            && display.acquire().is_ok()
+            && display.converted().is_ok_and(|got| got.is_some())
+    }
+
+    /// **Any monitor of the driver is read from it where its frames can be
+    /// taken, and duplicated where they cannot** -- not the host's own display
+    /// alone: one plugged by this test and never published as the host's,
+    /// opened by its name as any display is. `LOWLAT_EXPECT` says which:
+    /// `direct` run as the system account, `duplication` as an ordinary user.
+    #[test]
+    #[ignore = "requires the display driver and the vendor's GPU; run as the system account and as a user"]
+    fn any_monitor_of_the_driver_is_read_from_it_where_it_can_be() {
+        use lowlat_vdd_ctl::{Lifetime, Mode};
+
+        let expect = std::env::var("LOWLAT_EXPECT").expect("LOWLAT_EXPECT, direct or duplication");
+        publish_own(None);
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(1920, 1080, 60), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        std::thread::sleep(core::time::Duration::from_millis(1000));
+        let (source, pictured) = on_nvenc(&monitor.name, |display| {
+            let source = if display.direct.is_some() {
+                "direct"
+            } else {
+                "duplication"
+            };
+            (source, a_picture(display))
+        });
+        println!(
+            "slot {} {} read through the {source}, a picture {pictured}",
+            monitor.slot, monitor.name
+        );
+        assert_eq!(source, expect);
+        assert!(pictured, "nothing presented");
+    }
+
+    /// **A turned monitor of the driver is duplicated, and a turn while it is
+    /// read from the driver is a rebuild**: the driver is told nothing of a
+    /// turn, so its pictures cannot say one happened. One plugged by this
+    /// test and turned a quarter as the display settings turn one, unsaved:
+    /// opened turned, it is duplicated with the turn declared; opened upright
+    /// it is read from the driver, and turned then, the slow look at the
+    /// output asks for the rebuild. Run as the system account.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU and the system account; turns a monitor"]
+    fn a_turned_monitor_of_the_driver_is_duplicated() {
+        use lowlat_vdd_ctl::{Lifetime, Mode};
+
+        let mode = (1920, 1080, 60);
+        let pause = core::time::Duration::from_millis(1000);
+        publish_own(None);
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(
+                Mode::new(mode.0, mode.1, mode.2),
+                Lifetime::Bound,
+                false,
+                None,
+            )
+            .expect("a monitor");
+        let name = monitor.name;
+        std::thread::sleep(pause);
+        assert!(
+            set_at_desk(&name, mode, true, false),
+            "the monitor would not turn"
+        );
+        std::thread::sleep(pause);
+        let (turned_direct, turn) = on_nvenc(&name, |display| {
+            (
+                display.direct.is_some(),
+                display.place().map(|p| p.rotation),
+            )
+        });
+        assert!(
+            set_at_desk(&name, mode, false, false),
+            "the monitor would not turn back"
+        );
+        println!("turned: read from its driver {turned_direct}, the turn declared {turn:?}");
+        std::thread::sleep(pause);
+        let (upright_direct, rebuilt) = on_nvenc(&name, |display| {
+            let direct = display.direct.is_some();
+            assert!(
+                set_at_desk(&name, mode, true, false),
+                "the monitor would not turn"
+            );
+            let began = Time::now();
+            let mut rebuilt = false;
+            while !rebuilt && clock::elapsed_ms(began) < 2000.0 {
+                std::thread::sleep(core::time::Duration::from_millis(100));
+                display.attached();
+                rebuilt = display.take_resize();
+            }
+            (direct, rebuilt)
+        });
+        assert!(
+            set_at_desk(&name, mode, false, false),
+            "the monitor would not turn back"
+        );
+        println!("upright: read from its driver {upright_direct}, a turn rebuilt it {rebuilt}");
+        assert!(!turned_direct, "a turned monitor read from its driver");
+        assert!(
+            matches!(turn, Some(Rotation::Deg90 | Rotation::Deg270)),
+            "the turn not declared"
+        );
+        assert!(
+            upright_direct,
+            "an upright monitor not read from its driver"
+        );
+        assert!(rebuilt, "a turn under a read from the driver went unseen");
     }
 
     /// A window over a whole output whose pointer is the test's own: made and

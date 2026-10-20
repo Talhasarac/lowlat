@@ -1290,16 +1290,20 @@ pub struct Declared {
     pub limit: Option<(u32, u32)>,
 }
 
-/// The refresh the host's own display is put at: the one asked of it, else
-/// the stream's frame-rate ceiling, and 60 when that is zero as well. **A
-/// display composing faster than the stream takes pictures composes pictures
-/// nobody is sent**, and the refresh a client states is a fixed number rather
-/// than a reading of its screen.
-pub fn own_refresh(asked_fps: u32, own: OwnDisplay) -> u32 {
+/// The refresh the host's own display is held at: the one asked of it, else
+/// the stream's frame-rate ceiling. **A display composing faster than the
+/// stream takes pictures composes pictures nobody is sent**, and the refresh
+/// a client states is a fixed number rather than a reading of its screen.
+///
+/// **None when neither is asked**: the display's own refresh then stands --
+/// the one the system restores for it as it is plugged, 60 where it restores
+/// none, and whatever its display settings set after -- and the stream paces
+/// from it, as from any display's.
+pub fn own_refresh(asked_fps: u32, own: OwnDisplay) -> Option<u32> {
     match (own.refresh_hz, asked_fps) {
-        (0, 0) => DEFAULT_FPS,
-        (0, asked) => asked,
-        (refresh, _) => refresh,
+        (0, 0) => None,
+        (0, asked) => Some(asked),
+        (refresh, _) => Some(refresh),
     }
 }
 
@@ -2984,26 +2988,32 @@ const DEFAULT_FPS: u32 = 60;
 
 #[cfg(test)]
 mod own_tests {
-    use super::{DEFAULT_FPS, Declared, OwnDisplay, own_refresh, own_size};
+    use super::{Declared, OwnDisplay, own_refresh, own_size};
 
     /// **The refresh asked of the display, else the stream's ceiling, else
-    /// sixty**: a display composing faster than the stream takes pictures
-    /// composes pictures nobody is sent.
+    /// none -- the display's own**: a display composing faster than the
+    /// stream takes pictures composes pictures nobody is sent, and with
+    /// nothing asked a refresh set in its display settings stands rather than
+    /// being put back.
     #[test]
-    fn the_refresh_is_the_one_asked_else_the_ceiling_else_sixty() {
+    fn the_refresh_is_the_one_asked_else_the_ceiling_else_the_displays_own() {
         let none = OwnDisplay::default();
-        assert_eq!(own_refresh(0, none), DEFAULT_FPS);
-        assert_eq!(own_refresh(144, none), 144);
+        assert_eq!(
+            own_refresh(0, none),
+            None,
+            "a refresh nobody asked for held"
+        );
+        assert_eq!(own_refresh(144, none), Some(144));
         let asked = OwnDisplay {
             refresh_hz: 90,
             ..none
         };
         assert_eq!(
             own_refresh(144, asked),
-            90,
+            Some(90),
             "the display's own request lost"
         );
-        assert_eq!(own_refresh(0, asked), 90);
+        assert_eq!(own_refresh(0, asked), Some(90));
     }
 
     /// **The size asked of the display wins; else an owner's, into an empty

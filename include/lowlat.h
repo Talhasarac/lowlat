@@ -967,7 +967,9 @@ typedef struct lowlat_host_video_config {
     uint32_t virtual_height;
     /// The host's own display's refresh (minor 27). **Zero means the frame
     /// rate's ceiling, `fps`**, so the display composes no picture the stream
-    /// would not take. Otherwise 24 to 480.
+    /// would not take; **with `fps` zero too, the display's own refresh**,
+    /// which a person may set in its display settings, 60 when it is first
+    /// plugged with none to restore. Otherwise 24 to 480.
     uint32_t virtual_hz;
 } lowlat_host_video_config;
 

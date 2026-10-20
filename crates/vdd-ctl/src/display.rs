@@ -12,10 +12,11 @@ use windows_sys::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
     DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL,
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS,
-    QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig, SDC_ALLOW_CHANGES, SDC_APPLY,
-    SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG, SetDisplayConfig,
+    DISPLAYCONFIG_ROTATION_IDENTITY, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+    QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS, QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
+    SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
+    SetDisplayConfig,
 };
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -32,7 +33,12 @@ pub(crate) struct Shown {
     /// The display's top left on the desktop.
     pub(crate) x: i32,
     pub(crate) y: i32,
+    /// **The monitor's own mode, turned or not**: the configuration gives a
+    /// turned display's source at the sides the monitor lists and puts the
+    /// turn on its path, where the desktop's pixels have them swapped.
     pub(crate) mode: Mode,
+    /// Turned on the desktop, by its display settings or a program.
+    pub(crate) turned: bool,
 }
 
 /// The configuration, as asked.
@@ -133,6 +139,7 @@ pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
         x: source.position.x,
         y: source.position.y,
         mode: Mode::new(source.width, source.height, refresh_hz),
+        turned: path.targetInfo.rotation != DISPLAYCONFIG_ROTATION_IDENTITY,
     })
 }
 

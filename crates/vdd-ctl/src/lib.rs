@@ -104,8 +104,11 @@ pub struct Monitor {
     pub restore: bool,
     /// Shown on the desktop.
     pub active: bool,
-    /// The mode now when shown, else the one the driver holds for it.
+    /// The mode now when shown, else the one the driver holds for it: the
+    /// monitor's own, turned or not.
     pub mode: Mode,
+    /// Turned on the desktop, by its display settings or a program.
+    pub turned: bool,
     /// Its top left on the desktop, when shown.
     pub x: i32,
     pub y: i32,
@@ -163,6 +166,25 @@ impl Controller {
         restore: bool,
         slot: Option<u8>,
     ) -> Result<Monitor, Error> {
+        self.plug_with(mode, lifetime, restore, slot, false)
+    }
+
+    /// Plug a monitor bound to this handle at `mode`'s size, **at the refresh
+    /// the system restores for it** -- the one its display settings last saved
+    /// for the set of monitors it joins -- and at `mode` whole where the
+    /// system restores none, or another size.
+    pub fn plug_at_size(&mut self, mode: Mode, slot: Option<u8>) -> Result<Monitor, Error> {
+        self.plug_with(mode, Lifetime::Bound, false, slot, true)
+    }
+
+    fn plug_with(
+        &mut self,
+        mode: Mode,
+        lifetime: Lifetime,
+        restore: bool,
+        slot: Option<u8>,
+        any_refresh: bool,
+    ) -> Result<Monitor, Error> {
         if !mode.is_valid() {
             return Err(Error::Mode);
         }
@@ -198,6 +220,7 @@ impl Controller {
             plugged.os_adapter_luid,
             plugged.os_target_id,
             Some(mode),
+            any_refresh,
             kept,
             deadline,
         );
@@ -221,13 +244,19 @@ impl Controller {
 
     /// Wait for the system to show the monitor at `slot`, making it active
     /// when the system does not, then put it at `mode` -- which a saved
-    /// arrangement may have overruled.
+    /// arrangement may have overruled. With `any_refresh`, `mode`'s size at
+    /// whatever refresh the system has it at stands.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one monitor's place, what it is to be put at, and the bound"
+    )]
     fn show(
         &self,
         slot: u8,
         adapter: u64,
         target: u32,
         mode: Option<Mode>,
+        any_refresh: bool,
         kept: bool,
         deadline: Instant,
     ) -> Result<(), Error> {
@@ -243,7 +272,14 @@ impl Controller {
         let Some(mode) = mode else {
             return Ok(());
         };
-        if shown.mode == mode {
+        let at = |shown: &display::Shown| {
+            if any_refresh {
+                (shown.mode.width, shown.mode.height) == (mode.width, mode.height)
+            } else {
+                shown.mode == mode
+            }
+        };
+        if at(&shown) {
             return Ok(());
         }
         let save = kept && display::others_active(adapter);
@@ -256,11 +292,7 @@ impl Controller {
         // whenever the system has the monitor at another, until the bound.
         loop {
             let settle = (Instant::now() + RESETTLE).min(deadline);
-            if wait(settle, || {
-                display::shown(adapter, target).filter(|shown| shown.mode == mode)
-            })
-            .is_some()
-            {
+            if wait(settle, || display::shown(adapter, target).filter(at)).is_some() {
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -324,12 +356,12 @@ impl Controller {
         }
         let (adapter, target) = (entry.os_adapter_luid, entry.os_target_id);
         // Shown first, so the system can be asked what it offers.
-        self.show(slot, adapter, target, None, kept, deadline)?;
+        self.show(slot, adapter, target, None, false, kept, deadline)?;
         let name = display::shown(adapter, target)
             .ok_or(Error::NotReady(slot))?
             .name;
         if display::offers(&name, mode) {
-            self.show(slot, adapter, target, Some(mode), kept, deadline)?;
+            self.show(slot, adapter, target, Some(mode), false, kept, deadline)?;
         } else {
             let plugged = self.device.replug(slot, mode)?;
             self.show(
@@ -337,6 +369,7 @@ impl Controller {
                 plugged.os_adapter_luid,
                 plugged.os_target_id,
                 Some(mode),
+                false,
                 kept,
                 deadline,
             )?;
@@ -373,6 +406,7 @@ impl Controller {
             restore: entry.flags & Entry::RESTORE != 0,
             active: shown.is_some(),
             mode: shown.as_ref().map_or(held, |shown| shown.mode),
+            turned: shown.as_ref().is_some_and(|shown| shown.turned),
             x: shown.as_ref().map_or(0, |shown| shown.x),
             y: shown.as_ref().map_or(0, |shown| shown.y),
             name: shown.map(|shown| shown.name).unwrap_or_default(),

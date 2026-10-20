@@ -113,8 +113,9 @@ fn show(monitor: &Monitor) {
         (false, _, false) => "bound to another program",
     };
     if monitor.active {
+        let turned = if monitor.turned { " turned" } else { "" };
         println!(
-            "slot {}: {} at {},{} {} ({lifetime})",
+            "slot {}: {}{turned} at {},{} {} ({lifetime})",
             monitor.slot, monitor.mode, monitor.x, monitor.y, monitor.name
         );
     } else {
