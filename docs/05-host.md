@@ -143,6 +143,15 @@ Rules:
   falling from 18 a second to 6 and their latency from 1.5 ms to up to 9. And **a driver whose
   process ended answers nothing**: its wait runs to the refresh, as a still desktop's does, until
   the output's departure rebuilds the stream; answering at once spun the loop meanwhile.
+  *Amended 2026-10-20, at W3.8:* **any monitor of the host's display driver is read so**, not
+  its own display alone -- one plugged through `lowlatd display`, the controller's own program or
+  another program's handle -- its slot found in the driver's list by the output's name as the
+  display opens; one the driver does not list, or whose frames cannot be taken, is duplicated as
+  before. **And only while it stands upright.** The driver is told nothing of a turn, so the
+  pictures of a turned monitor say nothing of one: a turned output is duplicated, its turn
+  declared as any display's is, and a turn under a read from the driver -- the host's own
+  display's included -- is seen by the output's once-a-second look and rebuilt onto the
+  duplication, until a turned picture read from the driver has been checked.
 - **On Windows the lock screen and the secure attention screen are drawn on the primary display
   alone** (*found 2026-10-16, at W3.5's checks*). A guest watching another display -- the host's
   own beside a lit panel -- sees black while they are up, though the stream goes on, follows the

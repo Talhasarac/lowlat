@@ -11,7 +11,9 @@ checked on the development machine and closed; W3's gate is next. *Amended 2026-
 AMD's encoder, is added and planned at its interview; it waits on no other step. Built the same
 day; its live checks are next. *Amended 2026-10-20:* W2.7's live checks run on two AMD GPUs,
 two faults found and fixed, and W2.7 closed; what the gate asked and was not run is named in its
-entry.
+entry. *Amended 2026-10-20:* W3.8 -- every monitor of the driver read straight from it, and the
+desk's own settings of the host's display left to it -- added after a review of the driver,
+built and checked the same day; W3's gate follows it.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1181,6 +1183,15 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   behind it: where outputs are read, and in the stream's check each second that its display is
   still there. A virtual display lists its monitor as a panel does. Any monitor's arrival clears
   the dead output.
+  *Amended 2026-10-20, at W3.8 (the maintainer's decisions):* **what nobody asked for is the
+  desk's.** The display holds its size, and its refresh only where one is asked -- `virtual_hz`
+  or a frame-rate ceiling, a guest's included; with neither, the refresh is the display's own:
+  it is plugged for its size alone, the system restoring the refresh its display settings last
+  saved, 60 where there is none, and a refresh set there after stands, the stream pacing from it.
+  Before, 60 was put back over a refresh a person set, at once. **A display turned at the desk
+  is left turned**: a person may turn it freely in the display settings, nothing is put on it
+  while it is turned, and it streams through the duplication (W3.8). A guest's turn stays
+  refused until a turned picture read from the driver has been checked.
 - **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
   once, with a fence of its device, and publishes their handles in a section the host maps; the
   host takes the handles from the driver's process and keeps a view per buffer until the
@@ -1238,6 +1249,9 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   in the machine, the driver names the first hardware GPU in the system's high-performance order,
   at its start and before any monitor. The host never names one: it builds on the GPU each
   swapchain reports, the encoder following the display.
+  *Checked 2026-10-20:* the newest display class in the pinned kit (1.10) still names one render
+  GPU per adapter; a GPU of its own for each monitor would take a device of the driver's per
+  GPU, each its own adapter. Not taken.
 - **The controller is a program of its own too** (*added 2026-10-17, at W3.6's review*).
   `lowlat-vdd` takes the commands `lowlatd display` takes, both through one implementation in the
   controller's crate, for a machine that runs no host. **The library's third half built alone is
@@ -1465,6 +1479,9 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   *Amended 2026-10-16, at W3.3's review:* with its pointer, the host's own display reads the
   direct frame whenever the driver answers, and duplicates it otherwise, so W3.5's checks and the
   gate stream it; before this step its pictures would carry no pointer.
+  *Amended 2026-10-20, at W3.8 (the maintainer's decision):* any monitor of the driver reads it,
+  and only while upright -- the driver is told nothing of a turn -- the host's own display's
+  included.
   *Reviewed 2026-10-16, before its build.* **The driver publishes the pointer in the monitor's
   frame section**, after the pictures' page ([11 §1.7](11-drivers.md)): whether a hardware cursor
   is set up and whether it is visible, and the shape -- its kind, size, row pitch, hotspot and the
@@ -1667,6 +1684,39 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   every ABI gate green. The driver installed over the one it replaces in about a second, no
   reboot owed. Both bars: on Windows tests 1364 passed, none failed; on Linux 1373 passed with
   the two that need a `localhost` answering on both families.
+- [x] **W3.8 every monitor of the driver read straight from it, and the desk's settings left to
+  it**: a monitor of the host's display driver that the host captures -- one plugged through
+  `lowlatd display`, `lowlat-vdd` or another program's handle -- read through its frame page as
+  the host's own display is, its slot found in the driver's list by the output's name; duplicated
+  where the driver does not answer or its frames cannot be taken, and while the output is turned,
+  a turn seen under a direct read being a rebuild; the controller saying whether a monitor is
+  turned; the host's own display holding only what was asked of it. Checked by a monitor of the
+  driver read straight from it as the system account and duplicated as a user, a turned one
+  duplicated and a turn under a direct read rebuilt, and the host's own display keeping a refresh
+  and a turn set at the desk and a refresh saved there coming back with it; each check broken
+  once.
+  *Added and decided 2026-10-20, after a review of the driver* (the decisions above marked W3.8).
+  The review found the host read only its own display from the driver -- a monitor plugged from
+  the command line, a machine's only display among them, was duplicated though the driver
+  answers any slot's page to the host -- and that the driver is told nothing of a turn: the
+  class's commit carries the target's signal alone, so a turned monitor's pictures cannot say so,
+  and the direct read checked their size only. And the host's own display put back what a person
+  set in its display settings: 60 over a refresh, at once, the change being itself a rebuild.
+  *Built and checked 2026-10-20.* On the development machine, from the build and from one with
+  each fix undone, every check failing on the latter: a monitor plugged by a test and never the
+  host's own, opened by its name, read straight from the driver as the system account and
+  duplicated as a user; turned a quarter as the display settings turn one, it opened duplicated
+  with the quarter turn declared, and turned under a read from the driver, the next look at the
+  output asked for the rebuild. The host's own display, held with no refresh asked, kept 120 set
+  at the desk and took 60 when asked; turned at the desk it was left turned, its mode read as the
+  monitor's own; and a refresh saved at the desk came back with the display plugged again for its
+  size alone. **Measured on the way:** the system's configuration keeps a turned display's source
+  at the monitor's own sides, the turn on its path -- 1920x1080 a quarter turned read 1920x1080
+  there and 1080x1920 as the desktop's pixels -- so the controller's mode was never the turned
+  one, and a turn of the same size was never put back; a swap first written on the opposite
+  premise was caught by the desk's check. The name's match, the upright test and the refresh
+  rule are tests of their own, each broken once. Both bars: on Windows tests 1391 passed, none
+  failed; on Linux 1385 passed with the two that need a `localhost` answering on both families.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1680,7 +1730,8 @@ on the LAN and one on a Windows machine:
   no stop error, no blank beyond a swapchain's replacement;
 - the controller: an unelevated program plugs, re-modes and unplugs a monitor of its own beside
   the host's, and is refused the host's and the frame interface; a kept monitor made through
-  `lowlatd display` comes back after a reboot where it was;
+  `lowlatd display` comes back after a reboot where it was; *amended 2026-10-20, at W3.8:* and,
+  asked for by a guest, streams straight from the driver;
 - two other vendors' virtual displays streamed through desktop duplication, an established
   host's own among them;
 - **the comparison decides the host's default**: in one session at 60, 120 and 240 Hz,
@@ -1711,6 +1762,11 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-20: W3.8 added, built and checked: every monitor of the driver read straight from it
+  while upright, a turn under the read a rebuild; the host's own display keeping a refresh and a
+  turn set at the desk; one GPU per adapter checked against the newest class
+  ([05 §2](05-host.md), [06 §3, §11, §14](06-api.md) and [11 §1.5, §1.6](11-drivers.md)
+  amended).
 - 2026-10-20: W2.7 closed: clients on Windows, macOS (native and in a browser) and Android.
 - 2026-10-20: W2.7 checked on two AMD GPUs: a frame read in place goes back once the encoder is
   done with it, and the encoder is let go unended on a removed device ([05 §2](05-host.md),

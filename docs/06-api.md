@@ -275,7 +275,7 @@ whole:
 | `full_fps` | yes | Emit at `fps` even when the picture has not changed. **Clearing it is a permission, not an instruction** -- there is no damage signal here, so nothing yet skips a repeated picture, and continuing to send costs bitrate rather than being wrong. |
 | `output` | yes | The exception in cost rather than in kind: a picture from another output cannot be absorbed into a stream built for one, so it rebuilds around the new source for **one coded refresh** and every guest keeps its seat and its channel. `virtual` is the host's own display, plugged when it is asked for and kept for the host's life (Windows alone; refused elsewhere, at the call). |
 | `virtual_width`, `virtual_height` | yes | The host's own display's size, both or neither (minor 27). **Zero lets the host decide**: the size an owner states as it joins an empty room, else the size the display has, 1920x1080 when first plugged, either within the largest picture that guest accepts. A size is put through the system's display configuration where the monitor lists it and by plugging the monitor again with it added where it does not; the stream follows as it follows any resize. Refused outside 640x480 to 7680x4320 rather than clamped. Read back as asked, which the display's own size is not: that is the picture's, on the status. |
-| `virtual_hz` | yes | The host's own display's refresh (minor 27). **Zero is the frame rate's ceiling**, `fps`, and 60 where that is zero too: a display composing faster than the stream takes pictures composes pictures nobody is sent. 24 to 480. |
+| `virtual_hz` | yes | The host's own display's refresh (minor 27). **Zero is the frame rate's ceiling**, `fps`, and 60 where that is zero too: a display composing faster than the stream takes pictures composes pictures nobody is sent. 24 to 480. (*Amended 2026-10-20, at W3.8*: where `fps` is zero too, **the display's own refresh**, which nothing puts back: the one the system restores for it as it is plugged -- the last its display settings saved -- 60 where it restores none, and whatever those settings set after, the stream pacing from it as from any display. Before, 60 was put back over a refresh a person set.) |
 **A configuration nobody filled in is not a zeroed one.** Every enumerated field here is
 validated rather than clamped, so a structure the caller zeroed is a *valid* request for the
 first variant of each -- including the most aggressive congestion level -- and the boundary
@@ -1532,6 +1532,11 @@ rather than kept: `LOWLAT_CG_LEVEL_LEGACY` became `LOWLAT_CG_LEVEL_AGGRESSIVE` b
 value never selected an older scheme and the name said it did. The value did not move and the
 behaviour did not change; only the name stopped misdescribing it.
 
+**`virtual_hz` zero beside a zero `fps` changed meaning** (*2026-10-20*, W3.8): it held the host's
+own display at 60, and is now the display's own refresh, which a person may set ([§3](#3-host)).
+No byte moved and no minor marks it: a behaviour the host half was free to correct before 1.0,
+as minor 27 records.
+
 **`lowlat_rumble_event`'s motors became `low` and `high`** (*2026-09-28*), from `large` and
 `small`: one of Windows' own headers defines `small` as a macro, so a program that included
 the platform's headers whole, as most do, could not include this one after them. No byte
@@ -1634,4 +1639,7 @@ seated, and again whenever nothing is lit; the size at a join is clamped to that
 picture; the enumeration lists the display as `virtual`, the system's name for it beside that,
 and reading the configuration back says `virtual` while it is captured; off Windows the fields
 are accepted, nothing is plugged, and `virtual` is refused. *Built at W3.2 (minor 27), the
-host's display listed and asked for as `virtual`.*
+host's display listed and asked for as `virtual`.* *Amended 2026-10-20, at W3.8:* with no cap
+either, the refresh is the display's own -- a person may set it in its display settings, and it
+comes back with the display -- and the stream's rate follows it; the size stays the host's, and
+a display turned at the desk is left turned.

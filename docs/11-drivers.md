@@ -3,7 +3,8 @@
 **Status:** planned 2026-10-15, at W3's interview; the display's driver and its package built
 the same day (W3.0), and its controller (W3.1); W3.2 to W3.5 built and checked 2026-10-16, and
 the controller as a program of its own (W3.6) and the review's fixes (W3.7) built 2026-10-17;
-W3's gate to come. Built by
+every monitor read straight from the driver, and the desk's settings of the host's display left
+to it (W3.8), built and checked 2026-10-20; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -158,15 +159,30 @@ an adapter's identifier changes across boots (§1.7).
   program presented on it, measured -- and a bound monitor's unsaved mode does not survive it, so
   the controller puts the mode again whenever the system has the monitor at another, until its
   bound.
+  *Amended 2026-10-20, at W3.8:* **a monitor reports whether it is turned**, its mode the
+  monitor's own either way: the system's configuration keeps a turned display's source at the
+  sides the monitor lists and puts the turn on its path, where the desktop's pixels have the sides
+  swapped -- measured, a quarter turn of 1920x1080 read back 1920x1080 with the turn on the path
+  and 1080x1920 as the desktop's pixels. **A plug may ask for a size alone**: the refresh the
+  system restores with the set's arrangement -- the last its display settings saved -- stands,
+  and the plug's own is put where it restores none or another size.
 - **The host's display holds its mode** for as long as the host runs: another monitor's arrival
   and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
   puts its own back whenever the system's differs.
+  *Amended 2026-10-20, at W3.8:* **its size, and its refresh only where one is asked** -- the
+  configuration's, or a frame-rate ceiling, a guest's included ([06 §3](06-api.md)). With none,
+  the refresh is the display's own: it is plugged for a size alone, and whatever its display
+  settings set after stands, the stream pacing from it. **Turned at the desk, it is left as it
+  is**: nothing is put on it while it is turned, and it streams through the duplication
+  ([05 §2](05-host.md)). Before, a refresh set in its display settings was put back at once.
 
 ### §1.6 Pictures
 
 The driver converts nothing: formats, depth, full chroma and scaling stay the host's, so a change
 to them never re-signs the driver. The display is standard dynamic range, and every buffer is
-eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)):
+eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)) -- *amended
+2026-10-20, at W3.8:* of any of the driver's monitors it captures, not its own display's alone,
+**while the monitor stands upright**, since the driver is told nothing of a turn:
 
 - **Per swapchain**, the driver shares each distinct buffer once, read-only, with a fence of the
   device the swapchain was given, and publishes their handles in a section of its own. The host
@@ -392,7 +408,12 @@ display reporting DisplayPort read as virtual by its adapter, live beside a pane
 the pictures skipped counted across the frame number's wrap; an unplug held by a busy file
 leaving the monitor and its line both in place, and failing with the old order (§1.9). The
 unplugging of a refused plug is built but could not be forced: the system here shows a plugged
-monitor before a plug returns.
+monitor before a plug returns. **Every monitor read from the driver is built and checked**
+(W3.8, 2026-10-20): a monitor of the driver that is not the host's own read straight from it as
+the system account and duplicated as a user; turned, duplicated with its turn declared, and a
+turn under a read from the driver rebuilt (§1.6); the host's own display keeping a refresh and a
+turn set at the desk, and a refresh saved there coming back with it (§1.5) -- each check failing
+with its fix undone.
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display.

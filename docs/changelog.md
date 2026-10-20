@@ -3,6 +3,52 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - W3.8 built and checked: every monitor of the driver read straight from it
+
+### Changed
+- **Any monitor of the host's display driver is read straight from the driver**, not the
+  host's own display alone: one plugged through `lowlatd display`, `lowlat-vdd` or another
+  program's handle, its slot found in the driver's list by the output's name as the display
+  opens ([05 §2](05-host.md), [11 §1.6](11-drivers.md)).
+- **Only while the output stands upright.** The driver is told nothing of a turn, so a turned
+  monitor is duplicated, its turn declared; a turn under a read from the driver is seen by the
+  output's once-a-second look and rebuilt onto the duplication -- the host's own display's
+  included.
+- **The host's own display leaves the desk what nobody asked for** ([11 §1.5](11-drivers.md),
+  [06 §3](06-api.md)): with no refresh asked -- neither `virtual_hz` nor a frame-rate ceiling --
+  it is plugged for its size alone, the system restoring the refresh its display settings last
+  saved, and a refresh set there after stands, the stream pacing from it; turned at the desk, it
+  is left turned. Its size is still held, and a guest's turn still refused.
+- The controller says whether a monitor is turned, its mode the monitor's own either way;
+  `lowlat-vdd list` and `lowlatd display list` mark a turned monitor
+  ([11 §1.5](11-drivers.md)).
+
+### Fixed
+- **A refresh set in the host's own display's settings was put back at once**: with no rate
+  asked, 60 -- the change is itself a rebuild, which held the old one again.
+- **A turn under a read from the driver went unseen**: the picture's size was checked, not the
+  turn, and the declared turn stayed the one at open.
+
+### Checked
+- On the development machine, from the build and from one with each fix undone, every check
+  failing on the latter: a monitor of the driver that is not the host's own, opened by its name,
+  read straight from the driver as the system account and duplicated as a user; turned a quarter
+  as the display settings turn one, duplicated with the turn declared, and turned under a read
+  from the driver, rebuilt at the next look at the output; the host's own display, with no
+  refresh asked, keeping 120 set at the desk and taking 60 when asked, left turned when turned at
+  the desk, and plugged again at a refresh saved there. The name's match, the upright test and
+  the refresh rule are tests of their own, each broken once.
+- The Windows bar: fmt and clippy clean, tests 1391 passed, none failed; the Linux bar clean, tests
+  1385 passed with the two that need a `localhost` answering on both families; the C header
+  regenerated for `virtual_hz`'s words alone, and the ABI gate green on both.
+
+### Measured
+- **The system's configuration keeps a turned display's source at the monitor's own sides** and
+  puts the turn on its path: 1920x1080 turned a quarter read back 1920x1080 with the turn on the
+  path, and 1080x1920 as the desktop's pixels. So a turn of the same size was never put back; a
+  swap first written on the opposite premise was caught by the desk's check before it shipped
+  ([11 §1.5](11-drivers.md)).
+
 ## 2026-10-20 - W2.7 checked: AMD's encoder live on two AMD GPUs
 
 ### Checked
