@@ -1032,10 +1032,12 @@ once, here.
   held across the next composition delayed the system's copy by a whole refresh (8.15 ms against
   0.88 at the median), so a frame read in place goes back as soon as the encoder is done with it;
   and ending the encoder on a device the system had removed faulted the process inside AMD's
-  driver, so it is let go unended ([05 §2](05-host.md)). **Not run as the gate words it**: the
-  clients were the library's demo and an established client on Windows, not macOS or Android;
-  and the second machine's link could not be shaped from here, so its rate change and loss stand
-  on its hardware checks and on the development machine's live legs.
+  driver, so it is let go unended ([05 §2](05-host.md)). The clients: the library's demo, an
+  established client on Windows, and established clients on macOS, native and in a browser --
+  each sequence set states its reorder depth, and the browser's decode was the same on the
+  NVIDIA's stream as on the AMD's. **Not run as the gate words it**: an Android client; and the
+  second machine's link could not be shaped from here, so its rate change and loss stand on its
+  hardware checks and on the development machine's live legs.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
