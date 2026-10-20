@@ -136,7 +136,13 @@ rate with both clocks still the display's. `LOWLAT_SECONDS` leaves cleanly
 after that long, as closing the window does. `LOWLAT_PEER` may name several
 hosts, separated by commas: they are visited in turn on the one handle, each
 for `LOWLAT_SECONDS`, the session with one left and an attempt made to the
-next -- a reconnect, the same host named twice included.
+next -- a reconnect, the same host named twice included. `LOWLAT_MODES` asks
+the host for sizes and turns in order once the session is up, one every
+`LOWLAT_MODE_EVERY` seconds (five by default), the first a period after --
+after the output `LOWLAT_OUTPUT` names was asked for, where it names one, and
+never when the host does not list it: a size such as `1280x720`, `turn` or
+`upright`, comma separated, each sent alone as a settings panel sends it. A
+host takes them from an owner alone.
 
 Once a second a line goes to stdout with the presentation cadence as numbers:
 presents and polls in the second (equal without a cap), new pictures, repeats

@@ -120,6 +120,11 @@ struct Settings {
 	// An output asked for by its identity once the session is up, in place
 	// of the chord's next one; null for none.
 	const char *output;
+	// Sizes and turns asked of the host in order once the session is up,
+	// one every mode_every seconds: "1280x720", "turn" or "upright", comma
+	// separated; null for none.
+	const char *modes;
+	uint64_t mode_every;
 	// The preferences the first attempt starts with.
 	lowlat_client_video_config video;
 

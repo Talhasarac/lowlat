@@ -46,8 +46,14 @@ static bool _handles;
 static MTY_JSON *_outputs;
 static MTY_JSON *_host_config;
 static bool _switching;
-// Whether the output named by LOWLAT_OUTPUT was asked for yet.
+// Whether the output named by LOWLAT_OUTPUT was asked for yet, and whether
+// the host listed it and was asked for it.
 static bool _named;
+static bool _named_asked;
+// How many of LOWLAT_MODES were asked for, and the second the next is due,
+// zero until the session is up.
+static unsigned _moded;
+static uint64_t _mode_due;
 // Whether the session's rate was asked for: set by the present thread, which
 // asks, and cleared by the reconnect.
 static std::atomic_bool _asked;
@@ -197,6 +203,8 @@ static void cycle_output()
 	char *body = MTY_JSONSerialize(_host_config);
 	lowlat_status s = lowlat_client_send_user_data(_client, 11, body, (uint32_t) strlen(body));
 	printf("demo: asked for output %s%s\n", chosen, s == LOWLAT_OK ? "" : ", refused");
+	if (wanted != NULL && s == LOWLAT_OK)
+		_named_asked = true;
 	MTY_Free(body);
 	MTY_JSONDestroy(&_outputs);
 	MTY_JSONDestroy(&_host_config);
@@ -260,6 +268,36 @@ static void ask_rate()
 	int n = snprintf(body, sizeof body, "{\"video\":[{\"encoderFPS\":%u}]}", fps);
 	lowlat_status s = lowlat_client_send_user_data(_client, 11, body, (uint32_t) n);
 	printf("demo: asked the host for %u fps%s\n", fps, s == LOWLAT_OK ? "" : ", refused");
+}
+
+// The next of LOWLAT_MODES: a size, or a turn, alone in the element as a
+// settings panel sends either, so nothing else is changed.
+static void ask_mode()
+{
+	const char *at = config::get().modes;
+	for (unsigned i = 0; i < _moded && at != NULL; i++) {
+		at = strchr(at, ',');
+		at = at != NULL ? at + 1 : NULL;
+	}
+	if (at == NULL || *at == '\0')
+		return;
+	_moded++;
+	char step[32];
+	snprintf(step, sizeof step, "%.*s", (int) strcspn(at, ","), at);
+	char body[96];
+	unsigned width = 0, height = 0;
+	if (strcmp(step, "turn") == 0 || strcmp(step, "upright") == 0) {
+		snprintf(body, sizeof body, "{\"video\":[{\"rotated\":%s}]}",
+			step[0] == 't' ? "true" : "false");
+	} else if (sscanf(step, "%ux%u", &width, &height) == 2) {
+		snprintf(body, sizeof body, "{\"video\":[{\"resolutionX\":%u,\"resolutionY\":%u}]}",
+			width, height);
+	} else {
+		printf("demo: %s is neither a size nor a turn\n", step);
+		return;
+	}
+	lowlat_status s = lowlat_client_send_user_data(_client, 11, body, (uint32_t) strlen(body));
+	printf("demo: asked the host for %s%s\n", step, s == LOWLAT_OK ? "" : ", refused");
 }
 
 void first_picture()
@@ -621,6 +659,19 @@ void walk(uint64_t seconds, bool established)
 	if (knobs.output != NULL && established && !_named) {
 		_named = true;
 		ask_outputs();
+	}
+	// And the sizes and turns named, one a period, the first a period after
+	// the session is up -- or after an output named above was asked for, so
+	// it is already streaming; never when the host did not list it, or they
+	// would land on whatever display it streams instead.
+	if (knobs.modes != NULL && knobs.mode_every > 0 && established
+		&& (knobs.output == NULL || _named_asked)) {
+		if (_mode_due == 0)
+			_mode_due = seconds + knobs.mode_every;
+		if (seconds >= _mode_due) {
+			_mode_due += knobs.mode_every;
+			ask_mode();
+		}
 	}
 }
 
