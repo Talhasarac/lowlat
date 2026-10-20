@@ -1972,9 +1972,11 @@ pub unsafe extern "C" fn lowlat_host_set_video_config(
             let Some(seam) = held.seam.as_ref() else {
                 return LOWLAT_ERR_INVALID_ARGUMENT;
             };
-            seam.set_video(video);
-            seam.set_own_display(own_display);
-            seam.select_output((!output.is_empty()).then(|| output.to_string()));
+            seam.configure(
+                video,
+                own_display,
+                (!output.is_empty()).then(|| output.to_string()),
+            );
             LOWLAT_OK
         })
     }

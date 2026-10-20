@@ -941,6 +941,12 @@ impl Shared {
         self.captured.store(checksum, Ordering::Release);
     }
 
+    /// Whether `id` is the output being captured.
+    fn names_captured(&self, id: &str) -> bool {
+        let checksum = self.captured.load(Ordering::Acquire);
+        checksum != 0 && lowlat_core::crc32::of(id.as_bytes()) == checksum
+    }
+
     /// Which way the session has turned the captured output, flat when no
     /// session has said.
     fn rotation(&self) -> lowlat_core::video::Rotation {
@@ -1380,6 +1386,9 @@ pub struct Stream {
     /// rebuild and never on a frame, and a channel keeps the name owned by
     /// one side at a time without the stream growing a second mutex.
     outputs: Option<mpsc::Sender<Option<String>>>,
+    /// The output an application's configuration last asked for
+    /// ([`Stream::configure`]); the callers' alone, never the loop's.
+    configured: std::sync::Mutex<Option<String>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -1445,6 +1454,7 @@ impl Stream {
         });
         let (joins, arrivals) = mpsc::channel();
         let (outputs, asked) = mpsc::channel();
+        let configured = std::sync::Mutex::new(config.output.clone());
         let owned = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("lowlat-stream".to_string())
@@ -1454,6 +1464,7 @@ impl Stream {
             shared,
             joins: Some(joins),
             outputs: Some(outputs),
+            configured,
             thread,
         }
     }
@@ -1570,6 +1581,34 @@ impl Stream {
     /// display's own size is not.
     pub fn own_display(&self) -> OwnDisplay {
         self.shared.own_display()
+    }
+
+    /// Take an application's whole video configuration (docs/06-api.md
+    /// section 3): the live part at once, and the host's own display and the
+    /// output **only where they differ from what is asked** -- either is a
+    /// rebuild, and an application changing its bitrate sets the rest again as
+    /// it was, or as it read it back.
+    pub fn configure(&self, video: LiveVideo, own: OwnDisplay, output: Option<String>) {
+        self.set_video(video);
+        if own != self.shared.own_display() {
+            self.set_own_display(own);
+        }
+        let Ok(mut configured) = self.configured.lock() else {
+            return;
+        };
+        // **What reads back is what is captured**, and "whichever this host
+        // picks" is wherever a stream already is: naming the captured output
+        // asks for nothing, unless another request is still on its way, which
+        // the last word has to win over.
+        let here = |id: &str| self.shared.names_captured(id);
+        let settled = configured
+            .as_deref()
+            .map_or(self.shared.captured.load(Ordering::Acquire) != 0, here);
+        if *configured == output || (output.as_deref().is_some_and(here) && settled) {
+            return;
+        }
+        self.select_output(output.clone());
+        *configured = output;
     }
 
     /// Turn the host's own display, once (docs/06-api.md section 14): put
@@ -5042,6 +5081,7 @@ mod tests {
                     shared,
                     joins: Some(joins),
                     outputs: None,
+                    configured: std::sync::Mutex::new(None),
                     thread: Some(thread),
                 },
                 forced,
@@ -5106,6 +5146,7 @@ mod tests {
             shared: Arc::clone(&shared),
             joins: Some(joins),
             outputs: None,
+            configured: std::sync::Mutex::new(None),
             thread: None,
         };
         (shared, stream, arrivals)
@@ -5537,6 +5578,7 @@ mod tests {
             shared: Arc::clone(&shared),
             joins: None,
             outputs: Some(outputs),
+            configured: std::sync::Mutex::new(None),
             thread: None,
         };
 
@@ -5565,6 +5607,122 @@ mod tests {
             "a superseded request was rebuilt onto"
         );
         assert_eq!(shared.output_asked.load(Ordering::Acquire), 3);
+    }
+
+    /// **A configuration set again rebuilds nothing.** An application changing
+    /// its bitrate sets the rest as it was -- or as it read it back, which names
+    /// the output being captured where it asked for none -- and only another
+    /// output, or another request of the host's own display, is a rebuild.
+    #[test]
+    fn a_configuration_set_again_rebuilds_nothing() {
+        let shared = Arc::new(Shared {
+            audio: crate::audio::pool(),
+            sound: SoundCells::new(&test_config(Codec::H264)),
+            held_sound: std::sync::Mutex::new(None),
+            sound_demand: AtomicU32::new(0),
+            sound_epoch: AtomicU32::new(0),
+            sound_live: Arc::new(lowlat_audio::Wanted::default()),
+            seats: core::array::from_fn(|_| Seat::new()),
+            pool: Pool::new(2, 64),
+            encode_us: AtomicU32::new(0),
+            audio_encode_us: AtomicU32::new(0),
+            allowed_bits: AtomicU32::new(0),
+            timing: TimingCells::default(),
+            refreshes: RefreshCells::default(),
+            suppressed: AtomicU32::new(0),
+            picture: AtomicU32::new(0),
+            place_rect: AtomicU64::new(0),
+            place_desktop: AtomicU32::new(0),
+            place_rotation: AtomicU8::new(0),
+            relative: AtomicU32::new(0),
+            commanded: AtomicU64::new(0),
+            cursor: CursorCell::default(),
+            stopping: AtomicU32::new(0),
+            captured: AtomicU32::new(0),
+            output_asked: AtomicU32::new(0),
+            raise: None,
+            video_asked: AtomicU32::new(0),
+            video: std::sync::Mutex::new(LiveVideo::default()),
+            asked_fps: AtomicU32::new(0),
+            own_asked: AtomicU32::new(0),
+            own_display: std::sync::Mutex::new(OwnDisplay::default()),
+            own_turn: std::sync::Mutex::new(None),
+            epoch: AtomicU32::new(0),
+            colour: AtomicU32::new(0),
+            ten_bit: AtomicU32::new(0),
+            chroma_444: AtomicU32::new(0),
+            refused: AtomicU32::new(0),
+        });
+        let (outputs, asked) = mpsc::channel();
+        let stream = Stream {
+            shared: Arc::clone(&shared),
+            joins: None,
+            outputs: Some(outputs),
+            configured: std::sync::Mutex::new(None),
+            thread: None,
+        };
+        let rebuilds = || {
+            (
+                shared.output_asked.load(Ordering::Acquire),
+                shared.own_asked.load(Ordering::Acquire),
+            )
+        };
+        let faster = LiveVideo {
+            bitrate_mbps: 20.0,
+            ..LiveVideo::default()
+        };
+        let sized = OwnDisplay {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 0,
+        };
+
+        stream.configure(LiveVideo::default(), OwnDisplay::default(), None);
+        stream.configure(faster, OwnDisplay::default(), None);
+        assert_eq!(
+            rebuilds(),
+            (0, 0),
+            "a configuration changing only its bitrate asked for a rebuild"
+        );
+        assert_eq!(
+            shared.video_asked.load(Ordering::Acquire),
+            2,
+            "a live change was not taken"
+        );
+
+        shared.publish_captured(Some("card0:DP-2"));
+        stream.configure(
+            faster,
+            OwnDisplay::default(),
+            Some("card0:DP-2".to_string()),
+        );
+        assert_eq!(
+            rebuilds(),
+            (0, 0),
+            "the output being captured, as read back, asked for a rebuild"
+        );
+
+        stream.configure(faster, sized, Some("card1:HDMI-A-1".to_string()));
+        assert_eq!(rebuilds(), (1, 1), "another output and size asked nothing");
+        assert_eq!(requested(&asked), Some(Some("card1:HDMI-A-1".to_string())));
+        stream.configure(faster, sized, Some("card1:HDMI-A-1".to_string()));
+        assert_eq!(rebuilds(), (1, 1), "a request asked again was asked twice");
+
+        // **Its last word wins**: the captured output named again while
+        // another request is on its way is a request of its own.
+        stream.configure(faster, sized, Some("card0:DP-2".to_string()));
+        assert_eq!(
+            rebuilds(),
+            (2, 1),
+            "a request still on its way was left to win over the last one"
+        );
+        // And whichever this host picks, asked after a name, is asked.
+        stream.configure(faster, sized, None);
+        assert_eq!(
+            rebuilds(),
+            (3, 1),
+            "a return to the host's own pick asked nothing"
+        );
     }
 
     /// **The hotspot comes from the one thing this host knows and no driver

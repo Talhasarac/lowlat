@@ -1484,6 +1484,19 @@ impl Admission {
         }
     }
 
+    /// Take an application's whole video configuration, rebuilding only for
+    /// what changed and needs it ([`crate::stream::Stream::configure`]).
+    pub fn configure(
+        &self,
+        video: crate::stream::LiveVideo,
+        own: crate::stream::OwnDisplay,
+        output: Option<String>,
+    ) {
+        if let Some(stream) = self.stream.as_ref() {
+            stream.configure(video, own, output);
+        }
+    }
+
     /// Ask the host's own display for a size and a refresh, zero letting the
     /// host decide.
     pub fn set_own_display(&self, own: crate::stream::OwnDisplay) {
