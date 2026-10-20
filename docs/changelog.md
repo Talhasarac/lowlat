@@ -3,6 +3,49 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - W2.7 checked: AMD's encoder live on two AMD GPUs
+
+### Checked
+- **On the development machine's AMD GPU** (RDNA 2, two compute units, beside the NVIDIA
+  primary): ten minutes each of H.264 and HEVC from its monitor at 1920x1080 and 60 under moving
+  content, read in place, no keyframe asked and no warning; ten minutes each from the host's own
+  display rendered there at 1920x1080 and 120, read in place from its driver, one read caught half
+  written in 142,800 pictures, at the switch to 120 Hz; ten-bit HEVC through the host's conversion
+  from both ([impl-plan-windows.md](impl-plan-windows.md) W2.7).
+- **Mid-session**: a switch between the NVIDIA's monitor and the AMD's, both ways, the guest kept;
+  full chroma granted on the NVIDIA's monitor and dropped on a move to the AMD's; a bottleneck at
+  70 % of the stream's rate -- 26 live cuts in a minute, no keyframe from any, 60 pictures a
+  second at about 6 Mbit/s once settled; 5 % loss for 30 s recovered by resends alone; a keyframe
+  after each frame dropped under a deeper bottleneck, decoding resumed each time; the AMD's driver
+  restarted -- rebuilt on its new device in 2.1 s, the guest kept; the NVIDIA's driver restarted
+  with the host's display on the AMD -- the stream stayed on the AMD, one rebuild of 0.3 s when the
+  system put the display back at its saved mode, the guest kept; the lock screen and the unlock,
+  no keyframe.
+- **On a second machine with an AMD GPU alone** (RDNA 3, Radeon 780M): ten minutes each of H.264
+  and HEVC from its panel at 2560x1440 and 120, read in place, and ten-bit HEVC; the backend's
+  hardware checks there all pass, ten-bit HEVC 70.7 dB luma and 70.1 chroma.
+- The library's demo and an established client on Windows; both CI jobs and the Linux bar.
+
+### Measured
+- The encode at p50 and p99: 4.0 and 5.2 ms for H.264, 4.1 and 5.3 for HEVC at 1080p60 on the
+  RDNA 2 part, 3.0 and 5.0 at 1080p120 from the host's own display there; 3.5 and 3.9, 3.6 and
+  4.0 at 1440p120 on the 780M, ten-bit 4.3 and 4.5.
+- Against an established host on the same monitor -- the same client and content, one host at a
+  time, the encode each reports -- at p50 and p95: 3.91 and 4.69 ms against 5.77 and 6.12 on the
+  RDNA 2 part, 3.55 and 3.82 against 4.11 and 4.20 on the 780M.
+- Composition to hand-over at p50 and p95: 0.93 and 1.6 ms from the RDNA 2 part's monitor, 0.06
+  and 0.45 from the 780M's panel.
+
+### Found
+- On the RDNA 2 part beside an NVIDIA primary, some compositions finish a whole refresh late --
+  5 to 10 % at 120 a second, 1 to 5 % at 60 -- in the device span of the host's conversion as in
+  a read in place, so below the host; not seen on the 780M driving its own panel.
+- Colour noise in 8-pixel squares at 1080p60 codes at about 23 Mbit/s whatever the target: a rate
+  check needs content a rate can fit.
+- A bottleneck at 40 % of the stream's rate stalls the stream for as long as it lasts -- the
+  shared congestion controller rather than the encoder, which took every cut; not yet compared on
+  the other encoder.
+
 ## 2026-10-19 - W2.7 built: AMD's encoder, reading the capture in place
 
 ### Built

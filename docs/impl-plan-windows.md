@@ -9,7 +9,8 @@ controller as a program of its own -- and W3.7 -- the review's fixes -- are buil
 waits for W2.5, reviewed the same day. *Amended 2026-10-18:* W2.5, the service, is built,
 checked on the development machine and closed; W3's gate is next. *Amended 2026-10-19:* W2.7,
 AMD's encoder, is added and planned at its interview; it waits on no other step. Built the same
-day; its live checks are next.
+day; its live checks are next. *Amended 2026-10-20:* W2.7's live checks run on two AMD GPUs,
+two faults found and fixed; what the gate asked and was not run is named in its entry.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1018,6 +1019,23 @@ once, here.
   collect at p50; the desktop at its pace through each path; the host's own display read in place
   as the system account, no read caught on time under a load at 120 and 19 of 20 with each picture
   handed over 30 ms late; each check broken once.
+  *Checked 2026-10-20* ([changelog](changelog.md)): on the development machine's AMD GPU, ten
+  minutes each of H.264 and HEVC from its monitor and from the host's own display rendered there,
+  read in place, and ten-bit HEVC through the host's conversion from both; mid-session the switch
+  between the two GPUs' monitors with the guest kept, full chroma granted and dropped, a
+  bottleneck's live rate cuts with no keyframe, loss recovered by resends and a keyframe after
+  each dropped frame, the AMD's driver restarted, the NVIDIA's driver restarted with the host's
+  display on the AMD, and the lock screen; the encode below an established host's at p50 and p95
+  on the same monitor; on a second machine with an AMD GPU alone, both codecs and ten-bit from its
+  panel, the encode below an established host's there, and the backend's hardware checks; both CI
+  jobs and the Linux bar. **The live checks found two faults, both fixed**: a duplication frame
+  held across the next composition delayed the system's copy by a whole refresh (8.15 ms against
+  0.88 at the median), so a frame read in place goes back as soon as the encoder is done with it;
+  and ending the encoder on a device the system had removed faulted the process inside AMD's
+  driver, so it is let go unended ([05 §2](05-host.md)). **Not run as the gate words it**: the
+  clients were the library's demo and an established client on Windows, not macOS or Android;
+  and the second machine's link could not be shaped from here, so its rate change and loss stand
+  on its hardware checks and on the development machine's live legs.
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -1689,6 +1707,9 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-20: W2.7 checked on two AMD GPUs: a frame read in place goes back once the encoder is
+  done with it, and the encoder is let go unended on a removed device ([05 §2](05-host.md),
+  [05 §4](05-host.md) and [06 §3](06-api.md) amended, [09 §8](09-compatibility.md) graded).
 - 2026-10-19: W2.7 probed: the encoder's own thread waits for each picture, latency-constrained
   rate within the buffer, the delimiter and the forced type written with every picture; on an AMD
   GPU the encoder converts the captured picture in its own hardware ([05 §3](05-host.md) amended;

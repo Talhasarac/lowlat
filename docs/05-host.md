@@ -343,6 +343,7 @@ Backends:
 | Backend | Status | Notes |
 |---|---|---|
 | hardware, NVIDIA | shipped | H.264 and HEVC; low-latency preset, variable rate with a one-frame buffer, non-reference frames enabled |
+| hardware, AMD on Windows | shipped (*2026-10-20*) | H.264 and HEVC, HEVC at ten bits from the host's conversion, no full chroma; the low-latency usage, a latency-constrained variable rate with the largest picture bounded by the buffer; at eight bits the captured picture read in place and converted in the encoder's own hardware (§3) |
 | hardware, open stack | shipped | AMD and Intel parts, reached through the display interface |
 | hardware, Vulkan Video | explicit choice | H.264 and HEVC at either depth, half-resolution chroma only; conversion and encode on one interface, where the conversion may write the encoder's picture |
 | software | later | dynamically loaded, resolved by codec name; the path for machines without hardware encode, and the path continuous integration runs |
@@ -367,6 +368,13 @@ stream, where passing over costs nobody anything. The conversion
 runs on the compute interface by default and falls back to the GL interface on devices
 without it, which keeps old parts capturable; the GL interface cannot feed the NVIDIA
 encoder, and machines old enough to need it are served by the open stack anyway.
+*Added 2026-10-20, at W2.7's gate:* **on Windows the encoder is the captured output's GPU's
+own** -- NVIDIA's or AMD's, chosen by the vendor of the GPU that renders the output, and moved
+with it when a guest switches outputs. An output another GPU renders is refused rather than
+copied across, since a copy between GPUs would be measured in place of the encoder; there is no
+open stack there, so that kind is refused by name. Measured against an established host on the
+same monitor, the same client and content, AMD's encode is below it at p50 and p95 on both AMD
+parts it ran on ([09 §8](09-compatibility.md)).
 
 Codec and colour scope is [00-overview.md](00-overview.md) D7: H.264 and HEVC, 4:2:0, eight
 bits by default and ten when the seated guests ask for it. **A backend that cannot code what

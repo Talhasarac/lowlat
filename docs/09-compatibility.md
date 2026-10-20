@@ -364,6 +364,19 @@ the constraints do not:
 - The vendor dispatch library ships inside the graphics driver and reaches back roughly a
   decade, which is what makes it the right answer there and the wrong one here (§4).
 
+*Added 2026-10-20, at W2.7's checks:* **hosting on Windows, graded as §2.** Capture is the
+system's duplication of a monitor, or the host's own display read from its driver
+([11-drivers.md](11-drivers.md)); the encoder is the captured output's GPU's own, and an output
+another GPU renders is refused rather than copied across ([05 §4](05-host.md)).
+
+| Part | Encode | Hosts? | Evidence |
+|---|---|---|---|
+| NVIDIA RTX 5060 | NVIDIA's: H.264 and HEVC, ten bits, full chroma | **yes, measured** | the development machine's primary GPU, its monitor and the host's own display |
+| AMD Radeon of a Ryzen 7 9700X (RDNA 2, two compute units), beside an NVIDIA primary | AMD's: H.264 and HEVC, ten-bit HEVC through the host's conversion, no full chroma | **yes, measured** (*2026-10-20*) | its monitor at 1920x1080 and 60 and the host's own display rendered there at 120, ten minutes each codec, read in place: the encode 4.0-4.1 ms at the median at 60, 3.0 at 120, below an established host's on the same monitor; 5-10 % of compositions finish a refresh late on this GPU beside that primary, in any capture path |
+| AMD Radeon 780M (RDNA 3), the machine's only GPU | AMD's, as above | **yes, measured** (*2026-10-20*) | its panel at 2560x1440 and 120, ten minutes each codec, read in place: the encode 3.5-3.6 ms at the median, ten-bit 4.3, below an established host's on the same panel; composition to hand-over 0.06 ms at the median and 0.45 at the 95th percentile |
+| Intel | none built on Windows | **no** | an output it renders is refused; its decoders serve the client side ([§7](#7-guests)) |
+| Other AMD and NVIDIA parts | the same runtimes | **not run** | each runtime is asked at start what the part codes; no other part was run |
+
 ---
 
 ## §9 What a software encoder would and would not fix

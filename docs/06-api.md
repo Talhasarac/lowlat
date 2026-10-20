@@ -289,7 +289,7 @@ Everything in `lowlat_host_config` outside that structure is settled at `lowlat_
 | Field | Why not live |
 |---|---|
 | `codec` | One encode serves every seat and a session has one video configuration ([00 §D11](00-overview.md)). |
-| `encoder` | A consequence of where the display is rather than a preference, and changing it rebuilds the pipeline. Absent means **follow the display**, which is the right default; choosing one is an override. |
+| `encoder` | A consequence of where the display is rather than a preference, and changing it rebuilds the pipeline. Absent means **follow the display**, which is the right default; choosing one is an override. (*Amended 2026-10-20, at W2.7*: on Windows the vendor encoder is **the encoder of the captured output's GPU** -- NVIDIA's on an NVIDIA GPU, AMD's on an AMD GPU -- so it follows the display there as well; an output another GPU renders is refused rather than copied across, and the open kind is refused, there being no open stack to build it on, [05 §4](05-host.md).) |
 | `quality` | One of [`lowlat_quality`](#quality). It is what the encoder is built with, and one encode serves every seat, so moving it under a running session would change the picture every guest is watching on one guest's behalf. |
 | `cg_level` | Every guest's controller is built with it. **Zero is the most aggressive, not "off"**: its thresholds are all zero, so every outstanding fragment classifies stale and congestion is declared on every pass once the send window passes its floor. The default is *sensitive*, and *adaptive* runs the same tuning while reserving a place for host-local signals (§10). |
 | `base_port`, `servers` | Bound and consulted per attempt; moving them under running guests moves nothing that is already connected. |
