@@ -3,6 +3,27 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - W3.10 checked live
+
+### Fixed
+- **A display named as the host lists it was refused**: the host lists an output as `DISPLAYn`
+  and the system's interfaces take `\\.\DISPLAYn`, so `lowlatd` asked for every size and turn by a
+  name no display had -- a size refused as one the display does not list, a turn as no display --
+  and a kept monitor of the display driver named so would have been put as any display. The
+  controller takes either form, and `lowlatd` compares names without the prefix.
+
+### Added
+- **The demo client asks for sizes and turns** (`LOWLAT_MODES`, `LOWLAT_MODE_EVERY`), in order
+  once the session is up, as a settings panel sends each, and never before an output it named was
+  asked for -- nor when the host does not list it.
+
+### Checked
+- Live, the service on this build and the demo a guest of it as an owner: the panel asked for and
+  streamed; 1280x720, a quarter turn, upright and 1920x1080 each put on it 21 to 225 ms after the
+  ask, the stream following each, and 3420x2148, which the panel does not list, refused with its
+  reason. The name's checks each failing before the fix; the panel's hardware check passing again
+  handed the bare name. The Windows bar: tests 1398 passed, none failed.
+
 ## 2026-10-20 - W3.10 built: a guest's mode on any display, put by lowlatd, an owner's alone
 
 ### Changed

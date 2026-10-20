@@ -15,8 +15,8 @@ entry. *Amended 2026-10-20:* W3.8 -- every monitor of the driver read straight f
 desk's own settings of the host's display left to it -- added after a review of the driver,
 built and checked the same day; and W3.9, the turn of the host's own display, added, probed and
 built and checked live after it; W3's gate follows them. *Amended 2026-10-20:* W3.10 -- a
-guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate
-and built; its hardware and live checks, then W3's gate, are next.
+guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate,
+built and checked live; W3's gate is next.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1778,7 +1778,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   settled, then steady, no rebuild after; turned back, the display was upright 64 ms after the
   ask and read straight from its driver again. The maintainer saw the turned picture working at
   the client, and turned it back.
-- [ ] **W3.10 a guest's mode on any display, put by `lowlatd`, an owner's alone**: the library's
+- [x] **W3.10 a guest's mode on any display, put by `lowlatd`, an owner's alone**: the library's
   live setter asking for its output and its own display only where they changed; the turn call
   withdrawn and the minor back at 30; the controller putting a size and a turn on any display by
   the system's name for it; `lowlatd` putting an owner's size and turn on whatever display is
@@ -1809,8 +1809,20 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   its name, keeping its 120, then turned a quarter -- read back at the monitor's own sides, turned
   -- a size it does not list refused, and the panel put back as it was; a monitor of the driver
   plugged as the host's own display, turned a quarter by its name as `lowlatd` turns it, put at
-  2560x1440 while turned and still turned, then turned upright the same way. **Owed**: an owner's
-  request live; then the gate.
+  2560x1440 while turned and still turned, then turned upright the same way.
+  *Checked live 2026-10-20*, the service on this build and the library's demo client a guest of
+  it as an owner, driven with a size and a turn of its own (`LOWLAT_MODES`) where an established
+  client's settings would send them. **The first run found the name wrong**: the host lists an
+  output as `DISPLAYn` and the system's interfaces take `\\.\DISPLAYn`, so every size and turn
+  was refused -- a size as one the display does not list, a turn as no display -- where the
+  hardware check, handed the full name, had passed; and a kept monitor named so would have gone the
+  road of any display. The controller now takes either form and the road compares names without
+  the prefix, each check failing first and passing after, and the panel's check passed again
+  handed the bare name. **Then live**: the guest asked for the panel and the stream moved onto it;
+  1280x720 was put 225 ms after the ask, a quarter turn 179 ms after, upright 21 ms after, and
+  1920x1080 225 ms after -- the stream following each, the turn declared and steady after the
+  duplication settled -- and 3420x2148, which the panel does not list, was refused with its reason.
+  The Windows bar again: tests 1398 passed, none failed. **Owed**: the gate.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 

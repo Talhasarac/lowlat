@@ -6,7 +6,7 @@ the controller as a program of its own (W3.6) and the review's fixes (W3.7) buil
 every monitor read straight from the driver, and the desk's settings of the host's display left
 to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
 built and checked live the same day; a guest's size and turn of any display put by `lowlatd`
-(W3.10) built the same day; W3's gate to come. Built by
+(W3.10) built and checked live the same day; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
