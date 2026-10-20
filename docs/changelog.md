@@ -3,6 +3,45 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - W3.9 built: the turn of the host's own display
+
+### Changed
+- **A guest's turn of the host's own display is put once** ([06 §3](06-api.md)): `lowlatd`
+  relays the settings panel's, an application calls `lowlat_host_turn_own_display` (minor 31),
+  and nothing holds it -- a turn made after, at the desk or asked again, stands. Before, it was
+  refused.
+- **The controller turns a monitor through the system's display configuration**, and puts a
+  mode on a turned one at the desktop's sides, keeping its turn ([11 §1.5](11-drivers.md)).
+- **A turned monitor stays on the duplication** ([05 §2](05-host.md)): its driver's picture
+  checked the same as the duplication's, the pointer's shape the driver hands over turned for the
+  panel.
+
+### Fixed
+- **A turned output looped through rebuilds when duplicated**: the duplication describes its
+  mode at the desktop's sides and its picture at the panel's, and every open compared the two
+  and asked for another -- a turned panel's since the duplication was built, and every turned
+  monitor of the driver's since they were sent there.
+- **A mode put on a turned monitor replugged it and lost the turn**: the desktop's own interface
+  lists and takes a turned display's modes at swapped sides.
+- **The direct frame's comparisons compared it with itself**: the latency A/B and the pointer
+  test opened their duplication through the plain open, which since W3.8 reads any monitor of
+  the driver from it as the system account; each now opens a real duplication and says so.
+
+### Checked
+- On the development machine, each check failing with its fix undone: a turned monitor opened
+  with no rebuild asked and its quarter declared; the host's own display turned a quarter, put at
+  2560x1440 while turned and still turned, turned upright again; the comparisons' duplication
+  side a duplication. A turned monitor's driver picture against the duplication's: 0 of 2,073,600
+  luma samples differing. The Windows bar: fmt and clippy clean, tests 1393 passed, none failed;
+  the Linux bar clean, tests 1386 passed with the two that need a `localhost` answering on both
+  families; the ABI gates at minor 31.
+
+### Measured
+- On a turned display the desktop's own interface lists every mode with its sides swapped,
+  refuses a mode at the monitor's own sides and takes it at the desktop's with the turn kept; a
+  turn through the system's configuration -- the path's rotation, the modes as they are -- is
+  accepted both ways.
+
 ## 2026-10-20 - W3.8 built and checked: every monitor of the driver read straight from it
 
 ### Changed

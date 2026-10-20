@@ -152,6 +152,14 @@ Rules:
   declared as any display's is, and a turn under a read from the driver -- the host's own
   display's included -- is seen by the output's once-a-second look and rebuilt onto the
   duplication, until a turned picture read from the driver has been checked.
+  *Checked 2026-10-20, at W3.9:* **a turned monitor stays on the duplication.** Its driver's
+  picture is the duplication's to the sample, both at the panel's sides, but the pointer's shape
+  the driver hands over is turned for the panel -- every hotspot moved -- where the duplication's
+  is upright, as the pointer a guest is sent must be. **And a turned output's duplication no
+  longer asks for a rebuild as it opens**: the duplication describes its mode at the desktop's
+  sides and hands its picture over at the panel's, and compared as the picture's, every open of a
+  turned output -- a panel's as much as a virtual display's -- asked for another, a stream
+  turning over and over.
 - **On Windows the lock screen and the secure attention screen are drawn on the primary display
   alone** (*found 2026-10-16, at W3.5's checks*). A guest watching another display -- the host's
   own beside a lit panel -- sees black while they are up, though the stream goes on, follows the

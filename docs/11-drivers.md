@@ -166,6 +166,14 @@ an adapter's identifier changes across boots (§1.7).
   and 1080x1920 as the desktop's pixels. **A plug may ask for a size alone**: the refresh the
   system restores with the set's arrangement -- the last its display settings saved -- stands,
   and the plug's own is put where it restores none or another size.
+  *Amended 2026-10-20, at W3.9:* **a monitor is turned through the system's configuration** --
+  its path's rotation changed, every mode supplied as it is -- unsaved for a bound one, saved
+  for a kept one as a mode is; measured, accepted both ways, leaving what a turn at the desk
+  leaves. **And a mode is put on a turned monitor at the desktop's sides**: the desktop's own
+  interface lists a turned display's modes with their sides swapped and refuses one put at the
+  monitor's own (a 1920x1080 mode on a quarter turn refused, 1080x1920 taken with the turn
+  kept), so the controller swaps them there; before, a mode put on a turned monitor replugged it
+  and lost the turn.
 - **The host's display holds its mode** for as long as the host runs: another monitor's arrival
   and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
   puts its own back whenever the system's differs.
@@ -175,6 +183,9 @@ an adapter's identifier changes across boots (§1.7).
   settings set after stands, the stream pacing from it. **Turned at the desk, it is left as it
   is**: nothing is put on it while it is turned, and it streams through the duplication
   ([05 §2](05-host.md)). Before, a refresh set in its display settings was put back at once.
+  *Amended 2026-10-20, at W3.9:* **a turn is never held, and a mode is put keeping it** -- the
+  controller now takes a turned monitor's modes at the desktop's sides. A turn a guest asks is
+  put once ([06 §3](06-api.md)), as one at the desk is; whichever turn came last stands.
 
 ### §1.6 Pictures
 

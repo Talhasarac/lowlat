@@ -13,7 +13,8 @@ day; its live checks are next. *Amended 2026-10-20:* W2.7's live checks run on t
 two faults found and fixed, and W2.7 closed; what the gate asked and was not run is named in its
 entry. *Amended 2026-10-20:* W3.8 -- every monitor of the driver read straight from it, and the
 desk's own settings of the host's display left to it -- added after a review of the driver,
-built and checked the same day; W3's gate follows it.
+built and checked the same day; and W3.9, the turn of the host's own display, added, probed and
+built after it, its live check owed; W3's gate follows them.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1192,6 +1193,12 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   is left turned**: a person may turn it freely in the display settings, nothing is put on it
   while it is turned, and it streams through the duplication (W3.8). A guest's turn stays
   refused until a turned picture read from the driver has been checked.
+  *Amended 2026-10-20, at W3.9 (the maintainer's decision):* **a guest's turn is put once and
+  never held**, as one at the desk is, the last turn made standing: `lowlatd` relays the
+  settings panel's, and an application through a call of the library's (minor 31). A mode is put
+  keeping whatever turn the display has. A turned display still streams through the duplication:
+  its driver's picture checked the same as the duplication's, the pointer's shape the driver hands
+  over turned for the panel.
 - **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
   once, with a fence of its device, and publishes their handles in a section the host maps; the
   host takes the handles from the driver's process and keeps a view per buffer until the
@@ -1717,6 +1724,32 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   premise was caught by the desk's check. The name's match, the upright test and the refresh
   rule are tests of their own, each broken once. Both bars: on Windows tests 1391 passed, none
   failed; on Linux 1385 passed with the two that need a `localhost` answering on both families.
+- [ ] **W3.9 the turn of the host's own display**: a guest's turn put once and never held, through
+  `lowlatd`'s relay and the library's call (minor 31); the controller turning a monitor through
+  the system's configuration and putting a mode on a turned one at the desktop's sides; a turned
+  output duplicated at the panel's sides with no rebuild at its open; W3.8's comparisons opening
+  a real duplication. Checked by what a turned monitor's driver hands over against the
+  duplication, the host's own display turned and put at another mode while turned, a turned
+  monitor opened with no rebuild asked, and a guest's turn from an established client, live;
+  each check broken once.
+  *Added and decided 2026-10-20* (the decisions above marked W3.9). **Probed first**: a turned
+  monitor's driver picture was the duplication's to the sample (0 of 2,073,600 luma samples
+  differing; 2,047,272 against it turned a half), both at the panel's sides, but the pointer's
+  shape the driver hands over is turned for the panel, every hotspot moved -- so turned monitors
+  stay on the duplication. The probe's log showed **a turned output looping through rebuilds**
+  when duplicated: the duplication describes its mode at the desktop's sides, and every open of a
+  turned output compared it with the picture's and asked for another -- since W2.2 for a panel,
+  and since W3.8 for every turned monitor of the driver. And W3.8 had left its own comparisons --
+  the latency A/B and the pointer test -- opening the duplication through the plain open, which
+  reads the driver as the system account: they compared the driver against itself.
+  *Built and checked 2026-10-20*, each check failing with its fix undone: the turned monitor
+  opened with no rebuild asked, the quarter declared ("a rebuild asked" true with the old
+  comparison); the comparisons' duplication side a duplication (both failing on it with the old
+  open); the host's own display turned a quarter, put at 2560x1440 while turned and still turned,
+  then turned upright (the mode put without the swap replugged it and lost the turn); the
+  desktop's sides and the library's turns tests of their own. Both bars: on Windows tests 1393
+  passed, none failed; on Linux 1386 passed with the two that need a `localhost` answering on
+  both families; the ABI gates at minor 31. Owed: the live turn from an established client.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1762,6 +1795,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-20: W3.9 added, probed and built: a guest's turn of the host's display put once
+  (minor 31); turned monitors kept on the duplication, whose open of a turned output no longer
+  loops through rebuilds; W3.8's comparisons on a real duplication ([05 §2](05-host.md),
+  [06 §3, §11, §14](06-api.md) and [11 §1.5](11-drivers.md) amended).
 - 2026-10-20: W3.8 added, built and checked: every monitor of the driver read straight from it
   while upright, a turn under the read a rebuild; the host's own display keeping a refresh and a
   turn set at the desk; one GPU per adapter checked against the newest class
