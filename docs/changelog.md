@@ -3,6 +3,25 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - The live video setter rebuilds only for what changed
+
+### Fixed
+- **Every live video set through the library rebuilt the stream** ([06 §3](06-api.md)):
+  `lowlat_host_set_video_config` asked for its output and for the host's own display on every
+  call, and either request is a rebuild, so changing only the bitrate cost a keyframe each time,
+  where the table promises none. The stream now takes a configuration whole and asks only for
+  what changed: an output named again, or named as it reads back -- the one being captured --
+  and an unchanged request of the host's own display ask nothing, while another output or
+  another request still rebuilds once, the last one winning over one still on its way. `lowlatd`
+  sets each field on its own and never took this road.
+
+### Checked
+- A configuration set again with only its bitrate changed, with the captured output named, with
+  another output and size, and changed back before the stream moved: failing on the old setter at
+  the first, both requests asked again, and with each part of the rule undone at its own check.
+  The Windows bar: fmt and clippy clean, tests 1394 passed, none failed; the Linux bar clean,
+  tests 1387 passed with the two that need a `localhost` answering on both families.
+
 ## 2026-10-20 - W3.9 built and checked: the turn of the host's own display
 
 ### Changed
