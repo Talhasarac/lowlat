@@ -487,6 +487,13 @@ protocol, the session set a real mode on the device in 0.19 s and a turn in 0.03
 request goes where a person's own display settings already send it, and nothing here holds the
 device. **It is a request of the helper and of nothing else**: the stream follows whatever the
 display becomes, exactly as before, and the application layer above the SDK is what asks.
+*Amended 2026-10-20 ([impl-plan-windows.md](impl-plan-windows.md) W3.10):* **a request is an
+owner's alone**, on both platforms -- an established client offers a size, a turn and a rate to
+an owner alone, and a guest's other requests are refused with a line -- and on Windows, where the
+host runs in the session, the daemon puts it itself: through the system's display configuration,
+never saved, a size the display does not list refused as the helper refuses one; through the
+display driver's controller for a monitor of its that no program holds; and not at all on a
+monitor another program plugged.
 
 **The orientation is the layout's business, not the mode request's.** A display the session has
 turned is drawn turned into a framebuffer that keeps its landscape shape, so scanout captures

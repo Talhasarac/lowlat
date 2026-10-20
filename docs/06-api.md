@@ -127,7 +127,6 @@ lowlat_status lowlat_host_send_pad_report(lowlat_host *hl, uint32_t guest, uint3
 
 lowlat_status lowlat_host_set_video_config(lowlat_host *hl, const lowlat_host_video_config *cfg);
 lowlat_status lowlat_host_get_video_config(lowlat_host *hl, lowlat_host_video_config *out);
-lowlat_status lowlat_host_turn_own_display(lowlat_host *hl, uint32_t rotation);  /* minor 31 */
 
 lowlat_status lowlat_host_set_audio_config(lowlat_host *hl, const lowlat_host_audio_config *cfg);
 lowlat_status lowlat_host_get_audio_config(lowlat_host *hl, lowlat_host_audio_config *out);
@@ -277,13 +276,13 @@ whole:
 | `output` | yes | The exception in cost rather than in kind: a picture from another output cannot be absorbed into a stream built for one, so it rebuilds around the new source for **one coded refresh** and every guest keeps its seat and its channel. `virtual` is the host's own display, plugged when it is asked for and kept for the host's life (Windows alone; refused elsewhere, at the call). |
 | `virtual_width`, `virtual_height` | yes | The host's own display's size, both or neither (minor 27). **Zero lets the host decide**: the size an owner states as it joins an empty room, else the size the display has, 1920x1080 when first plugged, either within the largest picture that guest accepts. A size is put through the system's display configuration where the monitor lists it and by plugging the monitor again with it added where it does not; the stream follows as it follows any resize. Refused outside 640x480 to 7680x4320 rather than clamped. Read back as asked, which the display's own size is not: that is the picture's, on the status. |
 | `virtual_hz` | yes | The host's own display's refresh (minor 27). **Zero is the frame rate's ceiling**, `fps`, and 60 where that is zero too: a display composing faster than the stream takes pictures composes pictures nobody is sent. 24 to 480. (*Amended 2026-10-20, at W3.8*: where `fps` is zero too, **the display's own refresh**, which nothing puts back: the one the system restores for it as it is plugged -- the last its display settings saved -- 60 where it restores none, and whatever those settings set after, the stream pacing from it as from any display. Before, 60 was put back over a refresh a person set.) |
-**The host's own display is turned by a call, not a setting** (minor 31, *added 2026-10-20*):
-`lowlat_host_turn_own_display` puts one of `lowlat_rotation` on it once, when a mode asked of it
-would be put -- within a second while nobody is seated, by a rebuild while it is captured, at the
-next build while another output is -- and holds nothing: a turn made after, in the display's own
-settings at the desk or asked again, stands, the last one made winning. A guest's turn is the
-application's to relay, as its size is; `lowlatd` relays the settings panel's. Elsewhere the call
-is refused, there being no display of the host's own.
+
+**The library turns no display, its own included** (*2026-10-20*, W3.10): a turn is made where a
+person makes one, in the display's own settings, or by the application -- on Windows, where the
+host runs in the session, through the system's display configuration, as `lowlatd` puts an
+owner's. The stream follows a turn as it follows any display's, and a size asked of the host's own
+display is put keeping it. A call for it, added while this was being built, was withdrawn before
+it was published.
 
 **A configuration nobody filled in is not a zeroed one.** Every enumerated field here is
 validated rather than clamped, so a structure the caller zeroed is a *valid* request for the
@@ -1521,9 +1520,6 @@ half carries no promise before 1.0, as the client half never has.
 an earlier minor leaves it zero, off. The third half's handle now follows its driver
 ([§3c](#3c-virtual-displays)): a behaviour, not a symbol.
 
-**Minor 31** (2026-10-20) is turning the host's own display ([§3](#3-host)):
-`lowlat_host_turn_own_display`, taking one of `lowlat_rotation`. Nothing moves.
-
 **Minor 30** (2026-10-17) is the virtual displays' answers ([§3c](#3c-virtual-displays)):
 `lowlat_vdd_plug` and `lowlat_vdd_set_mode` fill `out` on `LOWLAT_ERR_VDD_NOT_READY` with the
 monitor as it stands, and a plug the system refuses is unplugged again. No layout changes; a
@@ -1614,7 +1610,9 @@ from the session since 2026-09-10**, on the same connection that places the outp
 desktop, and declared in the video header from there; a host with no session to ask declares
 the picture flat. A guest's request for a size or a turn is the application's to relay to the
 session, and it stays out of this configuration for the same reason a size does
-([impl-plan.md](impl-plan.md), *Output selection*).
+([impl-plan.md](impl-plan.md), *Output selection*). *Amended 2026-10-20 (W3.10):* on Windows the
+host runs in the session, so the application puts the request itself; `lowlatd` takes one from an
+owner alone, on both platforms.
 
 **Was open until Phase 8:** the concrete `lowlat_host_config` field set, which depends on the
 capture backend decision in [07-platforms.md](07-platforms.md), and the status code range
@@ -1654,6 +1652,8 @@ are accepted, nothing is plugged, and `virtual` is refused. *Built at W3.2 (mino
 host's display listed and asked for as `virtual`.* *Amended 2026-10-20, at W3.8:* with no cap
 either, the refresh is the display's own -- a person may set it in its display settings, and it
 comes back with the display -- and the stream's rate follows it; the size stays the host's, and
-a display turned at the desk is left turned. *Amended 2026-10-20, at W3.9:* a guest's turn
-reaches it through `lowlat_host_turn_own_display` (minor 31), put once and never held, as a turn
-at the desk is.
+a display turned at the desk is left turned. *Amended 2026-10-20, at W3.10:* the library turns
+no display, its own included: a turn is made where a person makes one, or by the application --
+`lowlatd` puts an owner's through the system's display configuration, put once and never held, as
+a turn at the desk is -- and a size asked of the host's display after keeps it. The call W3.9 added
+for it was withdrawn before it was published.

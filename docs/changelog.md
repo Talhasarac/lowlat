@@ -3,6 +3,39 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-20 - W3.10 built: a guest's mode on any display, put by lowlatd, an owner's alone
+
+### Changed
+- **A guest's size and turn reach any display on Windows** ([07 §5.1](07-platforms.md),
+  [11 §1.5](11-drivers.md)): `lowlatd` puts an owner's request itself, the host running in the
+  session -- on a panel or another vendor's virtual display through the system's display
+  configuration, unsaved, a size the display does not list refused; on a monitor of the display
+  driver that no program holds, through its controller; never on a monitor another program
+  plugged. Before, every display but the host's own refused them.
+- **Only an owner changes a display or the stream's rate** ([06 §13](06-api.md)): a guest's
+  size, turn, bitrate, frame rate and permission to repeat a picture are refused with a line, on
+  both platforms, whatever its client sent; which output is captured stays every guest's to pick,
+  and the Linux tray counts as the desk.
+- **The controller puts a size and a turn on any display by the system's name for it**.
+
+### Removed
+- **`lowlat_host_turn_own_display`**, added the same day and never published: the library turns no
+  display, its own included, and `lowlatd` turns the host's display as the desk does. The minor is
+  30 again ([06 §3, §11](06-api.md)).
+
+### Checked
+- An owner's size, turn and rate passed on whole and a guest's refused with nothing asked of any
+  display; the road a panel, a kept monitor, another program's monitor and the host's own display
+  each take; the refresh a size keeps; each broken once and caught. The header is the published
+  minor 30's to the byte, and the ABI gates pass. The Windows bar: fmt and clippy clean, tests 1397
+  passed, none failed; the Linux bar clean, tests 1387 passed with the two that need a `localhost`
+  answering on both families.
+- On the development machine, as a user, nothing saved: a panel at 1920x1080 and 120 put at
+  1280x720 by its name, keeping its 120, then turned a quarter, a size it does not list refused,
+  and the panel put back as it was; the host's own display turned a quarter by its name as
+  `lowlatd` turns it, put at 2560x1440 while turned and still turned, then turned upright.
+- Owed: an owner's request live.
+
 ## 2026-10-20 - The live video setter rebuilds only for what changed
 
 ### Fixed

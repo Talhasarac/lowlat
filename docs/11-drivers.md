@@ -5,7 +5,8 @@ the same day (W3.0), and its controller (W3.1); W3.2 to W3.5 built and checked 2
 the controller as a program of its own (W3.6) and the review's fixes (W3.7) built 2026-10-17;
 every monitor read straight from the driver, and the desk's settings of the host's display left
 to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
-built and checked live the same day; W3's gate to come. Built by
+built and checked live the same day; a guest's size and turn of any display put by `lowlatd`
+(W3.10) built the same day; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -175,6 +176,12 @@ an adapter's identifier changes across boots (§1.7).
   monitor's own (a 1920x1080 mode on a quarter turn refused, 1080x1920 taken with the turn
   kept), so the controller swaps them there; before, a mode put on a turned monitor replugged it
   and lost the turn.
+  *Amended 2026-10-20, at W3.10:* **any display of the desktop takes a size and a turn by the
+  system's name for it** -- a panel, another vendor's virtual display -- the same two puts,
+  unsaved: a size at the refresh the display runs where it lists the size, else the highest the
+  size lists, and refused where it lists none. `lowlatd` puts a guest's this way, and a kept
+  monitor's through the controller, which adds a size it does not list
+  ([impl-plan-windows.md](impl-plan-windows.md) W3.10).
 - **The host's display holds its mode** for as long as the host runs: another monitor's arrival
   and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
   puts its own back whenever the system's differs.
@@ -187,6 +194,8 @@ an adapter's identifier changes across boots (§1.7).
   *Amended 2026-10-20, at W3.9:* **a turn is never held, and a mode is put keeping it** -- the
   controller now takes a turned monitor's modes at the desktop's sides. A turn a guest asks is
   put once ([06 §3](06-api.md)), as one at the desk is; whichever turn came last stands.
+  *Amended 2026-10-20, at W3.10:* put by `lowlatd` by the display's name, as the desk turns it,
+  and only an owner's; the library itself turns no display.
 
 ### §1.6 Pictures
 

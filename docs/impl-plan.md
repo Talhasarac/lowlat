@@ -1027,6 +1027,9 @@ same size for this reason).
   a mechanism, one desktop's ships first, and a session with none refuses with a reason
   ([07 §5.1](07-platforms.md)). The public configuration is unchanged: there is still no
   requested resolution in it, because the request is the application's and not the stream's.
+  *Amended 2026-10-20 ([impl-plan-windows.md](impl-plan-windows.md) W3.10, re-decided rather than
+  folded into the configuration):* on Windows the host runs in the session, so the daemon puts the
+  request itself, with no helper; and on both platforms only an owner's is taken.
 - [ ] **A display this host creates is the exception, and it is the more important case.** It is
   what makes a requested resolution and refresh rate work properly for a headless host, and it is
   the product [07 §2.2](07-platforms.md) already separates out. **The two paths differ in who
@@ -2112,6 +2115,13 @@ push. Every fuzz target ran (15.1, 15.2).
 Newest first. Record approach changes and gate revisions here; per-commit detail belongs in
 [changelog.md](changelog.md).
 
+- 2026-10-20: **A guest's mode stays the application's, and is an owner's alone** (*Output
+  selection* amended, [impl-plan-windows.md](impl-plan-windows.md) W3.10). A size and a turn for
+  any captured display were weighed as fields of the video configuration and kept out: the request
+  is the application's on Linux for a reason that is not Linux's, and the library would have
+  carried fields that do nothing there. On Windows the
+  daemon puts the request itself, the host running in the session; on both, a guest that is not an
+  owner changes neither a display nor the stream's rate.
 - 2026-10-19: **The full-chroma census asks the encoder of the output being captured**, on both
   platforms, where it asked every encoder the host could select (11.6; [00 D7](00-overview.md)
   amended). Colour degrades at a rebuild since 2026-09-01, so the move the census guarded

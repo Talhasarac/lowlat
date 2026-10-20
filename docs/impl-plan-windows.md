@@ -14,7 +14,9 @@ two faults found and fixed, and W2.7 closed; what the gate asked and was not run
 entry. *Amended 2026-10-20:* W3.8 -- every monitor of the driver read straight from it, and the
 desk's own settings of the host's display left to it -- added after a review of the driver,
 built and checked the same day; and W3.9, the turn of the host's own display, added, probed and
-built and checked live after it; W3's gate follows them.
+built and checked live after it; W3's gate follows them. *Amended 2026-10-20:* W3.10 -- a
+guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate
+and built; its hardware and live checks, then W3's gate, are next.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1199,6 +1201,25 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   keeping whatever turn the display has. A turned display still streams through the duplication:
   its driver's picture checked the same as the duplication's, the pointer's shape the driver hands
   over turned for the panel.
+  *Amended 2026-10-20, at W3.10 (the maintainer's decisions):* **the library turns no display,
+  its own included**: the call above was withdrawn before it was published, and the minor is 30
+  again. `lowlatd` turns the host's display for a guest as the desk does, through the system's
+  display configuration by its name. **A guest's size, turn and stream rate are an owner's
+  alone**, its later size included: an established client offers them to an owner alone, and the
+  host refuses them from any other guest whatever its client sent. Which output is captured stays
+  every guest's to pick.
+- **A guest's mode on any other display is put by `lowlatd`, not by the library** (*added
+  2026-10-20, at W3.10's interview*). A size and a turn for whatever display is captured were
+  weighed as fields of the library's video configuration and kept out of it, as on Linux: the
+  request is the application's, and on Linux the fields would do nothing. The host runs in the
+  session, so `lowlatd` puts an owner's request itself, on a thread of its own, one at a time: on
+  a panel or another vendor's virtual display through the system's display configuration, never
+  saved, at the refresh the display runs where the new size lists it, else the highest that size
+  lists, and **a size the display does not list refused**, never scaled; on a monitor of the
+  driver that no program holds, through the controller, which adds a size the monitor does not
+  list by plugging it again; on a monitor another program plugged, not at all. **Put once, never
+  held, never given back** when the last guest leaves, as on Linux, and a guest's stated size at
+  its join is never put on a display the host did not plug.
 - **The frame contract, made concrete.** Per swapchain the driver shares each distinct buffer
   once, with a fence of its device, and publishes their handles in a section the host maps; the
   host takes the handles from the driver's process and keeps a view per buffer until the
@@ -1757,6 +1778,39 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   settled, then steady, no rebuild after; turned back, the display was upright 64 ms after the
   ask and read straight from its driver again. The maintainer saw the turned picture working at
   the client, and turned it back.
+- [ ] **W3.10 a guest's mode on any display, put by `lowlatd`, an owner's alone**: the library's
+  live setter asking for its output and its own display only where they changed; the turn call
+  withdrawn and the minor back at 30; the controller putting a size and a turn on any display by
+  the system's name for it; `lowlatd` putting an owner's size and turn on whatever display is
+  captured, by whose display it is, and refusing a guest's size, turn and stream rate. Checked by
+  the setter's rebuilds counted, an owner's request passed on and a guest's refused, the road each
+  display takes, the refresh a size keeps, a panel resized and turned by its name and a size it
+  does not list refused, the host's own display turned from outside and put at another size still
+  turned, and an owner's request live from an established client; each check broken once.
+  *Added and decided 2026-10-20, after a review of W3's gate* (the decisions above marked W3.10).
+  The review asked whether the library should take a size and a turn for any captured display as
+  fields of its video configuration; it keeps them out, as on Linux. Read on the way: **the live
+  setter rebuilt the stream on every call** -- it asked for its output and its own display each
+  time, and either is a rebuild -- so changing only the bitrate through the library cost a
+  keyframe; `lowlatd` sets each field on its own and never went that way. Read in an established
+  client: it draws its orientation, resolution and bitrate controls for an owner alone, and in
+  game mode only the bitrate.
+  *Built 2026-10-20.* The setter's fix first, on its own: a configuration set again with only its
+  bitrate changed asked for both rebuilds on the old setter and for none with the fix, the output
+  read back -- the captured one -- for none, another output and size for one each, and the last
+  word won over a request still on its way; each part of the rule undone failed at its own check.
+  Then the rest: the call and its turn removed and the header at minor 30 again, to the byte;
+  `put_size` and `put_turn` in the controller; `lowlatd`'s Windows relay; the owner rule in its
+  reader of a guest's configuration, the Linux tray counting as the desk. Each new check broken
+  once: the owner's gate on the display and on the stream, the road a kept monitor takes, the
+  refresh a size keeps. Both bars: on Windows tests 1397 passed, none failed; on Linux 1387
+  passed with the two that need a `localhost` answering on both families. *Checked on the
+  development machine*, as a user, nothing saved: a panel at 1920x1080 and 120 put at 1280x720 by
+  its name, keeping its 120, then turned a quarter -- read back at the monitor's own sides, turned
+  -- a size it does not list refused, and the panel put back as it was; a monitor of the driver
+  plugged as the host's own display, turned a quarter by its name as `lowlatd` turns it, put at
+  2560x1440 while turned and still turned, then turned upright the same way. **Owed**: an owner's
+  request live; then the gate.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1767,11 +1821,17 @@ on the LAN and one on a Windows machine:
 - once each mid-session: a size change from a client's settings, its blink recorded; the lock
   screen, the secure attention screen and an elevation prompt; a logoff and the reconnect; the
   GPU's driver restarted; the driver updated; the host killed and started again -- no watchdog,
-  no stop error, no blank beyond a swapchain's replacement;
+  no stop error, no blank beyond a swapchain's replacement; *amended 2026-10-20, at W3.10:* the
+  lock screen, the secure attention screen and the elevation prompt with the host's display the
+  only one or the primary, since the system draws them on the primary alone and a secondary
+  shows black (W3.5); a size and a turn from an owner's settings, on a panel and on the host's own
+  display, and turned back; each refused from a guest who is not an owner;
 - the controller: an unelevated program plugs, re-modes and unplugs a monitor of its own beside
   the host's, and is refused the host's and the frame interface; a kept monitor made through
   `lowlatd display` comes back after a reboot where it was; *amended 2026-10-20, at W3.8:* and,
-  asked for by a guest, streams straight from the driver;
+  asked for by a guest, streams straight from the driver; *amended 2026-10-20, at W3.10:* the
+  frame interface answers it, as it answers every caller since W3.3's review, and it can take
+  nothing from the answer; the reboot after W3.6's names, every slot a new monitor then;
 - two other vendors' virtual displays streamed through desktop duplication, an established
   host's own among them;
 - **the comparison decides the host's default**: in one session at 60, 120 and 240 Hz,
@@ -1797,11 +1857,21 @@ on the LAN and one on a Windows machine:
   loaded. No picture converted again. At light load the GPU lowers its clocks every few seconds,
   each time slowing either source by ~1.5 ms for ~0.2 s; blocks short enough to share that alike,
   or clocks held, are needed for a fair tail;
+  *amended 2026-10-20, at W3.10:* the default this was to decide was taken at W3.4 and widened at
+  W3.8, so the comparison confirms it, a percentile counting as at or below the duplication within
+  the spread between the run's own blocks of one source;
 - the test-signed package installing silently with no test mode; CI building the driver; both
   CI jobs and the Linux bar.
 
 ## Change log
 
+- 2026-10-20: W3.10 added after a review of W3's gate, decided and built: a guest's size and turn
+  of any display put by `lowlatd`, an owner's alone, as the stream's rate is; the library's live
+  setter rebuilding only for what changed; the turn call withdrawn and the minor back at 30; the
+  gate's legs corrected -- the frame interface's answer, the lock screen on a secondary, the
+  comparison confirming a default already taken -- and an owner's size and turn added
+  ([06 §3, §11, §13, §14](06-api.md), [07 §5.1](07-platforms.md) and [impl-plan.md](impl-plan.md)
+  *Output selection* amended).
 - 2026-10-20: W3.9 added, probed, built and checked live: a guest's turn of the host's display
   put once (minor 31); turned monitors kept on the duplication, whose open of a turned output no
   longer loops through rebuilds; W3.8's comparisons on a real duplication
