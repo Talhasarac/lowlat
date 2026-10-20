@@ -116,7 +116,8 @@ enum Road {
 
 /// Which road `output` takes, among the driver's `monitors` as the system's
 /// name for each, its slot, and whether it is kept; `own` when it is the host's
-/// own display.
+/// own display. **The host lists an output as `DISPLAYn` and the driver as
+/// `\\.\DISPLAYn`**, so names are compared without the prefix.
 fn road<'a>(
     monitors: impl IntoIterator<Item = (&'a str, u8, bool)>,
     output: &str,
@@ -125,9 +126,11 @@ fn road<'a>(
     if own {
         return Road::Own;
     }
+    let bare = |name: &'a str| name.strip_prefix(r"\\.\").unwrap_or(name);
+    let output = output.strip_prefix(r"\\.\").unwrap_or(output);
     match monitors
         .into_iter()
-        .find(|(name, _, _)| !name.is_empty() && name.eq_ignore_ascii_case(output))
+        .find(|(name, _, _)| !name.is_empty() && bare(name).eq_ignore_ascii_case(output))
     {
         Some((_, slot, true)) => Road::Kept(slot),
         Some((_, _, false)) => Road::Bound,
@@ -219,18 +222,24 @@ mod tests {
     /// **A guest's mode goes where the display's owner lets it**: the host's
     /// own display by the system's configuration whatever the driver lists, a
     /// kept monitor through the controller, a monitor another program plugged
-    /// nowhere, and a display the driver does not list as any display.
+    /// nowhere, and a display the driver does not list as any display. The
+    /// host names an output `DISPLAYn` and the driver's list `\\.\DISPLAYn`.
     #[test]
     fn a_mode_goes_by_whose_the_display_is() {
         let monitors = [
-            (r"\.\DISPLAY42", 0, true),
-            (r"\.\DISPLAY43", 15, false),
+            (r"\\.\DISPLAY42", 0, true),
+            (r"\\.\DISPLAY43", 15, false),
             ("", 3, true),
         ];
-        assert_eq!(road(monitors, r"\.\DISPLAY43", true), Road::Own);
-        assert_eq!(road(monitors, r"\.\display42", false), Road::Kept(0));
-        assert_eq!(road(monitors, r"\.\DISPLAY43", false), Road::Bound);
-        assert_eq!(road(monitors, r"\.\DISPLAY1", false), Road::Display);
+        assert_eq!(road(monitors, "DISPLAY43", true), Road::Own);
+        assert_eq!(
+            road(monitors, "display42", false),
+            Road::Kept(0),
+            "the host's bare name for an output not taken for the driver's"
+        );
+        assert_eq!(road(monitors, r"\\.\DISPLAY42", false), Road::Kept(0));
+        assert_eq!(road(monitors, "DISPLAY43", false), Road::Bound);
+        assert_eq!(road(monitors, "DISPLAY1", false), Road::Display);
         assert_eq!(
             road(monitors, "", false),
             Road::Display,

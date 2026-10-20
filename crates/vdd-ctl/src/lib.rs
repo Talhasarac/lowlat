@@ -141,20 +141,21 @@ pub struct GpuInfo {
 
 /// Put any display of the desktop -- a panel, another vendor's virtual display,
 /// one this controller did not plug -- at `width` x `height`, the monitor's own
-/// sides, by the system's name for it, `\\.\DISPLAYn`: at the refresh it runs
-/// where that size has it, else the highest that size has, keeping its turn.
-/// **A size it does not list is refused**, never scaled. Never saved to the
-/// system's store.
+/// sides, by the system's name for it, `\\.\DISPLAYn` or the bare `DISPLAYn`:
+/// at the refresh it runs where that size has it, else the highest that size
+/// has, keeping its turn. **A size it does not list is refused**, never
+/// scaled. Never saved to the system's store.
 pub fn put_size(name: &str, width: u32, height: u32) -> Result<Mode, Error> {
-    let (listed, now) = display::refreshes(name, width, height);
+    let name = display::gdi_name(name);
+    let (listed, now) = display::refreshes(&name, width, height);
     let mode = Mode::new(width, height, refresh_for(now, &listed).ok_or(Error::Mode)?);
-    display::set_mode(name, mode, false).map_err(Error::Display)?;
+    display::set_mode(&name, mode, false).map_err(Error::Display)?;
     Ok(mode)
 }
 
-/// Turn any display of the desktop by the system's name for it, through the
-/// system's display configuration: its path turned, its mode as it is. Never
-/// saved to the system's store.
+/// Turn any display of the desktop by the system's name for it, with its
+/// prefix or without, through the system's display configuration: its path
+/// turned, its mode as it is. Never saved to the system's store.
 pub fn put_turn(name: &str, turn: Turn) -> Result<(), Error> {
     let (adapter, target) = display::named(name).ok_or(Error::NoMonitor)?;
     display::set_turn(adapter, target, turn as i32, false)
@@ -560,6 +561,14 @@ mod tests {
         assert_eq!(refresh_for(60, &[]), None, "a size it does not list");
     }
 
+    /// **A display is named with its prefix or without it**: a host lists its
+    /// outputs as `DISPLAYn`, and the system's interfaces take `\\.\DISPLAYn`.
+    #[test]
+    fn a_display_is_named_with_its_prefix_or_without() {
+        assert_eq!(display::gdi_name("DISPLAY79"), r"\\.\DISPLAY79");
+        assert_eq!(display::gdi_name(r"\\.\DISPLAY79"), r"\\.\DISPLAY79");
+    }
+
     /// Any display of the desktop put at a size and turned by the system's name
     /// for it, then put back as it was: `LOWLAT_DISPLAY` names it
     /// (`\\.\DISPLAYn`), `LOWLAT_SIZE` the size (`1280x720`), which it must list.
@@ -581,7 +590,8 @@ mod tests {
         let now = display::named(&name).and_then(|(a, t)| display::shown(a, t));
         let now = now.expect("the display shown after");
         put_turn(&name, Turn::Upright).expect("the turn back refused");
-        display::set_mode(&name, before.mode, false).expect("the mode back refused");
+        display::set_mode(&display::gdi_name(&name), before.mode, false)
+            .expect("the mode back refused");
         println!(
             "{name} was {}, put at {put}, then {} turned {}",
             before.mode, now.mode, now.turned

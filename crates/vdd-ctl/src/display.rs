@@ -240,15 +240,28 @@ pub(crate) fn activate(adapter: u64, target: u32, save: bool) -> Result<(), u32>
     Ok(())
 }
 
+/// The system's full name for a display, `\\.\DISPLAYn`, from that or from the
+/// bare `DISPLAYn` a host lists its outputs by: the system's interfaces take
+/// the full one alone.
+pub(crate) fn gdi_name(name: &str) -> String {
+    if name.starts_with(r"\\.\") {
+        name.to_string()
+    } else {
+        format!(r"\\.\{name}")
+    }
+}
+
 /// The adapter and target of the active path whose source the system names
-/// `name`, `\\.\DISPLAYn`: how any display of the desktop is found for a turn.
+/// `name`, with its prefix or without: how any display of the desktop is
+/// found for a turn.
 pub(crate) fn named(name: &str) -> Option<(u64, u32)> {
+    let name = gdi_name(name);
     let config = query(QDC_ONLY_ACTIVE_PATHS)?;
     config
         .paths
         .iter()
         .filter(|p| p.flags & DISPLAYCONFIG_PATH_ACTIVE != 0)
-        .find(|p| source_name(p).eq_ignore_ascii_case(name))
+        .find(|p| source_name(p).eq_ignore_ascii_case(&name))
         .map(|p| (value(p.targetInfo.adapterId), p.targetInfo.id))
 }
 
