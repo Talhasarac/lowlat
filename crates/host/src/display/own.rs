@@ -6,8 +6,7 @@
 //! **Its calls wait for the system**, up to the controller's bound, so they
 //! run on the stream's own thread and never on a caller's.
 
-use lowlat_core::video::Rotation;
-use lowlat_vdd_ctl::{Controller, Error, Lifetime, MAX_MONITORS, Mode, Turn};
+use lowlat_vdd_ctl::{Controller, Error, Lifetime, MAX_MONITORS, Mode};
 
 use super::sys::publish_own;
 
@@ -111,29 +110,6 @@ impl Own {
                 self.refuse("the host's own display could not be put at its mode", error);
                 false
             }
-        }
-    }
-
-    /// Turn the display, once, through the system's display configuration:
-    /// **never held**, so a turn made after -- at the desk, or asked again --
-    /// stands. With no display plugged there is nothing to turn.
-    pub(crate) fn turn(&mut self, turn: Rotation) {
-        let (Some(slot), Some(controller)) = (self.slot, self.controller.as_mut()) else {
-            lowlat_common::log_info!("display: the host's own display is not plugged, not turned");
-            return;
-        };
-        let turn = match turn {
-            Rotation::Deg90 => Turn::Quarter,
-            Rotation::Deg180 => Turn::Half,
-            Rotation::Deg270 => Turn::ThreeQuarters,
-            Rotation::None | Rotation::Unknown => Turn::Upright,
-        };
-        match controller.set_turn(slot, turn) {
-            Ok(_) => {
-                lowlat_common::log_info!("display: the host's own display turned {turn:?}");
-                self.refused = None;
-            }
-            Err(error) => self.refuse("the host's own display could not be turned", error),
         }
     }
 
@@ -386,21 +362,26 @@ mod tests {
         );
     }
 
-    /// **A turn is put once, and a mode put after keeps it**: the host's own
-    /// display turned a quarter as a guest asks, then put at another size
-    /// while turned -- its sides swapped where the desktop's own interface
-    /// takes them -- still turned, then turned upright as asked. Run as a
-    /// user, the driver installed; nothing is saved.
+    /// **A turn from outside is left, and a mode put after keeps it**: the
+    /// host's own display turned a quarter as `lowlatd` turns it for a guest
+    /// -- by its name, through the system's display configuration, as its
+    /// display settings do -- then put at another size while turned, its
+    /// sides swapped where the desktop's own interface takes them, still
+    /// turned, then turned upright the same way. Run as a user, the driver
+    /// installed; nothing is saved.
     #[test]
     #[ignore = "plugs and turns a monitor of the display driver"]
-    fn the_hosts_own_display_turns_once_and_a_mode_keeps_the_turn() {
+    fn a_turn_from_outside_is_left_and_a_mode_keeps_it() {
+        use lowlat_vdd_ctl::{Turn, put_turn};
+
         let mut own = Own::default();
         assert!(
             own.hold(1920, 1080, Some(60)),
             "the display was not plugged"
         );
         let slot = own.slot.expect("a slot");
-        own.turn(Rotation::Deg90);
+        let name = shown_until(&own, slot, "the display", |m| m.active).name;
+        put_turn(&name, Turn::Quarter).expect("the turn refused");
         shown_until(&own, slot, "the turn", |m| m.turned);
         assert!(
             own.hold(2560, 1440, Some(60)),
@@ -409,7 +390,7 @@ mod tests {
         let resized = shown_until(&own, slot, "the new mode", |m| {
             (m.mode.width, m.mode.height) == (2560, 1440)
         });
-        own.turn(Rotation::None);
+        put_turn(&resized.name, Turn::Upright).expect("the turn back refused");
         let upright = shown_until(&own, slot, "upright again", |m| !m.turned);
         println!(
             "turned and put at {} turned {}; upright at {}",

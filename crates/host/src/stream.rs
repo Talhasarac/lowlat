@@ -504,8 +504,6 @@ pub(crate) struct Shared {
     /// that changes: the same counter and lock as the live video above.
     own_asked: AtomicU32,
     own_display: std::sync::Mutex<OwnDisplay>,
-    /// A turn of the host's own display asked and not yet put.
-    own_turn: std::sync::Mutex<Option<lowlat_core::video::Rotation>>,
     /// Where this loop announces what only it knows.
     ///
     /// **Here rather than threaded through every call.** Everything else the
@@ -763,12 +761,6 @@ impl Shared {
         self.own_display
             .lock()
             .map_or_else(|held| *held.into_inner(), |held| *held)
-    }
-
-    /// The turn of the host's own display asked and not yet put, taken.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub(crate) fn take_own_turn(&self) -> Option<lowlat_core::video::Rotation> {
-        self.own_turn.lock().ok()?.take()
     }
 
     /// Which encodings the seated guests actually want.
@@ -1445,7 +1437,6 @@ impl Stream {
             asked_fps: AtomicU32::new(config.fps),
             own_asked: AtomicU32::new(0),
             own_display: std::sync::Mutex::new(config.own_display),
-            own_turn: std::sync::Mutex::new(None),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -1609,19 +1600,6 @@ impl Stream {
         }
         self.select_output(output.clone());
         *configured = output;
-    }
-
-    /// Turn the host's own display, once (docs/06-api.md section 14): put
-    /// when [`Stream::set_own_display`]'s request would be, and never held --
-    /// a turn made after, at the desk or asked again, stands. One waits at a
-    /// time, the last asked.
-    pub fn turn_own_display(&self, turn: lowlat_core::video::Rotation) {
-        let Ok(mut waiting) = self.shared.own_turn.lock() else {
-            return;
-        };
-        *waiting = Some(turn);
-        drop(waiting);
-        self.shared.own_asked.fetch_add(1, Ordering::Release);
     }
 
     /// What the stream is running at now.
@@ -5051,7 +5029,6 @@ mod tests {
                 asked_fps: AtomicU32::new(0),
                 own_asked: AtomicU32::new(0),
                 own_display: std::sync::Mutex::new(OwnDisplay::default()),
-                own_turn: std::sync::Mutex::new(None),
                 epoch: AtomicU32::new(0),
                 colour: AtomicU32::new(0),
                 ten_bit: AtomicU32::new(0),
@@ -5134,7 +5111,6 @@ mod tests {
             asked_fps: AtomicU32::new(0),
             own_asked: AtomicU32::new(0),
             own_display: std::sync::Mutex::new(OwnDisplay::default()),
-            own_turn: std::sync::Mutex::new(None),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -5566,7 +5542,6 @@ mod tests {
             asked_fps: AtomicU32::new(0),
             own_asked: AtomicU32::new(0),
             own_display: std::sync::Mutex::new(OwnDisplay::default()),
-            own_turn: std::sync::Mutex::new(None),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),
@@ -5646,7 +5621,6 @@ mod tests {
             asked_fps: AtomicU32::new(0),
             own_asked: AtomicU32::new(0),
             own_display: std::sync::Mutex::new(OwnDisplay::default()),
-            own_turn: std::sync::Mutex::new(None),
             epoch: AtomicU32::new(0),
             colour: AtomicU32::new(0),
             ten_bit: AtomicU32::new(0),

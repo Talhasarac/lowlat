@@ -309,7 +309,20 @@ pub(crate) fn on_message(
                 settings,
                 seam.video(),
             );
-            apply(seam, body, &described, &listed, &format!("guest {guest}"));
+            // **Ownership as signaling relayed it**, never as the peer says.
+            let owner = seam
+                .guests()
+                .iter()
+                .any(|seated| seated.number == guest && seated.owner);
+            apply(
+                seam,
+                body,
+                &described,
+                &listed,
+                &format!("guest {guest}"),
+                owner,
+                crate::session_side::ask_mode,
+            );
             // **Not answered.** The client asks again with 9 the moment it has
             // sent one of these, so an answer here would arrive beside the one
             // it is about to ask for.
@@ -435,7 +448,17 @@ pub(crate) fn on_action(
             settings,
             seam.video(),
         );
-        apply(seam, &config, &described, &listed, &by);
+        // **The tray is the desk**, whose person changes the machine's display
+        // where they sit: everything a guest's owner may change.
+        apply(
+            seam,
+            &config,
+            &described,
+            &listed,
+            &by,
+            true,
+            crate::session_side::ask_mode,
+        );
     }
 }
 
@@ -837,7 +860,23 @@ fn refresh_of(listed: &[Selectable], output: &str) -> u32 {
 /// **`who` is on every line this writes**, because a change to the stream is
 /// a host action and a host action says who asked for it: a guest by number,
 /// or a tray by the credentials of its connection.
-fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable], who: &str) {
+///
+/// **The output is every guest's to pick; the rest is an `owner`'s.** Which
+/// output is watched changes nothing of the machine, where a display's size
+/// or turn changes it for everybody at it, and one encode serves every guest,
+/// so a guest's rate is all of theirs; an established client offers these to
+/// an owner alone, and a guest asking for one anyway is refused here. A size
+/// or a turn of a display is put by `relay`, which answers whether it took
+/// the request.
+fn apply(
+    seam: &mut Admission,
+    body: &[u8],
+    video: &Video,
+    listed: &[Selectable],
+    who: &str,
+    owner: bool,
+    mut relay: impl FnMut(&str, Option<(u32, u32)>, Option<u8>) -> Result<(), &'static str>,
+) {
     let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
         lowlat_common::log_info!("lowlatd: a configuration arrived that is not JSON, ignoring it");
         return;
@@ -925,49 +964,54 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
         (Some(false), _) => Some(lowlat_host::video::Rotation::None as u8),
         (Some(true), _) => None,
     };
-    // **The host's own display is this host's to size**, so a size asked of
-    // it goes into its setting, the last request winning, rather than to a
-    // session; **a turn of it is put once**, as one at the desk is, and the
-    // last turn made stands.
-    if video.output == lowlat_host::display::VIRTUAL {
-        if let Some((width, height)) = asked_size {
-            lowlat_common::log_info!(
-                "lowlatd: {who} asked for the host's own display at {width}x{height}"
-            );
-            seam.set_own_display(lowlat_host::stream::OwnDisplay {
-                width,
-                height,
-                ..seam.own_display()
-            });
-        }
-        if let Some(turn) = asked_rotation {
-            let turn = lowlat_host::video::Rotation::from_bits(turn);
-            lowlat_common::log_info!(
-                "lowlatd: {who} asked to turn the host's own display {turn:?}"
-            );
-            seam.turn_own_display(turn);
-        }
-    } else if asked_size.is_some() || asked_rotation.is_some() {
+    if !owner && (asked_size.is_some() || asked_rotation.is_some()) {
+        lowlat_common::log_info!(
+            "lowlatd: {who} asked for the display at {:?} rotation={:?}, refused: not an owner",
+            asked_size,
+            asked_rotation
+        );
+    } else {
         let output = lowlat_host::display::captured(listed, seam.captured())
             .map(|output| output.connector.clone())
             .unwrap_or_default();
-        match crate::session_side::ask_mode(&output, asked_size, asked_rotation) {
-            Ok(()) => lowlat_common::log_info!(
-                "lowlatd: {who} asked for {output} at {:?} rotation={:?}, asking the session",
-                asked_size,
-                asked_rotation
-            ),
-            Err(reason) => lowlat_common::log_info!(
-                "lowlatd: {who} asked for {output} at {:?} rotation={:?}, refused: {reason}",
-                asked_size,
-                asked_rotation
-            ),
+        // **The host's own display is this host's to size**, so a size asked
+        // of it goes into its setting, the last request winning, rather than
+        // to a session; **a turn of it is put once**, as any display's is, and
+        // the last turn made stands.
+        let asked_size = if video.output == lowlat_host::display::VIRTUAL {
+            if let Some((width, height)) = asked_size {
+                lowlat_common::log_info!(
+                    "lowlatd: {who} asked for the host's own display at {width}x{height}"
+                );
+                seam.set_own_display(lowlat_host::stream::OwnDisplay {
+                    width,
+                    height,
+                    ..seam.own_display()
+                });
+            }
+            None
+        } else {
+            asked_size
+        };
+        if asked_size.is_some() || asked_rotation.is_some() {
+            match relay(&output, asked_size, asked_rotation) {
+                Ok(()) => lowlat_common::log_info!(
+                    "lowlatd: {who} asked for {output} at {:?} rotation={:?}, asking the session",
+                    asked_size,
+                    asked_rotation
+                ),
+                Err(reason) => lowlat_common::log_info!(
+                    "lowlatd: {who} asked for {output} at {:?} rotation={:?}, refused: {reason}",
+                    asked_size,
+                    asked_rotation
+                ),
+            }
         }
     }
 
     // **The rest is live and is applied.** The frame rate, the rate ceiling
     // and the permission to send a repeated picture all reach the running
-    // loop without rebuilding anything, so a guest asking for one gets it
+    // loop without rebuilding anything, so an owner asking for one gets it
     // rather than a log line saying it was heard.
     let Some(running) = seam.video() else {
         lowlat_common::log_info!("lowlatd: nothing is streaming, so there is nothing to change");
@@ -1013,6 +1057,16 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
         && wanted.fps == running.fps
         && wanted.full_fps == running.full_fps
     {
+        return;
+    }
+    if !owner {
+        lowlat_common::log_info!(
+            "lowlatd: {who} asked to change the stream, fps={} bitrate={:.1} full_fps={}, \
+             refused: not an owner",
+            wanted.fps,
+            wanted.bitrate_mbps,
+            u8::from(wanted.full_fps)
+        );
         return;
     }
     lowlat_common::log_info!(
@@ -1629,5 +1683,110 @@ mod tests {
         // one this host speaks; whether there was anybody to type it for is a
         // different question and not what this answer means.
         assert!(on_message(&mut seam, 1, 14, b"", &settings()));
+    }
+
+    /// A seam whose stream idles: no guest, no display, nothing built.
+    fn idling() -> Admission {
+        super::Admission::new(lowlat_host::admission::Config {
+            microphone: None,
+            pad_sink: None,
+            exclusive_pointer: false,
+            rumble_probe: false,
+            exclusive_hold_ms: lowlat_host::floor::HOLD_MS,
+            cg_level: 1,
+            base_port: 0,
+            shared_address_space: false,
+            max_guests: 1,
+            servers: Vec::new(),
+            stream: Some(lowlat_host::stream::Config {
+                quality: lowlat_host::stream::Quality::LowestLatency,
+                ten_bit: false,
+                chroma_444: false,
+                audio: None,
+                convert: None,
+                prefer_vulkan: false,
+                audio_on: false,
+                accept_microphone: false,
+                audio_kbps: 128,
+                allow_raw_audio: false,
+                output: None,
+                display: false,
+                virtual_fallback: false,
+                wake_display: false,
+                own_display: lowlat_host::stream::OwnDisplay::default(),
+                width: 320,
+                height: 240,
+                fps: 60,
+                codec: lowlat_host::stream::Codec::H264,
+                backend: None,
+                configured_mbps: 10.0,
+                min_mbps: 1.0,
+                detail_rows: 0,
+                full_fps: false,
+                cg_level: 1,
+            }),
+        })
+    }
+
+    /// **Only an owner changes the display and the stream.** A guest that is
+    /// not one -- whatever its client let it send -- has its size, its turn
+    /// and its rate refused and nothing asked of any display, where an owner's
+    /// same request is passed on whole.
+    #[test]
+    fn a_guest_that_is_not_an_owner_changes_neither_the_display_nor_the_stream() {
+        let body = br#"{"video":[{"output":"","resolutionX":1280,"resolutionY":720,
+            "rotated":true,"encoderMaxBitrate":20,"encoderFPS":30,"fullFPS":true}]}"#;
+        let video = describe(
+            None,
+            &listed(),
+            Some("card0:DP-2"),
+            0,
+            lowlat_host::video::Rotation::None,
+            &settings(),
+            None,
+        );
+        for owner in [false, true] {
+            let mut seam = idling();
+            let before = seam.video().expect("a stream");
+            let mut relayed = Vec::new();
+            apply(
+                &mut seam,
+                body,
+                &video,
+                &listed(),
+                "guest 3",
+                owner,
+                |_, size, rotation| {
+                    relayed.push((size, rotation));
+                    Ok(())
+                },
+            );
+            let after = seam.video().expect("a stream");
+            if owner {
+                assert_eq!(
+                    relayed,
+                    [(
+                        Some((1280, 720)),
+                        Some(lowlat_host::video::Rotation::Deg90 as u8)
+                    )],
+                    "an owner's size and turn were not passed on"
+                );
+                assert_eq!(
+                    (after.fps, after.full_fps),
+                    (30, true),
+                    "an owner's change was not taken"
+                );
+                assert!(
+                    (after.bitrate_mbps - 20.0).abs() < f64::EPSILON,
+                    "an owner's rate was not taken"
+                );
+            } else {
+                assert!(
+                    relayed.is_empty(),
+                    "a guest's size or turn was passed on: {relayed:?}"
+                );
+                assert_eq!(after, before, "a guest changed the stream");
+            }
+        }
     }
 }

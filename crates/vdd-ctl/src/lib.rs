@@ -139,6 +139,38 @@ pub struct GpuInfo {
     pub name: String,
 }
 
+/// Put any display of the desktop -- a panel, another vendor's virtual display,
+/// one this controller did not plug -- at `width` x `height`, the monitor's own
+/// sides, by the system's name for it, `\\.\DISPLAYn`: at the refresh it runs
+/// where that size has it, else the highest that size has, keeping its turn.
+/// **A size it does not list is refused**, never scaled. Never saved to the
+/// system's store.
+pub fn put_size(name: &str, width: u32, height: u32) -> Result<Mode, Error> {
+    let (listed, now) = display::refreshes(name, width, height);
+    let mode = Mode::new(width, height, refresh_for(now, &listed).ok_or(Error::Mode)?);
+    display::set_mode(name, mode, false).map_err(Error::Display)?;
+    Ok(mode)
+}
+
+/// Turn any display of the desktop by the system's name for it, through the
+/// system's display configuration: its path turned, its mode as it is. Never
+/// saved to the system's store.
+pub fn put_turn(name: &str, turn: Turn) -> Result<(), Error> {
+    let (adapter, target) = display::named(name).ok_or(Error::NoMonitor)?;
+    display::set_turn(adapter, target, turn as i32, false)
+        .map_err(|code| Error::Display(i32::try_from(code).unwrap_or(i32::MAX)))
+}
+
+/// The refresh a size is put at: the one the display runs at `now` where the
+/// size lists it, else the highest it lists; none where it lists none.
+fn refresh_for(now: u32, listed: &[u32]) -> Option<u32> {
+    if listed.contains(&now) {
+        Some(now)
+    } else {
+        listed.iter().copied().max()
+    }
+}
+
 /// Wait until `ready` answers, or the deadline.
 fn wait<T>(deadline: Instant, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
     loop {
@@ -511,6 +543,60 @@ mod tests {
     use super::*;
     use std::os::windows::fs::OpenOptionsExt;
     use std::path::PathBuf;
+
+    /// **A size keeps the refresh the display runs where it can**, else takes
+    /// the highest that size lists -- a person's 144 is not dropped to 60 for a
+    /// guest's size -- and a size listed at none is refused.
+    #[test]
+    fn a_size_keeps_the_refresh_it_can_else_the_highest_it_has() {
+        assert_eq!(refresh_for(144, &[60, 120, 144]), Some(144));
+        assert_eq!(
+            refresh_for(60, &[60, 120, 144]),
+            Some(60),
+            "raised past the desk's"
+        );
+        assert_eq!(refresh_for(144, &[60, 120]), Some(120));
+        assert_eq!(refresh_for(0, &[60, 59]), Some(60), "the refresh unread");
+        assert_eq!(refresh_for(60, &[]), None, "a size it does not list");
+    }
+
+    /// Any display of the desktop put at a size and turned by the system's name
+    /// for it, then put back as it was: `LOWLAT_DISPLAY` names it
+    /// (`\\.\DISPLAYn`), `LOWLAT_SIZE` the size (`1280x720`), which it must list.
+    /// Nothing is saved.
+    #[test]
+    #[ignore = "changes the mode and turn of the display LOWLAT_DISPLAY names"]
+    fn any_display_is_put_at_a_size_and_turned_by_its_name() {
+        let name = std::env::var("LOWLAT_DISPLAY").expect("LOWLAT_DISPLAY");
+        let (width, height) = std::env::var("LOWLAT_SIZE")
+            .expect("LOWLAT_SIZE")
+            .split_once('x')
+            .map(|(w, h)| (w.parse().expect("width"), h.parse().expect("height")))
+            .expect("WxH");
+        let before = display::named(&name).and_then(|(a, t)| display::shown(a, t));
+        let before = before.expect("the display shown");
+        let put = put_size(&name, width, height).expect("the size refused");
+        put_turn(&name, Turn::Quarter).expect("the turn refused");
+        std::thread::sleep(Duration::from_millis(500));
+        let now = display::named(&name).and_then(|(a, t)| display::shown(a, t));
+        let now = now.expect("the display shown after");
+        put_turn(&name, Turn::Upright).expect("the turn back refused");
+        display::set_mode(&name, before.mode, false).expect("the mode back refused");
+        println!(
+            "{name} was {}, put at {put}, then {} turned {}",
+            before.mode, now.mode, now.turned
+        );
+        assert!(now.turned, "the turn did not take");
+        assert_eq!(
+            (now.mode.width, now.mode.height),
+            (width, height),
+            "the size did not take"
+        );
+        assert!(
+            put_size(&name, 1234, 567).is_err(),
+            "a size the display does not list was put"
+        );
+    }
 
     /// **An unplug writes the file first**: with the file's lock held by
     /// another, an unplug of a monitor marked to come back answers that the

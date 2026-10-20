@@ -240,6 +240,18 @@ pub(crate) fn activate(adapter: u64, target: u32, save: bool) -> Result<(), u32>
     Ok(())
 }
 
+/// The adapter and target of the active path whose source the system names
+/// `name`, `\\.\DISPLAYn`: how any display of the desktop is found for a turn.
+pub(crate) fn named(name: &str) -> Option<(u64, u32)> {
+    let config = query(QDC_ONLY_ACTIVE_PATHS)?;
+    config
+        .paths
+        .iter()
+        .filter(|p| p.flags & DISPLAYCONFIG_PATH_ACTIVE != 0)
+        .find(|p| source_name(p).eq_ignore_ascii_case(name))
+        .map(|p| (value(p.targetInfo.adapterId), p.targetInfo.id))
+}
+
 /// Turn the monitor at `adapter`'s `target` to `rotation`: its active path's
 /// rotation changed and every mode supplied as it is -- the source keeps the
 /// monitor's own sides -- saved to the system's store only when asked.
@@ -326,6 +338,44 @@ pub(crate) fn offers(name: &str, mode: Mode) -> bool {
         }
     }
     false
+}
+
+/// The refreshes the display named `name` lists at `width` x `height` -- the
+/// monitor's own sides, turned or not -- and the one it runs at now.
+pub(crate) fn refreshes(name: &str, width: u32, height: u32) -> (Vec<u32>, u32) {
+    let name = wide(name);
+    let (width, height) = desktop_sides(Mode::new(width, height, 0), orientation(&name));
+    // SAFETY: plain data, for which zero is a value.
+    let mut dm: DEVMODEW = unsafe { core::mem::zeroed() };
+    dm.dmSize = u16::try_from(size_of::<DEVMODEW>()).unwrap_or(0);
+    // SAFETY: a terminated name and a structure of the size it says.
+    let now = if unsafe { EnumDisplaySettingsW(name.as_ptr(), ENUM_CURRENT_SETTINGS, &raw mut dm) }
+        == 0
+    {
+        0
+    } else {
+        dm.dmDisplayFrequency
+    };
+    let mut listed = Vec::new();
+    for index in 0..u32::from(u16::MAX) {
+        // SAFETY: as above.
+        let ok = unsafe {
+            EnumDisplaySettingsW(
+                name.as_ptr(),
+                index as ENUM_DISPLAY_SETTINGS_MODE,
+                &raw mut dm,
+            )
+        };
+        if ok == 0 {
+            break;
+        }
+        if (dm.dmPelsWidth, dm.dmPelsHeight) == (width, height)
+            && !listed.contains(&dm.dmDisplayFrequency)
+        {
+            listed.push(dm.dmDisplayFrequency);
+        }
+    }
+    (listed, now)
 }
 
 /// Put the display named `name` at `mode`, keeping its turn, saved to the

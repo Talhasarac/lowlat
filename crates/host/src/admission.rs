@@ -1505,14 +1505,6 @@ impl Admission {
         }
     }
 
-    /// Turn the host's own display, once: never held, so a turn made after,
-    /// at the desk or asked again, stands.
-    pub fn turn_own_display(&self, turn: Rotation) {
-        if let Some(stream) = self.stream.as_ref() {
-            stream.turn_own_display(turn);
-        }
-    }
-
     /// What the host's own display is asked to be.
     pub fn own_display(&self) -> crate::stream::OwnDisplay {
         self.stream
