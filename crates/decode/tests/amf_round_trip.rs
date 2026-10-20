@@ -258,6 +258,43 @@ fn h264_comes_back_as_it_went_in() {
     check("h264", Codec::H264, false, false);
 }
 
+/// The streams this backend writes, for an external parser to say what their
+/// sequence sets declare -- above all the reorder depth, which a hardware
+/// decoder that is not told holds pictures back for. Written beside each
+/// other in `LOWLAT_DUMP`, the temporary directory otherwise:
+///
+/// ```text
+/// ffmpeg -hide_banner -loglevel trace -i amf.h264 -c copy -bsf:v trace_headers -f null -
+/// ```
+#[test]
+#[ignore = "requires AMD's GPU and runtime"]
+fn it_encodes_for_an_external_parser() {
+    let d3d11 = D3d11::load().expect("the system's libraries");
+    let device = amd(&d3d11);
+    let runtime = Amf::load().expect("AMD's runtime");
+    let context = runtime.context(&device).expect("a context");
+    let dir = std::env::var_os("LOWLAT_DUMP").map_or_else(std::env::temp_dir, Into::into);
+    for (codec, name) in [(Codec::H264, "amf.h264"), (Codec::H265, "amf.h265")] {
+        let mut encoder = amf::Encoder::new(
+            &runtime,
+            &context,
+            config(codec, false, false, amf::Source::Yuv),
+        )
+        .expect("an encoder");
+        let mut source = Synthetic::new(WIDTH, HEIGHT);
+        let mut stream = Vec::new();
+        for index in 0..8 {
+            encoder
+                .submit(&source.acquire(), index == 0)
+                .expect("submit");
+            stream.extend_from_slice(&next_unit(&mut encoder).0);
+        }
+        let path = dir.join(name);
+        std::fs::write(&path, &stream).expect("write");
+        println!("wrote {}", path.display());
+    }
+}
+
 #[test]
 #[ignore = "requires AMD's GPU and runtime"]
 fn hevc_comes_back_as_it_went_in() {
