@@ -24,9 +24,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - **On a second machine with an AMD GPU alone** (RDNA 3, Radeon 780M): ten minutes each of H.264
   and HEVC from its panel at 2560x1440 and 120, read in place, and ten-bit HEVC; the backend's
   hardware checks there all pass, ten-bit HEVC 70.7 dB luma and 70.1 chroma.
-- The library's demo, an established client on Windows, and established clients on macOS, native
-  and in a browser -- the browser's decode the same on the NVIDIA's stream as on the AMD's; both
-  CI jobs and the Linux bar.
+- The library's demo, an established client on Windows, established clients on macOS, native
+  and in a browser -- the browser's decode the same on the NVIDIA's stream as on the AMD's -- and
+  on Android, H.264 and HEVC, three guests at once on the AMD's monitor with no keyframe asked;
+  both CI jobs and the Linux bar.
 
 ### Measured
 - The encode at p50 and p99: 4.0 and 5.2 ms for H.264, 4.1 and 5.3 for HEVC at 1080p60 on the

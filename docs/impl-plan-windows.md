@@ -10,7 +10,8 @@ waits for W2.5, reviewed the same day. *Amended 2026-10-18:* W2.5, the service, 
 checked on the development machine and closed; W3's gate is next. *Amended 2026-10-19:* W2.7,
 AMD's encoder, is added and planned at its interview; it waits on no other step. Built the same
 day; its live checks are next. *Amended 2026-10-20:* W2.7's live checks run on two AMD GPUs,
-two faults found and fixed; what the gate asked and was not run is named in its entry.
+two faults found and fixed, and W2.7 closed; what the gate asked and was not run is named in its
+entry.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -949,7 +950,7 @@ once, here.
   and how it keeps a clock in a quiet room are its own review. Until then a person sends that
   program to another output in the system's per-application settings, or mutes it
   ([05 §9.5](05-host.md)).
-- [ ] **W2.7 AMD's encoder** (*added and planned 2026-10-19, at its interview; not in the gate
+- [x] **W2.7 AMD's encoder** (*added and planned 2026-10-19, at its interview; not in the gate
   below, it has its own*): AMD's own runtime, loaded at run time, encoding on the D3D11 device of
   an output the AMD renders -- a monitor through desktop duplication, the host's own display read
   straight from its driver -- in H.264 and HEVC, and HEVC at ten bits where the part codes it,
@@ -1033,11 +1034,12 @@ once, here.
   0.88 at the median), so a frame read in place goes back as soon as the encoder is done with it;
   and ending the encoder on a device the system had removed faulted the process inside AMD's
   driver, so it is let go unended ([05 §2](05-host.md)). The clients: the library's demo, an
-  established client on Windows, and established clients on macOS, native and in a browser --
-  each sequence set states its reorder depth, and the browser's decode was the same on the
-  NVIDIA's stream as on the AMD's. **Not run as the gate words it**: an Android client; and the
-  second machine's link could not be shaped from here, so its rate change and loss stand on its
-  hardware checks and on the development machine's live legs.
+  established client on Windows, established clients on macOS, native and in a browser -- each
+  sequence set states its reorder depth, and the browser's decode was the same on the NVIDIA's
+  stream as on the AMD's -- and on Android in both codecs, three guests at once. **Not run as the
+  gate words it**: the second machine's link could not be shaped from here, so its rate change
+  and loss stand on its hardware checks and on the development machine's live legs.
+  *Closed 2026-10-20.*
 
 **Gate:** the host on the development machine, with established clients on macOS and Android on
 the same LAN:
@@ -1709,6 +1711,7 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-20: W2.7 closed: clients on Windows, macOS (native and in a browser) and Android.
 - 2026-10-20: W2.7 checked on two AMD GPUs: a frame read in place goes back once the encoder is
   done with it, and the encoder is let go unended on a removed device ([05 §2](05-host.md),
   [05 §4](05-host.md) and [06 §3](06-api.md) amended, [09 §8](09-compatibility.md) graded).
