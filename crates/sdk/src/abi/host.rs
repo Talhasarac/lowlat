@@ -1980,6 +1980,65 @@ pub unsafe extern "C" fn lowlat_host_set_video_config(
     }
 }
 
+/// The turn a caller asked for: one of [`lowlat_rotation`], and only where the
+/// host has a display of its own.
+fn turn_asked(rotation: u32) -> Option<::lowlat_host::video::Rotation> {
+    use ::lowlat_host::video::Rotation;
+    use lowlat_rotation::*;
+
+    if cfg!(not(windows)) {
+        return None;
+    }
+    [
+        (LOWLAT_ROTATION_NONE, Rotation::None),
+        (LOWLAT_ROTATION_90, Rotation::Deg90),
+        (LOWLAT_ROTATION_180, Rotation::Deg180),
+        (LOWLAT_ROTATION_270, Rotation::Deg270),
+    ]
+    .into_iter()
+    .find(|&(named, _)| named as u32 == rotation)
+    .map(|(_, turn)| turn)
+}
+
+/// Turn the host's own display (Windows, minor 31).
+///
+/// **Put once and never held.** A turn made after -- in the display's own
+/// settings at the desk, or asked again here -- stands, the last one made
+/// winning. It is put when a mode asked of the display would be: within a
+/// second while nobody is seated, by a rebuild while the display is being
+/// captured, and at the next build while another output is; with no display
+/// of the host's own plugged then, it is let go. The stream follows the turn
+/// as it follows any display's, declaring it in the video header.
+///
+/// @param[in] hl The handle from [`lowlat_host_create`].
+/// @param[in] rotation One of [`lowlat_rotation`].
+/// @returns [`LOWLAT_OK`], or [`LOWLAT_ERR_INVALID_ARGUMENT`] for a turn that is not
+/// one of [`lowlat_rotation`], when the host is not running, and where the host
+/// has no display of its own.
+///
+/// # Safety
+///
+/// `hl` came from [`lowlat_host_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lowlat_host_turn_own_display(
+    hl: *mut lowlat_host,
+    rotation: u32,
+) -> lowlat_status {
+    unsafe {
+        entered(hl, |handle| {
+            let Some(turn) = turn_asked(rotation) else {
+                return LOWLAT_ERR_INVALID_ARGUMENT;
+            };
+            let held = handle.held();
+            let Some(seam) = held.seam.as_ref() else {
+                return LOWLAT_ERR_INVALID_ARGUMENT;
+            };
+            seam.turn_own_display(turn);
+            LOWLAT_OK
+        })
+    }
+}
+
 /// Change what sound is set to, while a host runs.
 ///
 /// **Every field takes effect without a restart.** Switching sound off gives
@@ -3038,6 +3097,25 @@ mod start_tests {
         let mut cfg = config();
         put(&mut cfg.video.output, "virtual");
         assert_eq!(configured(&cfg).is_some(), cfg!(windows));
+    }
+
+    /// **A turn of the host's own display is one of `lowlat_rotation`**, the
+    /// wire's own numbering, and only where the host has that display.
+    #[test]
+    fn a_turn_is_one_of_four_and_only_where_the_host_has_its_own_display() {
+        use ::lowlat_host::video::Rotation;
+
+        for (asked, turn) in [
+            (1, Rotation::None),
+            (2, Rotation::Deg90),
+            (3, Rotation::Deg180),
+            (4, Rotation::Deg270),
+        ] {
+            assert_eq!(super::turn_asked(asked), cfg!(windows).then_some(turn));
+        }
+        for refused in [0, 5, u32::MAX] {
+            assert_eq!(super::turn_asked(refused), None, "{refused} taken");
+        }
     }
 
     /// **A configuration nobody filled in is not a zeroed one.**

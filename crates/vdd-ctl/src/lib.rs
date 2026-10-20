@@ -93,6 +93,16 @@ pub enum Error {
     Io(u32),
 }
 
+/// How a monitor is turned on the desktop, numbered as the system's display
+/// configuration numbers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    Upright = 1,
+    Quarter = 2,
+    Half = 3,
+    ThreeQuarters = 4,
+}
+
 /// A monitor of the driver, as the driver and the system see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Monitor {
@@ -381,6 +391,30 @@ impl Controller {
                 }
             })?;
         }
+        self.monitor(slot)
+    }
+
+    /// Turn a monitor this handle plugged, or a kept one, through the
+    /// system's display configuration: its path turned, its mode as it is,
+    /// saved as a mode is. **Put once, never held**: whatever turns it after
+    /// -- its display settings, a program -- stands.
+    pub fn set_turn(&mut self, slot: u8, turn: Turn) -> Result<Monitor, Error> {
+        let deadline = Instant::now() + BOUND;
+        let entry = self.entry(slot)?;
+        let kept = entry.flags & Entry::KEPT != 0;
+        if !kept && entry.flags & Entry::OWNED == 0 {
+            return Err(Error::NotOwner);
+        }
+        let (adapter, target) = (entry.os_adapter_luid, entry.os_target_id);
+        self.show(slot, adapter, target, None, false, kept, deadline)?;
+        let save = kept && display::others_active(adapter);
+        display::set_turn(adapter, target, turn as i32, save)
+            .map_err(|code| Error::Display(i32::try_from(code).unwrap_or(i32::MAX)))?;
+        let turned = turn != Turn::Upright;
+        wait(deadline, || {
+            display::shown(adapter, target).filter(|shown| shown.turned == turned)
+        })
+        .ok_or(Error::NotReady(slot))?;
         self.monitor(slot)
     }
 

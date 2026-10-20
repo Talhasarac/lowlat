@@ -246,8 +246,15 @@ fn lit(mut outputs: Vec<Output>, monitored: impl Fn(&str) -> bool) -> Vec<Output
 fn picture_of(output: &Output) -> (u32, u32) {
     let width = u32::try_from(output.right.saturating_sub(output.left)).unwrap_or(0);
     let height = u32::try_from(output.bottom.saturating_sub(output.top)).unwrap_or(0);
+    panel_sides((width, height), output.rotation)
+}
+
+/// A picture's sides from the desktop's: the panel's, which a quarter turn
+/// swaps. **The duplication describes its mode at the desktop's sides** and
+/// hands its picture over at the panel's.
+fn panel_sides((width, height): (u32, u32), rotation: DXGI_MODE_ROTATION) -> (u32, u32) {
     if matches!(
-        output.rotation,
+        rotation,
         DXGI_MODE_ROTATION_ROTATE90 | DXGI_MODE_ROTATION_ROTATE270
     ) {
         (height, width)
@@ -419,6 +426,19 @@ fn driver_slot(name: &str) -> Option<u8> {
             .ok()?;
         slot_named(monitors.iter().map(|m| (m.name.as_str(), m.slot)), name)
     })
+}
+
+/// Where a display's pictures come from.
+#[derive(Debug, Clone, Copy)]
+enum Source {
+    /// The driver's frames where the output is one of its monitors, upright,
+    /// and they can be taken; the duplication otherwise.
+    Chosen,
+    /// The driver's monitor at this slot.
+    Driver(u8),
+    /// The system's duplication, whatever the output is.
+    #[cfg(test)]
+    Duplication,
 }
 
 /// Whether an output stands as its panel does. **The driver is told nothing
@@ -1326,7 +1346,7 @@ impl Display {
         size: (u32, u32),
         register: Register<'_, '_>,
     ) -> Result<Self, Error> {
-        Self::open_with(device, name, layout, size, register, None)
+        Self::open_with(device, name, layout, size, register, Source::Chosen)
     }
 
     /// Prepare to capture the output `name`, a monitor of the host's display
@@ -1342,7 +1362,21 @@ impl Display {
         register: Register<'_, '_>,
         slot: u8,
     ) -> Result<Self, Error> {
-        Self::open_with(device, name, layout, size, register, Some(slot))
+        Self::open_with(device, name, layout, size, register, Source::Driver(slot))
+    }
+
+    /// Prepare to capture the output named `name` through the system's
+    /// duplication of it, whatever the output is: what a test compares the
+    /// driver's frames against.
+    #[cfg(test)]
+    fn open_duplicated(
+        device: &Arc<Device>,
+        name: &str,
+        layout: Layout,
+        size: (u32, u32),
+        register: Register<'_, '_>,
+    ) -> Result<Self, Error> {
+        Self::open_with(device, name, layout, size, register, Source::Duplication)
     }
 
     fn open_with(
@@ -1351,7 +1385,7 @@ impl Display {
         layout: Layout,
         size: (u32, u32),
         mut register: Register<'_, '_>,
-        direct: Option<u8>,
+        source: Source,
     ) -> Result<Self, Error> {
         let aware = Aware::per_monitor();
         let d3d11 = D3d11::load()?;
@@ -1422,9 +1456,11 @@ impl Display {
         // whenever the driver answers** -- which it does to the system account
         // the host runs as -- **while it stands upright**, and duplicated
         // otherwise, as any display is.
-        let attached = match direct {
-            Some(slot) => Some((slot, Direct::attach(slot)?)),
-            None => driver_slot(&display.output.name).and_then(|slot| {
+        let attached = match source {
+            Source::Driver(slot) => Some((slot, Direct::attach(slot)?)),
+            #[cfg(test)]
+            Source::Duplication => None,
+            Source::Chosen => driver_slot(&display.output.name).and_then(|slot| {
                 if !upright(display.output.rotation) {
                     lowlat_common::log_info!(
                         "display: {name} is turned, duplicated rather than read from its \
@@ -1523,7 +1559,9 @@ impl Display {
                 // **A picture of another size, or turned another way, is a
                 // rebuild**: the targets and the encoder are built for one,
                 // and the turn is what the place declares.
-                if (mode.width, mode.height) != self.size || mode.rotation != self.output.rotation {
+                if panel_sides((mode.width, mode.height), mode.rotation) != self.size
+                    || mode.rotation != self.output.rotation
+                {
                     lowlat_common::log_info!(
                         "display: {} is {}x{} turned {} now, was {}x{} turned {}",
                         self.output.name,
@@ -3685,6 +3723,248 @@ mod tests {
         assert!(rebuilt, "a turn under a read from the driver went unseen");
     }
 
+    /// **A turned monitor is duplicated at its panel's sides, with no rebuild
+    /// asked at its open**: the duplication describes its mode at the
+    /// desktop's sides, which a quarter turn swaps, and hands its picture over
+    /// at the panel's; compared as the picture's, every open of a turned
+    /// output asked for another. One plugged by this test and turned a
+    /// quarter as the display settings turn one, unsaved. Run as a user or as
+    /// the system account.
+    #[test]
+    #[ignore = "requires the display driver and the vendor's GPU; turns a monitor"]
+    fn a_turned_monitor_is_duplicated_at_its_panels_sides() {
+        use lowlat_vdd_ctl::{Lifetime, Mode};
+
+        let mode = (1920, 1080, 60);
+        let pause = core::time::Duration::from_millis(1500);
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(
+                Mode::new(mode.0, mode.1, mode.2),
+                Lifetime::Bound,
+                false,
+                None,
+            )
+            .expect("a monitor");
+        let name = monitor.name;
+        std::thread::sleep(pause);
+        assert!(
+            set_at_desk(&name, mode, true, false),
+            "the monitor would not turn"
+        );
+        std::thread::sleep(pause);
+        let (direct, resized, turn, pictured) = on_nvenc(&name, |display| {
+            (
+                display.direct.is_some(),
+                display.take_resize(),
+                display.place().map(|p| p.rotation),
+                a_picture(display),
+            )
+        });
+        assert!(
+            set_at_desk(&name, mode, false, false),
+            "the monitor would not turn back"
+        );
+        println!(
+            "direct {direct}, a rebuild asked {resized}, turned {turn:?}, a picture {pictured}"
+        );
+        assert!(!direct, "a turned monitor read from its driver");
+        assert!(!resized, "a turned output asked for a rebuild as it opened");
+        assert!(
+            matches!(turn, Some(Rotation::Deg90 | Rotation::Deg270)),
+            "the turn not declared"
+        );
+        assert!(pictured, "nothing presented");
+    }
+
+    /// The luma plane of a two-plane target, read back whole: `height` rows,
+    /// `RowPitch` apart.
+    fn luma_of(device: &Device, target: &Target) -> (Vec<u8>, usize) {
+        use lowlat_drivers::ffi::d3d11::{
+            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_STAGING, DXGI_SAMPLE_DESC, ID3D11Resource,
+        };
+        use lowlat_drivers::vcall;
+
+        let (width, height) = target.size();
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: target.layout().format(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ as u32,
+            MiscFlags: 0,
+        };
+        let staging = device.texture(&desc).expect("a staging texture");
+        let context = device.context();
+        // SAFETY: plain data the call fills.
+        let mut mapped: D3D11_MAPPED_SUBRESOURCE = unsafe { core::mem::zeroed() };
+        // SAFETY: the device's context on this thread; both textures are live
+        // and of one format and size; the mapping is read and unmapped before
+        // the staging texture goes.
+        unsafe {
+            vcall!(
+                context,
+                CopyResource,
+                staging.as_ptr().cast::<ID3D11Resource>(),
+                target.texture().as_ptr().cast::<ID3D11Resource>()
+            );
+            let hr = vcall!(
+                context,
+                Map,
+                staging.as_ptr().cast::<ID3D11Resource>(),
+                0,
+                D3D11_MAP_READ,
+                0,
+                &raw mut mapped
+            )
+            .expect("the entry");
+            assert!(hr >= 0, "map: 0x{hr:08x}");
+        }
+        let pitch = mapped.RowPitch as usize;
+        // SAFETY: the mapping holds at least the luma's rows of `pitch` bytes.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(mapped.pData.cast::<u8>(), pitch * height as usize)
+        }
+        .to_vec();
+        // SAFETY: mapped above.
+        unsafe { vcall!(context, Unmap, staging.as_ptr().cast::<ID3D11Resource>(), 0) };
+        (bytes, pitch)
+    }
+
+    /// **What a turned monitor's driver hands over** (a probe for the turn of
+    /// the host's own display): one plugged by this test and turned a quarter
+    /// as the display settings turn one, unsaved, the desktop left still; one
+    /// picture taken through the duplication and one straight from the driver
+    /// -- opened by its slot, past the upright rule -- converted alike and
+    /// their luma read back. Prints both sizes, the duplication's turn, and how
+    /// many samples differ as they are and with the driver's picture turned a
+    /// half. `LOWLAT_TURN=0` leaves the monitor upright, the control. Run as
+    /// the system account.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU and the system account; turns a monitor"]
+    fn what_a_turned_monitors_driver_hands_over() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Lifetime, Mode};
+
+        let mode = (1920, 1080, 60);
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(
+                Mode::new(mode.0, mode.1, mode.2),
+                Lifetime::Bound,
+                false,
+                None,
+            )
+            .expect("a monitor");
+        let name = monitor.name;
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let turned = std::env::var("LOWLAT_TURN").map_or(true, |v| v != "0");
+        if turned {
+            assert!(
+                set_at_desk(&name, mode, true, false),
+                "the monitor would not turn"
+            );
+        }
+        std::thread::sleep(core::time::Duration::from_millis(3000));
+        let output = Display::locate(Some(&name)).expect("its output");
+        let (width, height, _) = Display::shape_of_display(Some(&name)).expect("its picture");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let (first, second) = (
+            api.open_session(Arc::clone(&device)).expect("a session"),
+            api.open_session(Arc::clone(&device)).expect("a session"),
+        );
+        let config = nvenc::Config {
+            codec: nvenc::Codec::H265,
+            width,
+            height,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            min_qp: lowlat_encode::DEFAULT_MIN_QP,
+            thorough: false,
+            chroma: nvenc::Chroma::Yuv420,
+            depth: nvenc::Depth::Eight,
+        };
+        let (encoder, other) = (
+            first.initialize(config).expect("an encoder"),
+            second.initialize(config).expect("an encoder"),
+        );
+        let mut dup = Display::open_duplicated(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            Register::Nvenc(&encoder),
+        )
+        .expect("the duplication");
+        let mut direct = Display::open_direct(
+            &device,
+            &output.name,
+            Layout::Nv12,
+            (width, height),
+            Register::Nvenc(&other),
+            monitor.slot,
+        )
+        .expect("the display, read from its driver");
+        let dup_mode = dup.duplication.as_ref().map(Duplication::mode);
+        let page = direct.direct.as_ref().and_then(|d| d.page.read());
+        let take = |display: &mut Display| -> Option<(Vec<u8>, usize)> {
+            let began = Time::now();
+            while clock::elapsed_ms(began) < 2000.0 {
+                if display.wait_present(100) == Some(true)
+                    && display.acquire().is_ok()
+                    && display.converted().ok().flatten().is_some()
+                {
+                    let at = display.next.checked_sub(1)? % display.targets.len().max(1);
+                    return Some(luma_of(&display.device, display.targets.get(at)?));
+                }
+            }
+            None
+        };
+        let (dup_luma, direct_luma) = (take(&mut dup), take(&mut direct));
+        if turned {
+            assert!(
+                set_at_desk(&name, mode, false, false),
+                "the monitor would not turn back"
+            );
+        }
+        println!(
+            "turned {turned}; picture {width}x{height}; duplication {:?}; driver's page {:?}",
+            dup_mode.map(|m| (m.width, m.height, m.rotation)),
+            page.map(|s| (s.width, s.height))
+        );
+        let (Some((a, pa)), Some((b, pb))) = (dup_luma, direct_luma) else {
+            panic!("a source gave no picture");
+        };
+        let (w, h) = (width as usize, height as usize);
+        let differ = |half: bool| {
+            let mut count = 0usize;
+            for y in 0..h {
+                for x in 0..w {
+                    let (bx, by) = if half { (w - 1 - x, h - 1 - y) } else { (x, y) };
+                    if a[y * pa + x].abs_diff(b[by * pb + bx]) > 2 {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        };
+        let (as_is, halved) = (differ(false), differ(true));
+        println!(
+            "luma samples differing of {}: as they are {as_is}, the driver's turned a half {halved}",
+            w * h
+        );
+    }
+
     /// A window over a whole output whose pointer is the test's own: made and
     /// pumped on a thread of its own, the pointer it shows set and shown or
     /// hidden on that thread, which is where the system takes both from.
@@ -3953,8 +4233,9 @@ mod tests {
     /// the driver's report says hidden. Hidden by the application, the
     /// pointer turns relative on both, and shown again it is absolute with
     /// its position; taken off the display nothing is said, and back on it
-    /// the state is right. Moves the desk's pointer; run as the system
-    /// account.
+    /// the state is right. `LOWLAT_TURN=1` turns the monitor a quarter first,
+    /// as the display settings turn one, unsaved. Moves the desk's pointer;
+    /// run as the system account.
     #[test]
     #[ignore = "requires the display driver, the vendor's GPU and the system account; moves the pointer"]
     fn the_pointer_reads_the_same_from_the_driver_as_from_the_duplication() {
@@ -3970,6 +4251,13 @@ mod tests {
             .plug(Mode::new(1920, 1080, 60), Lifetime::Bound, false, None)
             .expect("a monitor");
         std::thread::sleep(core::time::Duration::from_millis(1500));
+        if std::env::var("LOWLAT_TURN").is_ok_and(|v| v != "0") {
+            assert!(
+                set_at_desk(&monitor.name, (1920, 1080, 60), true, false),
+                "the monitor would not turn"
+            );
+            std::thread::sleep(core::time::Duration::from_millis(1500));
+        }
         let output = Display::locate(Some(&monitor.name)).expect("its output");
         let d3d11 = D3d11::load().expect("the system's libraries");
         let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
@@ -3993,7 +4281,7 @@ mod tests {
             first.initialize(config).expect("an encoder"),
             second.initialize(config).expect("an encoder"),
         );
-        let mut dup = Display::open(
+        let mut dup = Display::open_duplicated(
             &device,
             &output.name,
             Layout::Nv12,
@@ -4001,6 +4289,7 @@ mod tests {
             Register::Nvenc(&encoder),
         )
         .expect("the duplication");
+        assert!(dup.direct.is_none(), "the duplication read from the driver");
         let mut direct = Display::open_direct(
             &device,
             &output.name,
@@ -4644,7 +4933,7 @@ mod tests {
                         monitor.slot,
                     )
                 } else {
-                    Display::open(
+                    Display::open_duplicated(
                         &device,
                         &output.name,
                         Layout::Nv12,
@@ -4653,6 +4942,11 @@ mod tests {
                     )
                 }
                 .expect("the display");
+                assert_eq!(
+                    display.direct.is_some(),
+                    direct,
+                    "the source compared is not the one asked for"
+                );
                 let source = usize::from(direct);
                 let began = Time::now();
                 let mut taken = 0;

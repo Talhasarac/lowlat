@@ -63,7 +63,17 @@ impl Own {
         self.reconcile(shared, config, None);
     }
 
+    /// Hold the display at its mode, then put a turn asked of it: **once**,
+    /// after the mode, and let go where there is no display to turn.
     fn reconcile(&mut self, shared: &Shared, config: &Config, joining: Option<Declared>) {
+        let turn = shared.take_own_turn();
+        self.hold(shared, config, joining);
+        if let Some(turn) = turn {
+            self.display.turn(turn);
+        }
+    }
+
+    fn hold(&mut self, shared: &Shared, config: &Config, joining: Option<Declared>) {
         let named = config
             .output
             .as_deref()

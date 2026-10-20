@@ -927,7 +927,8 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
     };
     // **The host's own display is this host's to size**, so a size asked of
     // it goes into its setting, the last request winning, rather than to a
-    // session; a turn of it is refused until its rotation has been checked.
+    // session; **a turn of it is put once**, as one at the desk is, and the
+    // last turn made stands.
     if video.output == lowlat_host::display::VIRTUAL {
         if let Some((width, height)) = asked_size {
             lowlat_common::log_info!(
@@ -939,11 +940,12 @@ fn apply(seam: &mut Admission, body: &[u8], video: &Video, listed: &[Selectable]
                 ..seam.own_display()
             });
         }
-        if asked_rotation.is_some() {
+        if let Some(turn) = asked_rotation {
+            let turn = lowlat_host::video::Rotation::from_bits(turn);
             lowlat_common::log_info!(
-                "lowlatd: {who} asked to turn the host's own display, refused: its turn is not \
-                 checked yet"
+                "lowlatd: {who} asked to turn the host's own display {turn:?}"
             );
+            seam.turn_own_display(turn);
         }
     } else if asked_size.is_some() || asked_rotation.is_some() {
         let output = lowlat_host::display::captured(listed, seam.captured())

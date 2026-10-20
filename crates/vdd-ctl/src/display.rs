@@ -22,7 +22,8 @@ use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID};
 use windows_sys::Win32::Graphics::Gdi::{
     CDS_UPDATEREGISTRY, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
     DISPLAYCONFIG_PATH_ACTIVE, DISPLAYCONFIG_PATH_MODE_IDX_INVALID, DM_DISPLAYFREQUENCY,
-    DM_PELSHEIGHT, DM_PELSWIDTH, ENUM_DISPLAY_SETTINGS_MODE, EnumDisplaySettingsW,
+    DM_PELSHEIGHT, DM_PELSWIDTH, DMDO_90, DMDO_270, DMDO_DEFAULT, ENUM_CURRENT_SETTINGS,
+    ENUM_DISPLAY_SETTINGS_MODE, EnumDisplaySettingsW,
 };
 
 /// One of the driver's monitors as the system shows it.
@@ -239,13 +240,70 @@ pub(crate) fn activate(adapter: u64, target: u32, save: bool) -> Result<(), u32>
     Ok(())
 }
 
+/// Turn the monitor at `adapter`'s `target` to `rotation`: its active path's
+/// rotation changed and every mode supplied as it is -- the source keeps the
+/// monitor's own sides -- saved to the system's store only when asked.
+pub(crate) fn set_turn(adapter: u64, target: u32, rotation: i32, save: bool) -> Result<(), u32> {
+    let mut config = query(QDC_ONLY_ACTIVE_PATHS).ok_or(1u32)?;
+    let path = config
+        .paths
+        .iter_mut()
+        .find(|p| p.flags & DISPLAYCONFIG_PATH_ACTIVE != 0 && targets(p, adapter, target))
+        .ok_or(1u32)?;
+    path.targetInfo.rotation = rotation;
+    let mut flags = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
+    if save {
+        flags |= SDC_SAVE_TO_DATABASE;
+    }
+    // SAFETY: the paths and modes of one query, one path's rotation changed.
+    let status = unsafe {
+        SetDisplayConfig(
+            u32::try_from(config.paths.len()).unwrap_or(0),
+            config.paths.as_ptr(),
+            u32::try_from(config.modes.len()).unwrap_or(0),
+            config.modes.as_ptr(),
+            flags,
+        )
+    };
+    if status != 0 {
+        return Err(u32::try_from(status).unwrap_or(1));
+    }
+    Ok(())
+}
+
 fn wide(name: &str) -> Vec<u16> {
     name.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// A mode's sides as the desktop's own interface speaks of them: the
+/// monitor's own, swapped while the display is turned a quarter -- its list
+/// is, and a mode put with the monitor's own sides is refused.
+fn desktop_sides(mode: Mode, orientation: u32) -> (u32, u32) {
+    if matches!(orientation, DMDO_90 | DMDO_270) {
+        (mode.height, mode.width)
+    } else {
+        (mode.width, mode.height)
+    }
+}
+
+/// How the display named by `name`, terminated, is turned now, as the
+/// desktop's own interface says; upright where it will not say.
+fn orientation(name: &[u16]) -> u32 {
+    // SAFETY: plain data, for which zero is a value.
+    let mut dm: DEVMODEW = unsafe { core::mem::zeroed() };
+    dm.dmSize = u16::try_from(size_of::<DEVMODEW>()).unwrap_or(0);
+    // SAFETY: a terminated name and a structure of the size it says.
+    if unsafe { EnumDisplaySettingsW(name.as_ptr(), ENUM_CURRENT_SETTINGS, &raw mut dm) } == 0 {
+        return DMDO_DEFAULT;
+    }
+    // SAFETY: a display's settings, whose union holds its position and turn.
+    unsafe { dm.Anonymous1.Anonymous2.dmDisplayOrientation }
 }
 
 /// Whether the display named `name` offers `mode` now.
 pub(crate) fn offers(name: &str, mode: Mode) -> bool {
     let name = wide(name);
+    let (width, height) = desktop_sides(mode, orientation(&name));
     // SAFETY: plain data, for which zero is a value.
     let mut dm: DEVMODEW = unsafe { core::mem::zeroed() };
     dm.dmSize = u16::try_from(size_of::<DEVMODEW>()).unwrap_or(0);
@@ -262,7 +320,7 @@ pub(crate) fn offers(name: &str, mode: Mode) -> bool {
             return false;
         }
         if (dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency)
-            == (mode.width, mode.height, mode.refresh_hz)
+            == (width, height, mode.refresh_hz)
         {
             return true;
         }
@@ -270,16 +328,15 @@ pub(crate) fn offers(name: &str, mode: Mode) -> bool {
     false
 }
 
-/// Put the display named `name` at `mode`, saved to the system's store only
-/// when asked.
+/// Put the display named `name` at `mode`, keeping its turn, saved to the
+/// system's store only when asked.
 pub(crate) fn set_mode(name: &str, mode: Mode, save: bool) -> Result<(), i32> {
     let name = wide(name);
     // SAFETY: plain data, for which zero is a value.
     let mut dm: DEVMODEW = unsafe { core::mem::zeroed() };
     dm.dmSize = u16::try_from(size_of::<DEVMODEW>()).unwrap_or(0);
     dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-    dm.dmPelsWidth = mode.width;
-    dm.dmPelsHeight = mode.height;
+    (dm.dmPelsWidth, dm.dmPelsHeight) = desktop_sides(mode, orientation(&name));
     dm.dmDisplayFrequency = mode.refresh_hz;
     let flags = if save { CDS_UPDATEREGISTRY } else { 0 };
     // SAFETY: a terminated name and a filled structure; no window.
@@ -342,6 +399,21 @@ mod tests {
             real_beside(path(4, DP, None), OURS),
             "the kernel silent, a panel's technology"
         );
+    }
+
+    /// **The desktop's own interface speaks of a turned display's modes at
+    /// swapped sides**: its list is swapped, and a mode put with the
+    /// monitor's own sides is refused, so a quarter turn swaps them there; a
+    /// half turn and none keep them.
+    #[test]
+    fn a_quarter_turn_swaps_the_sides_the_desktops_interface_speaks_of() {
+        use windows_sys::Win32::Graphics::Gdi::DMDO_180;
+
+        let mode = Mode::new(1920, 1080, 60);
+        assert_eq!(desktop_sides(mode, DMDO_90), (1080, 1920));
+        assert_eq!(desktop_sides(mode, DMDO_270), (1080, 1920));
+        assert_eq!(desktop_sides(mode, DMDO_180), (1920, 1080));
+        assert_eq!(desktop_sides(mode, DMDO_DEFAULT), (1920, 1080));
     }
 
     /// The active paths as the save decision reads them, printed: a virtual

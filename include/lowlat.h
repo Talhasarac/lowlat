@@ -49,7 +49,7 @@
 #define LOWLAT_ABI_MAJOR 0
 
 /// The minor version, raised when surface is appended.
-#define LOWLAT_ABI_MINOR 30
+#define LOWLAT_ABI_MINOR 31
 
 /// The host half is in this build: every `lowlat_host_*` entry point exists.
 /// A library built for Windows carries the client half alone.
@@ -2669,6 +2669,26 @@ lowlat_status lowlat_host_get_metrics(lowlat_host *hl,
 /// `lowlat_host_video_config` whose `size` says how much of it is set.
 lowlat_status lowlat_host_set_video_config(lowlat_host *hl,
                                            const lowlat_host_video_config *cfg) LOWLAT_NOEXCEPT;
+
+/// Turn the host's own display (Windows, minor 31).
+///
+/// **Put once and never held.** A turn made after -- in the display's own
+/// settings at the desk, or asked again here -- stands, the last one made
+/// winning. It is put when a mode asked of the display would be: within a
+/// second while nobody is seated, by a rebuild while the display is being
+/// captured, and at the next build while another output is; with no display
+/// of the host's own plugged then, it is let go. The stream follows the turn
+/// as it follows any display's, declaring it in the video header.
+///
+/// @param[in] hl The handle from `lowlat_host_create`.
+/// @param[in] rotation One of `lowlat_rotation`.
+/// @returns `LOWLAT_OK`, or `LOWLAT_ERR_INVALID_ARGUMENT` for a turn that is not
+/// one of `lowlat_rotation`, when the host is not running, and where the host
+/// has no display of its own.
+///
+/// @attention `hl` came from `lowlat_host_create`.
+lowlat_status lowlat_host_turn_own_display(lowlat_host *hl,
+                                           uint32_t rotation) LOWLAT_NOEXCEPT;
 
 /// Change what sound is set to, while a host runs.
 ///
