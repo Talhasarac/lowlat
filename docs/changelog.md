@@ -3,6 +3,15 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-21 - W3.12 checked live
+
+### Checked
+- Live, the service on this build capturing the host's own display at 60 under the 120 Hz
+  primary, the demo a guest of it as an owner, a program drawing 120 a second on the display
+  twice for twenty seconds: composition to hand-over 0.19 ms at the median both times, p99 0.93
+  and 1.02, where it had been 9.31 and 10.05 with the same program; pictures to the encoder 16.67
+  ms apart, where they had been 16.94; none converted again.
+
 ## 2026-10-21 - W3.12 built: a display read from its driver paced on its own period
 
 ### Fixed

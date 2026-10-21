@@ -20,7 +20,7 @@ built and checked live; W3's gate is next. *Amended 2026-10-21:* W3.11 -- a prog
 the host's display -- added after a probe at the gate's second review, decided, built and checked
 live; W3's gate is next, its legs amended at it. *Amended 2026-10-21:* W3.12 -- a display read
 from its driver paced on the period it is handed pictures at -- added after W3.11's live check
-showed each picture a composition old, decided and built; its live check is next, then the gate.
+showed each picture a composition old, decided, built and checked live; W3's gate is next.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1881,7 +1881,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   undisturbed, entering fullscreen once. As it left, the system put back the store's 1920x1080
   and the host its 2560x1440, the stream there 0.5 s after the program's exit. The configuration
   was put back after, the service left on this build. **Owed**: the gate.
-- [ ] **W3.12 a display read from its driver paced on the period it is handed pictures at**: the
+- [x] **W3.12 a display read from its driver paced on the period it is handed pictures at**: the
   loop's deadlines, for a display read from its driver, on the slower of the compositor's clock and
   the display's mode; the duplication's left on the clock. Checked by the period a test of its own,
   and the frame clock against a driver's pictures -- the first composition after each of its own
@@ -1912,7 +1912,14 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   the reclamation test's port taken by another program while the Linux bar ran beside it, as it
   has been before -- passing alone four times in four and in the host crate's run again, 205
   passed; on Linux 1388 passed with the two that need a `localhost` answering on both families.
-  **Owed**: live.
+  *Checked live 2026-10-21*, the service on this build capturing the host's own display at 60
+  under the 120 Hz primary, the library's demo a guest of it as an owner, and a program drawing
+  120 a second on the display at 1280x720 twice for twenty seconds, each entry a rebuild and a
+  phase of its own: composition to hand-over 0.192/0.430/0.932 and 0.189/0.559/1.023 ms at
+  p50/p95/p99, 600 pictures each, where W3.11's live check had read 9.313/9.851/10.049 with the
+  same program; the pictures handed to the encoder 16.67 ms apart at the median, where they had
+  been 16.94; none converted again. The configuration was put back after, the service left on
+  this build. **Owed**: the gate.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1992,7 +1999,8 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
-- 2026-10-21: W3.12 added after W3.11's live check, decided and built: a display read from its
+- 2026-10-21: W3.12 added after W3.11's live check, decided, built and checked live (composition
+  to hand-over 0.19 ms at the median, from 9.31): a display read from its
   driver paced on the slower of the compositor's clock and its mode, the period it is handed
   pictures at, where the clock's alone locked each picture a composition late once the two
   drifted apart ([05 §2](05-host.md) amended).
