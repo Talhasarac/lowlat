@@ -3,6 +3,30 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-21 - W3.12 built: a display read from its driver paced on its own period
+
+### Fixed
+- **A display read from its driver could take every picture a composition late**
+  ([05 §2](05-host.md)): at a mode below the compositor's clock -- the host's own display at 60
+  under a 120 Hz primary, its default -- the driver is handed the first composition after each
+  refresh of its own, and its refreshes and the compositor's drift past each other. The loop's
+  deadlines sat on the compositor's clock, and once the two had drifted a composition apart every
+  deadline landed just after a composition that carried no picture, the one before taken at
+  every tick: 9.3 ms from the driver's acquire to the conversion at the median, live, with a
+  program drawing 120 a second. The deadlines of a display read from its driver now sit on the
+  slower of the clock and its mode; the duplication, which sees every composition, stays on the
+  clock.
+
+### Checked
+- The period a test of its own, failing on the rule as it was. The frame clock fed a driver's
+  pictures at four rates and five phases against a 120.001 Hz clock: on the driver's period no two
+  pictures in a row taken past the margin, at most one in a hundred at all; on the clock's, 1,438
+  in a row. Both bars: on Windows fmt and clippy clean, tests 1400 passed, the one failure the
+  reclamation test's port taken by another program, passing alone and in the host crate's run
+  again (205 passed); on Linux 1388 passed with the two that need a `localhost` answering on both
+  families.
+- Owed: live.
+
 ## 2026-10-21 - W3.11 checked live
 
 ### Checked

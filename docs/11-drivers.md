@@ -7,7 +7,8 @@ every monitor read straight from the driver, and the desk's settings of the host
 to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
 built and checked live the same day; a guest's size and turn of any display put by `lowlatd`
 (W3.10) built and checked live the same day; a program's own mode on the host's display (W3.11)
-built and checked live 2026-10-21; W3's gate to come. Built by
+built and checked live 2026-10-21, and a display read from its driver paced on the period it is
+handed pictures at (W3.12) built the same day; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -227,6 +228,10 @@ eight-bit BGRA. **The host reads the system's own buffer** ([05 §2](05-host.md)
   host.** The system writes a buffer again only for the third composition after it, so a picture
   stays intact for about three refreshes after its acquire -- 24 ms at 120 a second, measured --
   where the host converts within half a millisecond.
+  *Amended 2026-10-21, at W3.12:* **the driver is handed the first composition after each refresh
+  of its monitor's own**, at most the mode's rate -- 60 a second at 60 under a 120 Hz clock,
+  which composes 120 -- so the host paces a monitor read from it on the slower of the two
+  ([05 §2](05-host.md)).
 - **The host takes the latest picture**, waits for the fence on its device and converts into
   the encoder's input; after queuing the conversion it checks the driver's sequence, and when the
   driver has acquired as many newer pictures as the swapchain has buffers less one, the buffer may

@@ -111,6 +111,15 @@ Rules:
   mode's period there instead, a ceiling of 60 or 90 took each picture 4.6 to 6.2 ms after its
   composition at the median, where a panel whose mode is its clock takes it within a
   millisecond.
+  *Amended 2026-10-21 ([impl-plan-windows.md](impl-plan-windows.md) W3.12):* **read from the
+  display's driver, the deadlines take their phase from the slower of that clock and the mode.**
+  The driver is handed the first composition after each refresh of its own -- at most the mode's
+  rate, 60 a second at 60 under 120, measured -- and its refreshes and the compositor's drift
+  past each other a composition at a time. On the compositor's period, once the two had drifted a
+  composition apart, every deadline landed just after a composition that carried no picture and
+  the loop took the one before it, a composition old, at every tick: 9.3 ms from the driver's
+  acquire to the conversion at the median, live. The duplication sees every composition, and its
+  deadlines stay on the clock.
 - **The host's own display can be read straight from its driver** (*added 2026-10-16*,
   [11 §1.6](11-drivers.md), [impl-plan-windows.md](impl-plan-windows.md) W3.3), the system's
   own buffers converted as they are, with no duplication between: a second Windows source behind

@@ -18,7 +18,9 @@ built and checked live after it; W3's gate follows them. *Amended 2026-10-20:* W
 guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate,
 built and checked live; W3's gate is next. *Amended 2026-10-21:* W3.11 -- a program's own mode on
 the host's display -- added after a probe at the gate's second review, decided, built and checked
-live; W3's gate is next, its legs amended at it.
+live; W3's gate is next, its legs amended at it. *Amended 2026-10-21:* W3.12 -- a display read
+from its driver paced on the period it is handed pictures at -- added after W3.11's live check
+showed each picture a composition old, decided and built; its live check is next, then the gate.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -538,6 +540,11 @@ once, here.
   period under the deadlines, a ceiling of 60 or 90 on that display took each picture 4.6 to
   6.2 ms after its composition at the median, against under a millisecond on a panel whose
   mode is its clock.
+  *Amended 2026-10-21, at W3.12 (the maintainer's decision):* **read from the display's driver,
+  the deadlines take their phase from the slower of that clock and the mode**: the driver is
+  handed at most the mode's rate, the first composition after each refresh of its own, and
+  deadlines on the compositor's clock locked a composition late once the two drifted a
+  composition apart. The duplication sees every composition and stays on the clock.
   *Amended 2026-10-16, at W3.4's review:* **a masked colour pointer made only of black, white,
   clear and inverting pixels is drawn as the monochrome one it is**, its inverting pixels black
   in a light halo: the system hands a display driver every monochrome pointer in that form, so
@@ -1874,6 +1881,38 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   undisturbed, entering fullscreen once. As it left, the system put back the store's 1920x1080
   and the host its 2560x1440, the stream there 0.5 s after the program's exit. The configuration
   was put back after, the service left on this build. **Owed**: the gate.
+- [ ] **W3.12 a display read from its driver paced on the period it is handed pictures at**: the
+  loop's deadlines, for a display read from its driver, on the slower of the compositor's clock and
+  the display's mode; the duplication's left on the clock. Checked by the period a test of its own,
+  and the frame clock against a driver's pictures -- the first composition after each of its own
+  refreshes, the two clocks drifting -- taking each as it lands on that period, each broken once;
+  and live, the host's own display at 60 under the 120 Hz primary with a program drawing at 120,
+  composition to hand-over before and after.
+  *Added and decided 2026-10-21, after W3.11's live check* (the decision above marked W3.12). Seen
+  there: the host's own display at 1280x720 and 60 under the 120 Hz primary, a program drawing 120
+  pictures a second on it, each picture went to the conversion 9.3 ms after the driver acquired it
+  at the median, 9.85 at p95, where W3.8's live check had read 1.2. **Read**: the take does not
+  wait -- the device waits for the driver's fence, not the processor -- so the newest picture was
+  that old when the loop took it. **Measured**: the driver was handed 60.008 pictures a second at
+  that mode, from the monitor's own count, where the duplication sees every composition, 120 a
+  second -- the measurements the deadlines' period was chosen from at W3.2. **Modelled**: the
+  frame clock's own rule, fed the first composition of a 120.001 Hz clock after each refresh of a
+  60.008 Hz display, locks once the two drift a composition apart: one picture lands a
+  composition early, the clock keeps its grid as it does for a picture left from a skipped
+  refresh, and every deadline after lands half a millisecond past a composition that carried no
+  picture, the one before it taken, 8.8 ms old, at every tick. On the driver's own period every
+  picture is taken as it lands, in every phase and at every rate tried.
+  *Built 2026-10-21.* The period the deadlines sit on is a function of the compositor's clock, the
+  mode and whether the display is read from its driver; the period test failed on the rule as it
+  was (the driver's display at 60 under 120 put on the clock) and passes with it. The frame clock's
+  test feeds it a driver's pictures at 60, 60.008, 60.1 and 59.94 a second in five phases against
+  a 120.001 Hz clock: on the driver's period no two pictures in a row taken past the margin and at
+  most one in a hundred at all -- the one a drift brings early -- and on the clock's, broken once,
+  1,438 in a row. Both bars: on Windows fmt and clippy clean, tests 1400 passed and one failed --
+  the reclamation test's port taken by another program while the Linux bar ran beside it, as it
+  has been before -- passing alone four times in four and in the host crate's run again, 205
+  passed; on Linux 1388 passed with the two that need a `localhost` answering on both families.
+  **Owed**: live.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1953,6 +1992,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-21: W3.12 added after W3.11's live check, decided and built: a display read from its
+  driver paced on the slower of the compositor's clock and its mode, the period it is handed
+  pictures at, where the clock's alone locked each picture a composition late once the two
+  drifted apart ([05 §2](05-host.md) amended).
 - 2026-10-21: W3.11 added after a probe at W3's gate's second review, decided, built and checked
   live: the host's display put at its mode as asked and held against the system's restore alone, a
   program's own mode in exclusive fullscreen left to it and followed ([05 §2](05-host.md),
