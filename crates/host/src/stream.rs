@@ -3339,6 +3339,83 @@ mod slot_tests {
         assert!((mean_gap(&taken) - interval).abs() < 0.01 * interval);
     }
 
+    /// A display driver's pictures, on the loop's clock: the first
+    /// composition of a compositor at `clock` a second at or after each of
+    /// the driver's own refreshes at `vsync` a second, the first `phase` ms
+    /// in -- two clocks drifting past each other a composition at a time.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "refresh counts of a few thousand"
+    )]
+    fn driver(vsync: f64, clock: f64, phase: f64, count: usize) -> Vec<f64> {
+        let (own, composed) = (1000.0 / vsync, 1000.0 / clock);
+        let mut pictures: Vec<f64> = Vec::with_capacity(count);
+        for refresh in 0..count {
+            let at = ((phase + refresh as f64 * own) / composed).ceil() * composed;
+            if pictures.last().is_none_or(|&last| at > last) {
+                pictures.push(at);
+            }
+        }
+        pictures
+    }
+
+    /// How long after it landed each picture taken was taken, the loop's
+    /// deadlines on `refresh`: at each deadline the newest not yet taken at
+    /// or before it, else the first after it, caught as it lands.
+    fn ages(pictures: &[f64], interval: f64, refresh: f64, takes: usize) -> Vec<f64> {
+        let mut slots = Slots::default();
+        let (mut deadline, mut next) = (0.0f64, 0usize);
+        let mut ages = Vec::with_capacity(takes);
+        while ages.len() < takes {
+            let landed = pictures[next..]
+                .iter()
+                .take_while(|&&at| at <= deadline)
+                .count();
+            let (taken, at) = if landed > 0 {
+                (next + landed - 1, deadline)
+            } else {
+                (next, pictures[next].max(deadline))
+            };
+            ages.push(at - pictures[taken]);
+            next = taken + 1;
+            deadline = slots.after_picture(pictures[taken], interval, refresh);
+        }
+        ages
+    }
+
+    /// **A display driver's pictures are taken as they land on the driver's
+    /// own period**: at 60 under a compositor at 120.001 it is handed the
+    /// first composition after each of its own refreshes, and the two clocks
+    /// drift a composition apart now and then. Deadlines on its own period
+    /// take each picture as it lands, but for the one a drift brings early;
+    /// on the compositor's clock, after such a drift, every deadline fell just
+    /// after a composition that carried no picture and the loop took the one
+    /// before it, a composition old, at every tick.
+    #[test]
+    fn a_drivers_pictures_are_taken_as_they_land_on_its_own_period() {
+        let (interval, own) = (1000.0 / 60.0, 1000.0 / 60.0);
+        for vsync in [60.0, 60.008, 60.1, 59.94] {
+            for phase in [0.0, 2.0, 4.0, 6.0, 8.0] {
+                let ages = ages(&driver(vsync, 120.001, phase, 3000), interval, own, 2400);
+                // Past the margin and then some: a deadline placed a margin
+                // after a refresh takes its picture that long after it lands,
+                // give or take the two clocks' difference.
+                let late = |age: &f64| *age > 2.0 * SLOT_MARGIN_MS;
+                let in_a_row = ages.windows(2).filter(|pair| pair.iter().all(late)).count();
+                let count = ages.iter().filter(|age| late(age)).count();
+                assert_eq!(
+                    in_a_row, 0,
+                    "{vsync} a second, phase {phase}: pictures taken late in a row"
+                );
+                assert!(
+                    count * 100 <= ages.len(),
+                    "{vsync} a second, phase {phase}: {count} of {} taken late",
+                    ages.len()
+                );
+            }
+        }
+    }
+
     /// **A stall starts the grid again on the picture that ends it**: the next
     /// deadline is an interval after that picture, not a refresh counted back
     /// toward where the grid stood before the desktop went still.

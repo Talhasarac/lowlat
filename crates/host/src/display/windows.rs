@@ -536,16 +536,34 @@ fn period_of((numerator, denominator): (u32, u32)) -> Option<f64> {
         .then(|| 1000.0 * f64::from(denominator) / f64::from(numerator))
 }
 
-/// The refresh the loop places its deadlines on, in milliseconds: **the
-/// compositor's clock, on which every composition lands** -- an output at a
-/// mode slower than the clock is still composed on it, 120 times a second
-/// for a 60 Hz virtual display under a 120 Hz primary, measured -- else the
-/// output's own mode where the compositor will not say.
-fn period_for(refresh: (u32, u32)) -> f64 {
-    duplication::composed_rate()
+/// The refresh the loop places its deadlines on, in milliseconds
+/// ([`deadline_period`]), against the compositor's clock as it is now.
+fn period_for(refresh: (u32, u32), driver: bool) -> f64 {
+    deadline_period(duplication::composed_rate(), refresh, driver)
+}
+
+/// The refresh the loop places its deadlines on: **the compositor's clock,
+/// on which every composition lands** -- an output at a mode slower than the
+/// clock is still composed on it, 120 times a second for a 60 Hz virtual
+/// display under a 120 Hz primary, measured -- else the output's own mode
+/// where the compositor will not say.
+///
+/// **Read from the display's driver, the slower of that and the mode**: the
+/// driver is handed the first composition after each refresh of its own, at
+/// most the mode's rate, measured -- 60 a second at 60 under 120. On the
+/// compositor's clock there, once the two clocks drifted a composition
+/// apart, every deadline landed just after a composition that carried no
+/// picture, and the loop took the one before it, a composition old, at
+/// every tick.
+fn deadline_period(composed: Option<(u32, u32)>, refresh: (u32, u32), driver: bool) -> f64 {
+    let clock = composed
         .and_then(period_of)
         .or_else(|| period_of(refresh))
-        .unwrap_or(PERIOD_MS)
+        .unwrap_or(PERIOD_MS);
+    match period_of(refresh) {
+        Some(mode) if driver => clock.max(mode),
+        _ => clock,
+    }
 }
 
 /// Whether two refresh periods differ by more than a rate's rounding: a mode
@@ -1609,13 +1627,16 @@ impl Display {
     /// otherwise leaves the stream paced and budgeted for a rate nothing is
     /// composed at, its deadlines off the compositions.
     fn repace(&mut self) {
-        let (period_ms, rate) = (period_for(self.mode_refresh), rate_for(self.mode_refresh));
+        let (period_ms, rate) = (
+            period_for(self.mode_refresh, self.direct.is_some()),
+            rate_for(self.mode_refresh),
+        );
         match self.settled {
             None => self.settled = Some((period_ms, rate)),
             Some((was, was_rate)) if period_moved(was, period_ms) || was_rate != rate => {
                 lowlat_common::log_info!(
-                    "display: {} presents at {rate} composed every {period_ms:.3} ms now, was \
-                     {was_rate} every {was:.3}",
+                    "display: {} presents at {rate}, a picture due every {period_ms:.3} ms now, \
+                     was {was_rate} every {was:.3}",
                     self.output.name
                 );
                 self.settled = Some((period_ms, rate));
@@ -2520,6 +2541,39 @@ mod tests {
         assert!(!the_same_picture(Some((8, 300, 380)), 381));
         assert!(the_same_picture(Some((8, 301, 381)), 381));
         assert!(!the_same_picture(None, 381));
+    }
+
+    /// **The deadlines sit on the period pictures arrive at**: the
+    /// duplication's on the compositor's clock whatever the mode; read from
+    /// the display's driver, on the slower of that and the mode -- the driver
+    /// is handed the first composition after each refresh of its own, so a
+    /// mode under the clock gets one picture per refresh of the mode -- and
+    /// on the mode's where the compositor will not say.
+    #[test]
+    fn the_deadlines_sit_on_the_period_pictures_arrive_at() {
+        let clock = Some((120_001, 1000));
+        let (sixty, at_144) = (1000.0 / 60.0, 1000.0 / 120.001);
+        let near = |got: f64, want: f64| (got - want).abs() < 1e-9;
+        assert!(
+            near(deadline_period(clock, (60, 1), false), at_144),
+            "duplicated, a 60 Hz mode under a 120 Hz clock"
+        );
+        assert!(
+            near(deadline_period(clock, (60, 1), true), sixty),
+            "from the driver, a 60 Hz mode under a 120 Hz clock"
+        );
+        assert!(
+            near(deadline_period(clock, (144, 1), true), at_144),
+            "from the driver, a 144 Hz mode under a 120 Hz clock"
+        );
+        assert!(
+            near(deadline_period(None, (60, 1), true), sixty),
+            "from the driver, the compositor saying nothing"
+        );
+        assert!(
+            near(deadline_period(None, (0, 0), true), PERIOD_MS),
+            "nothing said at all"
+        );
     }
 
     #[test]
