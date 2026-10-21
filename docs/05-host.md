@@ -51,7 +51,9 @@ Rules:
   its device went away is never read as refusing what the guests asked for. On Windows the
   restart also renumbers every output while the monitors stay, so an output asked for by name
   is followed by the monitor it showed. A program taking the display in exclusive fullscreen at
-  another mode is a resolution change, and is followed both ways.
+  another mode is a resolution change, and is followed both ways. *Amended 2026-10-21, at W3.11:*
+  on the host's own display too, which is held against the system's restore alone, so a program's
+  own mode stands ([11 §1.5](11-drivers.md)).
   *Added 2026-10-16, at W3.5's review:* **a display listed under a GPU without the encoder is
   waited for**, within the wait for a display, rather than refused at once: while a GPU's driver
   restarts, Windows lists a virtual display under another GPU for about a second and a half, and

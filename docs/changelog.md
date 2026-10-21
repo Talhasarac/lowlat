@@ -3,6 +3,32 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-21 - W3.11 built: a program's own mode on the host's display
+
+### Changed
+- **The host's own display is held against the system's restore alone**
+  ([11 §1.5](11-drivers.md)): its mode is put as it is asked -- an owner's size, a refresh -- and
+  afterwards only over the mode the system's store holds for it among the monitors connected,
+  which is what another monitor's arrival and a program leaving exclusive fullscreen put back. Any
+  other mode stands, and the stream follows it: a program in exclusive fullscreen at a size of its
+  own keeps it. Before, the host put its mode back over any other. Measured on a monitor of the
+  display driver held as the host holds its display, a program taking it fullscreen at 1280x720
+  lost its size within a tenth of a second, and one that takes its size back flapped the display
+  twice a second -- in the host, each a rebuild with a keyframe for the guests. A program asking
+  for exactly the store's mode is still put over: nothing else tells it from a restore.
+
+### Added
+- **The controller reads the mode the system's store holds for a monitor**.
+
+### Checked
+- A program taking the held display fullscreen at 1280x720, and taking its size back whenever the
+  display is not at it: the host's size put over it 18 times by the hold as it was, never with the
+  rule, and put back over the system's restore once the program left. The rule a test of its own,
+  each part broken once and caught; the hold's earlier hardware checks passing as they did. The
+  Windows bar: fmt and clippy clean, tests 1399 passed, none failed; the Linux bar is unchanged by
+  it, the controller and the host's own display building for Windows alone.
+- Owed: the stream following a program's mode live, and the gate.
+
 ## 2026-10-20 - W3.10 checked live
 
 ### Fixed

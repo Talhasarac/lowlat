@@ -16,7 +16,9 @@ desk's own settings of the host's display left to it -- added after a review of 
 built and checked the same day; and W3.9, the turn of the host's own display, added, probed and
 built and checked live after it; W3's gate follows them. *Amended 2026-10-20:* W3.10 -- a
 guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate,
-built and checked live; W3's gate is next.
+built and checked live; W3's gate is next. *Amended 2026-10-21:* W3.11 -- a program's own mode on
+the host's display -- added after a probe at the gate's second review, decided and built; its live
+check is next, then the gate, its legs amended at it.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1208,6 +1210,16 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   alone**, its later size included: an established client offers them to an owner alone, and the
   host refuses them from any other guest whatever its client sent. Which output is captured stays
   every guest's to pick.
+  *Amended 2026-10-21, at W3.11 (the maintainer's decision):* **the display's mode is put as it is
+  asked and held against the system's restore alone.** A program in exclusive fullscreen at a size
+  of its own changes the display's mode, measured, and holding the host's mode over it took the
+  program's size away within a tenth of a second; a program that takes its size back flapped the
+  display twice a second, each a rebuild. So the host puts its mode when it is asked -- an owner's
+  size, a refresh -- and after that only over the mode the system's store holds for the display
+  among the monitors connected, which is what another monitor's arrival and a program leaving
+  fullscreen put back. Any other mode stands, and the stream follows it: a program's in exclusive
+  fullscreen, one set from outside and not saved. A program asking for exactly the store's mode is
+  the one case it cannot tell from a restore.
 - **A guest's mode on any other display is put by `lowlatd`, not by the library** (*added
   2026-10-20, at W3.10's interview*). A size and a turn for whatever display is captured were
   weighed as fields of the library's video configuration and kept out of it, as on Linux: the
@@ -1823,6 +1835,38 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   1920x1080 225 ms after -- the stream following each, the turn declared and steady after the
   duplication settled -- and 3420x2148, which the panel does not list, was refused with its reason.
   The Windows bar again: tests 1398 passed, none failed. **Owed**: the gate.
+- [ ] **W3.11 a program's own mode on the host's display**: the host's own display put at its mode
+  as it is asked and held against the system's restore alone, so a program in exclusive fullscreen
+  keeps the mode it set and the stream follows it; the controller reading the mode the system's
+  store holds for a monitor. Checked by a program taking the held display fullscreen at a size of
+  its own, and taking its size back whenever the display is not at it, left alone while it holds
+  the display, and the host's size put back over the system's restore once it leaves; each check
+  broken once; and live, a guest following such a program's size and back.
+  *Added and decided 2026-10-21, after a probe at the gate's second review* (the decision above
+  marked W3.11). The review read in the code that a game in exclusive fullscreen at a size of its
+  own would be fought: the rebuild its new size causes holds the host's size again. **Probed** on a
+  monitor of the driver held as the host holds its display, a program taking it fullscreen at
+  1280x720, in the flip model and the older one alike: the display took the program's size, and
+  the hold put the host's back in 70 to 90 ms; a program that leaves it at that was left
+  fullscreen in name at the host's size, its pictures scaled, and one that takes its size back
+  flapped the display twice a second -- 24 holds in 11 s, 463 pictures drawn against 1,201 with
+  nothing held. The system tells the program nothing of it -- its presents succeed and its
+  fullscreen state stays -- and nothing marks the program's hold on the display: fullscreen on a
+  virtual display is composed, and the kernel reads no exclusive owner of the output. The system's
+  notification state says a fullscreen program runs about 150 ms after the mode changes, for the
+  whole session rather than one display. What tells them apart is the mode the system's store
+  holds for the display among the monitors connected: the mode it puts back as a program leaves,
+  where the program's own is another.
+  *Built 2026-10-21.* The controller reads the store's mode for a monitor; the hold remembers the
+  ask it last put, and puts its mode again only for a new ask, a display not shown, or the store's
+  mode found on the display, saying once that it left another's. The check failed on the hold as it
+  was -- the host's size put over the program's 18 times -- and passed with the rule: nothing put
+  while the program held the display at its size for eight seconds, and the host's size put back
+  over the system's restore as the program left. The rule a test of its own, each of its six parts
+  broken once and failing at its own assertion; W3.8's and W3.9's hardware checks passing as they
+  did. The Windows bar: fmt and clippy clean, tests 1399 passed, none failed. The Linux bar is
+  unchanged by it: the controller and the host's own display build for Windows alone. **Owed**:
+  live, then the gate.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1838,14 +1882,32 @@ on the LAN and one on a Windows machine:
   only one or the primary, since the system draws them on the primary alone and a secondary
   shows black (W3.5); a size and a turn from an owner's settings, on a panel and on the host's own
   display, and turned back; each refused from a guest who is not an owner;
+  *amended 2026-10-21, at W3.11:* the blank is bounded per event -- the size change, the secure
+  screens, the prompt, the driver's update and the GPU's restart each keep the session, the time
+  without pictures recorded (W3.5 saw about 0.9 s at an update and 2 to 3 s at the GPU's restart),
+  and the logoff and the host's end each end it, the guest connecting again, told nothing at a
+  logoff (W2.5's D10); a size an owner put on a panel left so when the last guest leaves, and an
+  owner joining on a panel leaving its size; a guest who is not an owner shown no orientation,
+  resolution or bitrate by its established client -- the owner byte the host sends -- and
+  switching the captured output, the refusals asked through the library's demo signed in as that
+  guest, since an established client sends none of them for it: a size, a turn, a bitrate and a
+  frame rate, each refused with its line; a game in exclusive fullscreen at a size of its own on
+  the host's display, kept at it with the stream following, and the host's size back as it leaves
+  (W3.11); W3.4's pointer larger than 256 seen drawn into the picture, on the host's display and on
+  a panel, which W3.4 did not read back;
 - the controller: an unelevated program plugs, re-modes and unplugs a monitor of its own beside
   the host's, and is refused the host's and the frame interface; a kept monitor made through
   `lowlatd display` comes back after a reboot where it was; *amended 2026-10-20, at W3.8:* and,
   asked for by a guest, streams straight from the driver; *amended 2026-10-20, at W3.10:* the
   frame interface answers it, as it answers every caller since W3.3's review, and it can take
   nothing from the answer; the reboot after W3.6's names, every slot a new monitor then;
+  *amended 2026-10-21, at W3.11:* the first reboot after W3.6's names is past -- W2.5's, on
+  2026-10-18 -- so the leg is any reboot; an owner's size the kept monitor does not list put on it
+  by a replug, and a turn, both there again after the reboot, a kept monitor's modes being saved;
+  an owner's size and turn refused on a monitor another program plugged;
 - two other vendors' virtual displays streamed through desktop duplication, an established
-  host's own among them;
+  host's own among them; *amended 2026-10-21, at W3.11:* on one of them an owner's listed size put
+  and one it does not list refused, as on a panel;
 - **the comparison decides the host's default**: in one session at 60, 120 and 240 Hz,
   composition to encoder input at p50, p95 and p99 for desktop duplication of the host's display
   and for the direct frame, with the hold's distribution and how often its bound fires; the
@@ -1872,11 +1934,25 @@ on the LAN and one on a Windows machine:
   *amended 2026-10-20, at W3.10:* the default this was to decide was taken at W3.4 and widened at
   W3.8, so the comparison confirms it, a percentile counting as at or below the duplication within
   the spread between the run's own blocks of one source;
+  *amended 2026-10-21, at W3.11:* in one run of the comparison's test as the system account, since
+  nothing selects the source of a monitor of the driver (W3.4, W3.8), timed from the compositor's
+  vblank as the offline run was, with the GPU's clocks held or the blocks short; and the blackout
+  timed by a test of its own -- both sources open on one display as the system account, the input
+  desktop watched, the switch made by a person -- since nothing in the stream marks a new
+  desktop's first picture: the duplication's loss and its making again are logged, and the direct
+  frame loses nothing at a switch;
 - the test-signed package installing silently with no test mode; CI building the driver; both
   CI jobs and the Linux bar.
 
 ## Change log
 
+- 2026-10-21: W3.11 added after a probe at W3's gate's second review, decided and built: the host's
+  display put at its mode as asked and held against the system's restore alone, a program's own
+  mode in exclusive fullscreen left to it and followed. The gate's legs amended at it: the blank
+  per event; the size an owner put left after, and a non-owner's refusals sent through the demo;
+  a game's own mode; a pointer over 256 read back; the kept and the bound monitor's roads and
+  another vendor's display; any reboot; the comparison as one run of its test from the vblank,
+  and the blackout's own test.
 - 2026-10-20: W3.10 added after a review of W3's gate, decided and built: a guest's size and turn
   of any display put by `lowlatd`, an owner's alone, as the stream's rate is; the library's live
   setter rebuilding only for what changed; the turn call withdrawn and the minor back at 30; the

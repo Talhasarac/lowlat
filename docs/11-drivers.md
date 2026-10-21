@@ -6,7 +6,8 @@ the controller as a program of its own (W3.6) and the review's fixes (W3.7) buil
 every monitor read straight from the driver, and the desk's settings of the host's display left
 to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
 built and checked live the same day; a guest's size and turn of any display put by `lowlatd`
-(W3.10) built and checked live the same day; W3's gate to come. Built by
+(W3.10) built and checked live the same day; a program's own mode on the host's display (W3.11)
+built 2026-10-21; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -182,6 +183,9 @@ an adapter's identifier changes across boots (§1.7).
   size lists, and refused where it lists none. `lowlatd` puts a guest's this way, and a kept
   monitor's through the controller, which adds a size it does not list
   ([impl-plan-windows.md](impl-plan-windows.md) W3.10).
+  *Amended 2026-10-21, at W3.11:* **the controller reads the mode the system's store holds for a
+  monitor** among the monitors connected -- what the system puts back on it as another monitor
+  arrives or a program leaves exclusive fullscreen.
 - **The host's display holds its mode** for as long as the host runs: another monitor's arrival
   and a program leaving exclusive fullscreen each put a saved mode back on a monitor, so the host
   puts its own back whenever the system's differs.
@@ -196,6 +200,14 @@ an adapter's identifier changes across boots (§1.7).
   put once ([06 §3](06-api.md)), as one at the desk is; whichever turn came last stands.
   *Amended 2026-10-20, at W3.10:* put by `lowlatd` by the display's name, as the desk turns it,
   and only an owner's; the library itself turns no display.
+  *Amended 2026-10-21, at W3.11:* **held against the system's restore alone.** A program in
+  exclusive fullscreen at a size of its own changes the display's mode, measured, and putting the
+  host's back over it fought the program -- one that takes its size back flapped the display twice
+  a second. So the mode is put as it is asked, and after that only where the display is found at
+  the mode the system's store holds for it among the monitors connected, which is what another
+  monitor's arrival and a program leaving fullscreen put back. Any other mode stands, and the
+  stream follows it: a program's in exclusive fullscreen, one set from outside and not saved. A
+  program asking for exactly the store's mode cannot be told from a restore, and is put over.
 
 ### §1.6 Pictures
 
@@ -438,7 +450,15 @@ with its fix undone. **The turn of the host's own display is built and checked**
 2026-10-20): a turned monitor's driver picture the duplication's to the sample, its pointer's
 shape turned for the panel, so a turned monitor stays on the duplication; the host's display
 turned a quarter and put at another mode while turned, still turned; and live, an established
-client's rotate turning it and back, the stream following each way (§1.5).
+client's rotate turning it and back, the stream following each way (§1.5). **A guest's size and
+turn on any display are built and checked live** (W3.10, 2026-10-20): a panel resized and turned
+by its name and a size it does not list refused; the host's own display turned from outside and
+put at another size still turned; and live, an owner's sizes and turns from the library's demo
+put on a panel, the stream following each (§1.5). **A program's own mode on the host's display is
+built** (W3.11, 2026-10-21): a program in exclusive fullscreen at a size of its own left at it
+while it holds the display, and the host's size put back over the system's restore as it leaves,
+the check failing on the hold as it was (§1.5).
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
-duplication of this display.
+duplication of this display. *Amended 2026-10-21:* that default was taken at W3.4 and widened at
+W3.8, so the comparison confirms it (amended in the gate at W3.10).
