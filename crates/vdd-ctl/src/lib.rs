@@ -162,6 +162,15 @@ pub fn put_turn(name: &str, turn: Turn) -> Result<(), Error> {
         .map_err(|code| Error::Display(i32::try_from(code).unwrap_or(i32::MAX)))
 }
 
+/// **The mode the system's store holds for `monitor`** among the monitors
+/// connected now: what the system puts back on it as another monitor arrives
+/// or a program leaves exclusive fullscreen, where a mode a program put for
+/// itself is another. None where the store shows it in no arrangement of
+/// these monitors.
+pub fn saved_mode(monitor: &Monitor) -> Option<Mode> {
+    display::saved(monitor.os_adapter_luid, monitor.os_target_id)
+}
+
 /// The refresh a size is put at: the one the display runs at `now` where the
 /// size lists it, else the highest it lists; none where it lists none.
 fn refresh_for(now: u32, listed: &[u32]) -> Option<u32> {

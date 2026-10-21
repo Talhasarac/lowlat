@@ -25,6 +25,10 @@ pub(crate) struct Own {
     slot: Option<u8>,
     /// The size the host wants it at, once it wants one.
     wanted: Option<(u32, u32)>,
+    /// The size and refresh last asked and put, or found in place.
+    asked: Option<(u32, u32, Option<u32>)>,
+    /// A mode of another's the display is left at, said once.
+    left: Option<Mode>,
     /// Why the last attempt failed, said once rather than every pass.
     refused: Option<Error>,
 }
@@ -41,15 +45,17 @@ impl Own {
     }
 
     /// Have the display at `width` x `height`, and at `refresh` where one is
-    /// asked: plugged where there is none, else put there when the system has
-    /// it otherwise -- which another monitor's arrival and a program leaving
-    /// exclusive fullscreen both do, putting a saved mode back. Answers
-    /// whether it is as wanted now.
+    /// asked: plugged where there is none, else put there as it is asked, and
+    /// again whenever the system puts back the mode its store holds for it --
+    /// which another monitor's arrival and a program leaving exclusive
+    /// fullscreen both do. Answers whether it is as wanted now.
     ///
     /// **What nobody asked for is the desk's.** With no refresh asked, the
     /// display keeps the refresh it has -- the one the system restores for it
     /// as it is plugged, and one set in its display settings after -- and a
-    /// turn is never held: a mode is put keeping whatever turn it has.
+    /// turn is never held: a mode is put keeping whatever turn it has. **Nor
+    /// is a mode another put** ([`put_over`]): a program's in exclusive
+    /// fullscreen stands, and the stream follows it.
     pub(crate) fn hold(&mut self, width: u32, height: u32, refresh: Option<u32>) -> bool {
         let first = Mode::new(width, height, refresh.unwrap_or(FIRST_HZ));
         if !first.is_valid() {
@@ -57,8 +63,9 @@ impl Own {
             return false;
         }
         self.wanted = Some((width, height));
+        let ask = Some((width, height, refresh));
         let (Some(slot), Some(controller)) = (self.slot, self.controller.as_mut()) else {
-            return self.plug(first, refresh.is_none());
+            return self.plug_asked(ask, first, refresh.is_none());
         };
         let monitor = match controller.monitor(slot) {
             Ok(monitor) => monitor,
@@ -68,7 +75,7 @@ impl Own {
                 lowlat_common::log_warn!("display: the host's own display went, plugging it again");
                 self.slot = None;
                 publish_own(None);
-                return self.plug(first, refresh.is_none());
+                return self.plug_asked(ask, first, refresh.is_none());
             }
             // **The driver went, and the handle with it** -- updated,
             // restarted, its process ended (docs/11-drivers.md section 1.8):
@@ -79,7 +86,7 @@ impl Own {
                     "display: the host's own display driver went, plugging the display again"
                 );
                 self.lost();
-                return self.plug(first, refresh.is_none());
+                return self.plug_asked(ask, first, refresh.is_none());
             }
             Err(error) => {
                 self.refuse("the host's own display could not be read", error);
@@ -91,7 +98,22 @@ impl Own {
         }
         let mode = Mode::new(width, height, refresh.unwrap_or(monitor.mode.refresh_hz));
         if monitor.active && monitor.mode == mode {
+            self.asked = ask;
+            self.left = None;
             return true;
+        }
+        let saved = lowlat_vdd_ctl::saved_mode(&monitor);
+        if !put_over(self.asked != ask, monitor.active, monitor.mode, saved) {
+            if self.left != Some(monitor.mode) {
+                lowlat_common::log_info!(
+                    "display: the host's own display left at {}, another's mode, asked={mode} \
+                     stored={}",
+                    monitor.mode,
+                    saved.map_or_else(|| "none".to_string(), |saved| saved.to_string())
+                );
+                self.left = Some(monitor.mode);
+            }
+            return false;
         }
         match controller.set_mode(slot, mode) {
             Ok(now) => {
@@ -103,6 +125,8 @@ impl Own {
                 if !now.name.is_empty() {
                     publish_own(Some((now.name.as_str(), slot)));
                 }
+                self.asked = ask;
+                self.left = None;
                 self.refused = None;
                 true
             }
@@ -185,6 +209,21 @@ impl Own {
         false
     }
 
+    /// Plug the monitor, and once it is plugged take `ask` as put.
+    fn plug_asked(
+        &mut self,
+        ask: Option<(u32, u32, Option<u32>)>,
+        mode: Mode,
+        any_refresh: bool,
+    ) -> bool {
+        let plugged = self.plug(mode, any_refresh);
+        if plugged {
+            self.asked = ask;
+            self.left = None;
+        }
+        plugged
+    }
+
     /// The driver's handle followed its driver away, and the monitor bound to
     /// it with it: nothing left to name, and a new handle at the next look.
     fn lost(&mut self) {
@@ -213,9 +252,56 @@ impl Drop for Own {
     }
 }
 
+/// **Whether the host puts its mode over the display's mode `now`**: as it is
+/// asked anew -- an owner's size, a refresh -- when the display is not shown,
+/// and over the system's restore of the mode its store holds for the display
+/// (`saved`), which another monitor's arrival and a program leaving exclusive
+/// fullscreen both put back. Never over any other mode -- a program's in
+/// exclusive fullscreen, one set from outside and not saved -- which the
+/// stream follows instead. A program asking for exactly the store's mode is
+/// the one it cannot tell from a restore.
+fn put_over(anew: bool, shown: bool, now: Mode, saved: Option<Mode>) -> bool {
+    anew || !shown || saved == Some(now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The host's mode is put as it is asked and over the system's
+    /// restore, never over another's**: a new ask is put whatever the display
+    /// is at, and a display not shown is shown; the store's mode is put back
+    /// over; a program's own mode is left, its refresh alone included, and so
+    /// is any mode while the store's is unknown.
+    #[test]
+    fn the_hosts_mode_is_put_as_asked_and_over_a_restore_alone() {
+        let stored = Mode::new(1920, 1080, 60);
+        let program = Mode::new(1280, 720, 60);
+        assert!(
+            put_over(true, true, program, Some(stored)),
+            "a new ask left"
+        );
+        assert!(
+            put_over(false, false, program, Some(stored)),
+            "a display not shown left"
+        );
+        assert!(
+            put_over(false, true, stored, Some(stored)),
+            "the system's restore left"
+        );
+        assert!(
+            !put_over(false, true, program, Some(stored)),
+            "a program's mode put over"
+        );
+        assert!(
+            !put_over(false, true, Mode::new(1920, 1080, 144), Some(stored)),
+            "a program's refresh put over"
+        );
+        assert!(
+            !put_over(false, true, program, None),
+            "a mode put over with the store's unknown"
+        );
+    }
 
     /// **The host's own display follows its driver**: held, then the driver
     /// ended under it -- its process, or with `LOWLAT_RESTART` naming the
@@ -449,6 +535,93 @@ mod tests {
         assert_eq!(
             back.mode.refresh_hz, 120,
             "the desk's saved refresh lost to the plug"
+        );
+    }
+
+    /// **A program's own mode stands, and the system's restore is put back**:
+    /// the host's own display held at a size the system's store does not hold
+    /// for it, then `LOWLAT_FSE` -- a program taking it fullscreen at a size
+    /// of its own, and taking that back whenever the display is not at it,
+    /// `{display}` replaced by its name -- run while the display is held again
+    /// whenever it is not at the host's size, as the rebuild a new size causes
+    /// holds it. Nothing is put while the program holds the display; once it
+    /// leaves, the system puts the store's mode back, and the host its own.
+    /// Run as a user, the driver installed; nothing is saved.
+    #[test]
+    #[ignore = "plugs a monitor of the display driver and takes it fullscreen"]
+    fn a_programs_own_mode_stands_and_a_restore_is_put_back() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut own = Own::default();
+        assert!(own.hold(1920, 1080, None), "the display was not plugged");
+        let slot = own.slot.expect("a slot");
+        let shown = shown_until(&own, slot, "the display", |m| m.active);
+        let saved = lowlat_vdd_ctl::saved_mode(&shown).expect("the store's mode for it");
+        let (width, height) = if (saved.width, saved.height) == (2560, 1440) {
+            (1920, 1080)
+        } else {
+            (2560, 1440)
+        };
+        assert!(own.hold(width, height, None), "the host's size refused");
+        shown_until(&own, slot, "the host's size", |m| {
+            (m.mode.width, m.mode.height) == (width, height)
+        });
+        println!(
+            "slot {slot} {}: the store's {saved}, held at {width}x{height}",
+            shown.name
+        );
+
+        let line = std::env::var("LOWLAT_FSE")
+            .expect("LOWLAT_FSE")
+            .replace("{display}", &shown.name);
+        let mut words = line.split_whitespace();
+        let mut program = Command::new(words.next().expect("a program"))
+            .args(words)
+            .spawn()
+            .expect("the program");
+        let began = Instant::now();
+        let (mut theirs, mut over, mut ended, mut back) = (None, 0u32, None::<Instant>, None);
+        while back.is_none() && ended.is_none_or(|at| at.elapsed() < Duration::from_secs(5)) {
+            let at = began.elapsed().as_secs_f64() * 1000.0;
+            let monitor = own
+                .controller
+                .as_ref()
+                .expect("a handle")
+                .monitor(slot)
+                .expect("the monitor");
+            if (monitor.mode.width, monitor.mode.height) == (width, height) {
+                if ended.is_some() {
+                    back = Some(at);
+                }
+            } else if monitor.active {
+                // **The store's mode is the system's restore** -- the program
+                // leaving puts it back before it ends -- and anything else
+                // is the program's.
+                let restored = monitor.mode == saved;
+                if !restored && theirs.is_none() {
+                    println!("{at:9.1} the program's {}", monitor.mode);
+                    theirs = Some(monitor.mode);
+                }
+                if own.hold(width, height, None) {
+                    println!("{at:9.1} the host's size put over {}", monitor.mode);
+                    over += u32::from(!restored);
+                }
+            }
+            if ended.is_none() && program.try_wait().expect("the program").is_some() {
+                println!("{at:9.1} the program ended");
+                ended = Some(Instant::now());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let _ = program.kill();
+        let _ = program.wait();
+        println!("put over the program {over} time(s), back at the host's size at {back:?} ms");
+        assert!(theirs.is_some(), "the program put no mode of its own");
+        assert_eq!(over, 0, "the host's size put over the program's mode");
+        assert!(
+            back.is_some(),
+            "the host's size not put back after the program"
         );
     }
 }

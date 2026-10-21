@@ -12,11 +12,11 @@ use windows_sys::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
     DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL,
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_ROTATION_IDENTITY, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DISPLAYCONFIG_ROTATION_IDENTITY, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_SOURCE_MODE,
     DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
-    QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS, QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
-    SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
-    SetDisplayConfig,
+    QDC_ALL_PATHS, QDC_DATABASE_CURRENT, QDC_ONLY_ACTIVE_PATHS, QUERY_DISPLAY_CONFIG_FLAGS,
+    QueryDisplayConfig, SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE,
+    SDC_USE_SUPPLIED_DISPLAY_CONFIG, SetDisplayConfig,
 };
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -62,7 +62,16 @@ fn query(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Option<Config> {
         let mut paths = vec![unsafe { core::mem::zeroed() }; usize::try_from(paths_len).ok()?];
         // SAFETY: as above.
         let mut modes = vec![unsafe { core::mem::zeroed() }; usize::try_from(modes_len).ok()?];
-        // SAFETY: buffers of the counts given; no topology asked for.
+        // **The store's configuration comes with the topology it is kept
+        // under**, which that query alone must be given a place for.
+        let mut topology = 0;
+        let topology_at = if flags == QDC_DATABASE_CURRENT {
+            &raw mut topology
+        } else {
+            core::ptr::null_mut()
+        };
+        // SAFETY: buffers of the counts given; a topology asked for only with
+        // the store's configuration.
         let status = unsafe {
             QueryDisplayConfig(
                 flags,
@@ -70,7 +79,7 @@ fn query(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Option<Config> {
                 paths.as_mut_ptr(),
                 &raw mut modes_len,
                 modes.as_mut_ptr(),
-                core::ptr::null_mut(),
+                topology_at,
             )
         };
         if status == ERROR_INSUFFICIENT_BUFFER {
@@ -113,9 +122,13 @@ fn source_name(path: &DISPLAYCONFIG_PATH_INFO) -> String {
     String::from_utf16_lossy(name.viewGdiDeviceName.get(..end).unwrap_or(&[]))
 }
 
-/// The monitor at `adapter`'s `target`, when the system shows it.
-pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
-    let config = query(QDC_ONLY_ACTIVE_PATHS)?;
+/// The active path to `adapter`'s `target` in `config`, and the mode it shows
+/// the monitor at: its source, and the refresh to the nearest whole.
+fn showing(
+    config: &Config,
+    adapter: u64,
+    target: u32,
+) -> Option<(&DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_MODE, u32)> {
     let path = config
         .paths
         .iter()
@@ -135,6 +148,13 @@ pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
         .saturating_add(rate.Denominator / 2)
         .checked_div(rate.Denominator)
         .unwrap_or(0);
+    Some((path, source, refresh_hz))
+}
+
+/// The monitor at `adapter`'s `target`, when the system shows it.
+pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
+    let config = query(QDC_ONLY_ACTIVE_PATHS)?;
+    let (path, source, refresh_hz) = showing(&config, adapter, target)?;
     Some(Shown {
         name: source_name(path),
         x: source.position.x,
@@ -142,6 +162,16 @@ pub(crate) fn shown(adapter: u64, target: u32) -> Option<Shown> {
         mode: Mode::new(source.width, source.height, refresh_hz),
         turned: path.targetInfo.rotation != DISPLAYCONFIG_ROTATION_IDENTITY,
     })
+}
+
+/// The mode the system's store holds for the monitor at `adapter`'s `target`
+/// among the monitors connected now -- what the system puts back on it as
+/// another monitor arrives or a program leaves exclusive fullscreen; none
+/// where the store shows it in no arrangement of these monitors.
+pub(crate) fn saved(adapter: u64, target: u32) -> Option<Mode> {
+    let config = query(QDC_DATABASE_CURRENT)?;
+    let (_, source, refresh_hz) = showing(&config, adapter, target)?;
+    Some(Mode::new(source.width, source.height, refresh_hz))
 }
 
 /// An active path, as the save decision reads it.
