@@ -3,6 +3,16 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-21 - W3.11 checked live
+
+### Checked
+- Live, the service on this build capturing the host's own display and the demo a guest of it as
+  an owner: its asked 2560x1440 put; a program taking the display fullscreen at 1280x720 for
+  fifteen seconds left at it, the stream reading 1280x720 from the driver 0.25 s after the change
+  and the guest receiving the program's sixty pictures a second; as the program left, the system
+  put back the store's 1920x1080 and the host its 2560x1440, the stream there 0.5 s after. The
+  program drew undisturbed, entering fullscreen once.
+
 ## 2026-10-21 - W3.11 built: a program's own mode on the host's display
 
 ### Changed

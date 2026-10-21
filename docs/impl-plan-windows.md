@@ -17,8 +17,8 @@ built and checked the same day; and W3.9, the turn of the host's own display, ad
 built and checked live after it; W3's gate follows them. *Amended 2026-10-20:* W3.10 -- a
 guest's mode on any display put by `lowlatd`, an owner's alone -- added after a review of the gate,
 built and checked live; W3's gate is next. *Amended 2026-10-21:* W3.11 -- a program's own mode on
-the host's display -- added after a probe at the gate's second review, decided and built; its live
-check is next, then the gate, its legs amended at it.
+the host's display -- added after a probe at the gate's second review, decided, built and checked
+live; W3's gate is next, its legs amended at it.
 
 Conventions as [impl-plan.md](impl-plan.md): a gate is a command that passes or a peer that
 streams, one phase per commit, changelog entry before the checkbox.
@@ -1835,7 +1835,7 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   1920x1080 225 ms after -- the stream following each, the turn declared and steady after the
   duplication settled -- and 3420x2148, which the panel does not list, was refused with its reason.
   The Windows bar again: tests 1398 passed, none failed. **Owed**: the gate.
-- [ ] **W3.11 a program's own mode on the host's display**: the host's own display put at its mode
+- [x] **W3.11 a program's own mode on the host's display**: the host's own display put at its mode
   as it is asked and held against the system's restore alone, so a program in exclusive fullscreen
   keeps the mode it set and the stream follows it; the controller reading the mode the system's
   store holds for a monitor. Checked by a program taking the held display fullscreen at a size of
@@ -1865,8 +1865,15 @@ decisions are recorded once, here; the design they add up to is [11](11-drivers.
   over the system's restore as the program left. The rule a test of its own, each of its six parts
   broken once and failing at its own assertion; W3.8's and W3.9's hardware checks passing as they
   did. The Windows bar: fmt and clippy clean, tests 1399 passed, none failed. The Linux bar is
-  unchanged by it: the controller and the host's own display build for Windows alone. **Owed**:
-  live, then the gate.
+  unchanged by it: the controller and the host's own display build for Windows alone.
+  *Checked live 2026-10-21*, the service on this build capturing the host's own display and the
+  library's demo a guest of it as an owner: the size it asked, 2560x1440, put; then a program
+  taking the display fullscreen at 1280x720 for fifteen seconds left at it, the host saying once
+  that it left another's mode, and the stream reading 1280x720 straight from the driver 0.25 s
+  after the change, the demo receiving the program's sixty pictures a second; the program drew
+  undisturbed, entering fullscreen once. As it left, the system put back the store's 1920x1080
+  and the host its 2560x1440, the stream there 0.5 s after the program's exit. The configuration
+  was put back after, the service left on this build. **Owed**: the gate.
 **Gate:** after W2.5, on the development machine, with established clients on macOS and Android
 on the LAN and one on a Windows machine:
 
@@ -1946,9 +1953,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
-- 2026-10-21: W3.11 added after a probe at W3's gate's second review, decided and built: the host's
-  display put at its mode as asked and held against the system's restore alone, a program's own
-  mode in exclusive fullscreen left to it and followed. The gate's legs amended at it: the blank
+- 2026-10-21: W3.11 added after a probe at W3's gate's second review, decided, built and checked
+  live: the host's display put at its mode as asked and held against the system's restore alone, a
+  program's own mode in exclusive fullscreen left to it and followed ([05 §2](05-host.md),
+  [06 §3](06-api.md) and [11 §1.5](11-drivers.md) amended). The gate's legs amended at it: the blank
   per event; the size an owner put left after, and a non-owner's refusals sent through the demo;
   a game's own mode; a pointer over 256 read back; the kept and the bound monitor's roads and
   another vendor's display; any reboot; the comparison as one run of its test from the vblank,

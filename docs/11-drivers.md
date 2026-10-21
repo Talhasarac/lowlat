@@ -7,7 +7,7 @@ every monitor read straight from the driver, and the desk's settings of the host
 to it (W3.8), built and checked 2026-10-20, and the turn of the host's own display (W3.9)
 built and checked live the same day; a guest's size and turn of any display put by `lowlatd`
 (W3.10) built and checked live the same day; a program's own mode on the host's display (W3.11)
-built 2026-10-21; W3's gate to come. Built by
+built and checked live 2026-10-21; W3's gate to come. Built by
 [impl-plan-windows.md](impl-plan-windows.md) W3,
 where the decisions and their reasons are recorded; this document is the design they add up to.
 
@@ -455,9 +455,10 @@ turn on any display are built and checked live** (W3.10, 2026-10-20): a panel re
 by its name and a size it does not list refused; the host's own display turned from outside and
 put at another size still turned; and live, an owner's sizes and turns from the library's demo
 put on a panel, the stream following each (§1.5). **A program's own mode on the host's display is
-built** (W3.11, 2026-10-21): a program in exclusive fullscreen at a size of its own left at it
-while it holds the display, and the host's size put back over the system's restore as it leaves,
-the check failing on the hold as it was (§1.5).
+built and checked live** (W3.11, 2026-10-21): a program in exclusive fullscreen at a size of its
+own left at it while it holds the display, and the host's size put back over the system's restore
+as it leaves, the check failing on the hold as it was; and live, a guest of the host's display
+following such a program's 1280x720 and back to the size its owner asked (§1.5).
 W3's gate ([impl-plan-windows.md](impl-plan-windows.md)) is the first check of the whole, and its
 comparison decides whether the host reads pictures as §1.6 describes or through the system's
 duplication of this display. *Amended 2026-10-21:* that default was taken at W3.4 and widened at
