@@ -120,6 +120,17 @@ Rules:
   the loop took the one before it, a composition old, at every tick: 9.3 ms from the driver's
   acquire to the conversion at the median, live. The duplication sees every composition, and its
   deadlines stay on the clock.
+  *Found 2026-10-22:* **a panel slower than the primary is not composed on the clock, and its
+  pictures can be taken a composition old for seconds at a time.** A monitor at 60 beside a 120 Hz
+  primary -- 59.885 Hz in fact -- was handed 100 to 112 compositions a second by the duplication,
+  their timing moved by the beat of the two refreshes: on the clock for a while, then alternately
+  up to 2 ms after it, then merged into one every 16.65 ms. Where the composition a deadline waits
+  past lands later than the margin, or not at all, the loop takes the one before it, and the grid,
+  kept for that as for one left from a skipped refresh, puts the next deadline the same way: up to
+  155 pictures in a row a composition old, measured with a copy of the loop, where the system hands
+  each over within 0.15 ms; at the monitor's 120 it streams clean. Left as it is
+  ([impl-plan-windows.md](impl-plan-windows.md), W2's pacing decision): the host streams the
+  primary, its own display or a headless machine, each composed on the clock.
 - **The host's own display can be read straight from its driver** (*added 2026-10-16*,
   [11 §1.6](11-drivers.md), [impl-plan-windows.md](impl-plan-windows.md) W3.3), the system's
   own buffers converted as they are, with no duplication between: a second Windows source behind

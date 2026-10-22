@@ -3,6 +3,25 @@
 Newest first. One entry per phase; approach changes and gate revisions go in
 [impl-plan.md](impl-plan.md) instead.
 
+## 2026-10-22 - A panel slower than the primary: its late pictures are the frame clock's
+
+### Found
+- **W2.7's late compositions at 60 were the host's frame clock, not the GPU**
+  ([05 §2](05-host.md)). The RDNA 2 part's monitor at 1920x1080 and 60, beside the 120 Hz NVIDIA
+  primary, runs at 59.885 Hz, and the duplication hands it 100 to 112 compositions a second, their
+  timing moved by the beat of its refresh against the compositor's clock, every 4.4 s: on the
+  clock for a while, then alternately up to 2 ms after it, then merged into one every 16.65 ms. The
+  system hands each over within 0.15 ms at p99, measured taking every one as it lands. A copy of
+  the stream's frame clock took up to 155 pictures in a row each a composition old -- 9.2 to 9.7 ms
+  at p99, as at W2.7 -- and at the monitor's 120 it streams clean, 1.2 ms at p99.
+
+### Decided
+- Left as it is (the maintainer's decision, [impl-plan-windows.md](impl-plan-windows.md) W2's
+  pacing decision): the host streams the primary display, its own display or a headless machine,
+  each composed on the clock. The rules modelled for such a panel -- the frame clock's grid moved,
+  or its deadline aimed at the refresh before, after a run of late pictures -- each fixed it, and
+  each made some content near the stream's rate up to 8 ms later at the median.
+
 ## 2026-10-21 - W3.12 checked live
 
 ### Checked
@@ -274,6 +293,10 @@ Newest first. One entry per phase; approach changes and gate revisions go in
 - On the RDNA 2 part beside an NVIDIA primary, some compositions finish a whole refresh late --
   5 to 10 % at 120 a second, 1 to 5 % at 60 -- in the device span of the host's conversion as in
   a read in place, so below the host; not seen on the 780M driving its own panel.
+  *Corrected 2026-10-22:* the 1 to 5 % at 60, from the monitor's own duplication, is the host's
+  frame clock against a panel slower than the primary, not the GPU: the system hands those
+  compositions over within 0.15 ms at p99 (2026-10-22's entry). The 5 to 10 % at 120, from the
+  host's own display rendered there, stands.
 - Colour noise in 8-pixel squares at 1080p60 codes at about 23 Mbit/s whatever the target: a rate
   check needs content a rate can fit.
 - A bottleneck at 40 % of the stream's rate stalls the stream for as long as it lasts -- the

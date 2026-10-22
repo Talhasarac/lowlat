@@ -545,6 +545,15 @@ once, here.
   handed at most the mode's rate, the first composition after each refresh of its own, and
   deadlines on the compositor's clock locked a composition late once the two drifted a
   composition apart. The duplication sees every composition and stays on the clock.
+  *Amended 2026-10-22 (the maintainer's decision):* **a panel slower than the primary, duplicated,
+  is left with its late pictures.** It is handed 100 to 112 compositions a second at 60 under 120,
+  their timing moved by the beat of the two refreshes, and the deadlines on the clock take its
+  pictures a composition old for seconds at a time ([05 §2](05-host.md)) -- W2.7's late
+  compositions at 60, which were not the GPU's. The host streams the primary display, its own
+  display or a headless machine, each composed on the clock. The rules modelled for such a panel --
+  the grid moved a refresh later, or the deadline aimed at the refresh before, after five late
+  pictures in a row -- each fixed it, and each made some content near the stream's rate up to 8 ms
+  later at the median.
   *Amended 2026-10-16, at W3.4's review:* **a masked colour pointer made only of black, white,
   clear and inverting pixels is drawn as the monochrome one it is**, its inverting pixels black
   in a light halo: the system hands a display driver every monochrome pointer in that form, so
@@ -1999,6 +2008,10 @@ on the LAN and one on a Windows machine:
 
 ## Change log
 
+- 2026-10-22: W2's pacing decision amended: a panel slower than the primary, duplicated, left with
+  its late pictures (the maintainer's decision; [05 §2](05-host.md) amended); W2.7's late
+  compositions at 60 corrected to the frame clock in the changelog and
+  [09](09-compatibility.md).
 - 2026-10-21: W3.12 added after W3.11's live check, decided, built and checked live (composition
   to hand-over 0.19 ms at the median, from 9.31): a display read from its
   driver paced on the slower of the compositor's clock and its mode, the period it is handed
