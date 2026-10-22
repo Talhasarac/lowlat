@@ -5075,6 +5075,163 @@ mod tests {
         }
     }
 
+    /// The input desktop's own name now -- `Default`, `Winlogon` or another --
+    /// or empty where this process may not open it.
+    fn input_desktop_name() -> String {
+        use windows_sys::Win32::System::StationsAndDesktops::{
+            CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop,
+            UOI_NAME,
+        };
+        let mut name = [0u16; 64];
+        let mut needed = 0u32;
+        // SAFETY: a desktop opened to read its name and closed once; the
+        // buffer and its length in bytes are the local's, as is the length out.
+        let read = unsafe {
+            let desktop = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
+            if desktop.is_null() {
+                return String::new();
+            }
+            let read = GetUserObjectInformationW(
+                desktop,
+                UOI_NAME,
+                name.as_mut_ptr().cast(),
+                u32::try_from(size_of_val(&name)).unwrap_or(0),
+                &raw mut needed,
+            );
+            CloseDesktop(desktop);
+            read
+        };
+        if read == 0 {
+            return String::new();
+        }
+        let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        String::from_utf16_lossy(name.get(..end).unwrap_or_default())
+    }
+
+    /// **The blackout at a desktop switch, per source**: a monitor of the
+    /// driver plugged by this test, read through the system's duplication and
+    /// straight from the driver at once, the input desktop watched. Each switch
+    /// is timed for each source from the switch to the first picture composed
+    /// after it in the host's hands: the duplication's loss and its making
+    /// again on the new desktop, the driver's next picture. The test makes one
+    /// switch itself, to a desktop of its own and back; then a person's, for
+    /// `LOWLAT_SECONDS` (120) -- the lock screen and an elevation prompt, which
+    /// the system draws on the primary alone, so the load (`LOWLAT_LOAD`, as
+    /// the comparison's) makes the monitor the primary. Run as the system
+    /// account in the console session.
+    #[test]
+    #[ignore = "requires the display driver, the vendor's GPU, a load, the system account and a person"]
+    fn the_blackout_at_a_desktop_switch_per_source() {
+        use lowlat_encode::nvenc;
+        use lowlat_vdd_ctl::{Controller, Lifetime, Mode};
+
+        let _timer = clock::TimerResolution::raise();
+        let seconds = std::env::var("LOWLAT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(120.0);
+        let mut controller = Controller::open().expect("the display driver");
+        let monitor = controller
+            .plug(Mode::new(2560, 1440, 120), Lifetime::Bound, false, None)
+            .expect("a monitor");
+        println!("slot {} {} at {}", monitor.slot, monitor.name, monitor.mode);
+        let _load = Load::on(&monitor.name);
+        std::thread::sleep(core::time::Duration::from_millis(1500));
+        let output = Display::locate(Some(&monitor.name)).expect("its output");
+        let (width, height, hz) = Display::shape_of_display(Some(&output.name)).expect("a shape");
+        let d3d11 = D3d11::load().expect("the system's libraries");
+        let device = Arc::new(d3d11.open(output.adapter.luid).expect("a device"));
+        let api = nvenc::Api::load().expect("the encoder's runtime");
+        let session = api.open_session(Arc::clone(&device)).expect("a session");
+        let encoder = session
+            .initialize(nvenc::Config {
+                codec: nvenc::Codec::H265,
+                width,
+                height,
+                fps: hz.max(1),
+                bitrate_bps: 20_000_000,
+                min_qp: lowlat_encode::DEFAULT_MIN_QP,
+                thorough: false,
+                chroma: nvenc::Chroma::Yuv420,
+                depth: nvenc::Depth::Eight,
+            })
+            .expect("an encoder");
+        let size = (width, height);
+        let mut sources = [
+            Display::open_duplicated(
+                &device,
+                &output.name,
+                Layout::Nv12,
+                size,
+                Register::Nvenc(&encoder),
+            )
+            .expect("the duplication"),
+            Display::open_direct(
+                &device,
+                &output.name,
+                Layout::Nv12,
+                size,
+                Register::Nvenc(&encoder),
+                monitor.slot,
+            )
+            .expect("the driver's frames"),
+        ];
+        // Each switch: when it was seen, from and to, and each source's first
+        // picture composed after it, from the switch to the picture's hand-over.
+        let mut switches: Vec<(f64, String, String, [Option<f64>; 2])> = Vec::new();
+        let started = Time::now();
+        let mut desktop = input_desktop_name();
+        let mut own: Option<OtherDesktop> = None;
+        let mut own_done = false;
+        println!("watching the input desktop, {desktop:?}, for {seconds:.0} s");
+        while clock::elapsed_ms(started) < seconds * 1000.0 {
+            let now_ms = clock::elapsed_ms(started);
+            // The test's own switch two seconds in, and back two seconds later.
+            if !own_done && own.is_none() && now_ms >= 2000.0 {
+                own = Some(OtherDesktop::switch());
+            } else if own.is_some() && now_ms >= 4000.0 {
+                own = None;
+                own_done = true;
+            }
+            let name = input_desktop_name();
+            if name != desktop {
+                println!("{now_ms:.1} ms: {desktop:?} -> {name:?}");
+                switches.push((now_ms, desktop.clone(), name.clone(), [None, None]));
+                desktop = name;
+            }
+            for (index, display) in sources.iter_mut().enumerate() {
+                if display.wait_present(1) != Some(true) || display.acquire().is_err() {
+                    continue;
+                }
+                let Ok(Some(got)) = display.converted() else {
+                    continue;
+                };
+                let at_ms = clock::diff_ms(started, got.at);
+                let composed_ms = at_ms - got.composed_before_ms.unwrap_or(0.0);
+                if let Some((switched, _, _, first)) = switches.last_mut()
+                    && first[index].is_none()
+                    && composed_ms >= *switched
+                {
+                    first[index] = Some(at_ms - *switched);
+                }
+            }
+        }
+        drop(own);
+        for (at, from, to, first) in &switches {
+            let said =
+                |ms: Option<f64>| ms.map_or_else(|| "none".to_string(), |ms| format!("{ms:.1} ms"));
+            println!(
+                "at {at:.0} ms {from:?} -> {to:?}: duplication {}, the driver's {}",
+                said(first[0]),
+                said(first[1])
+            );
+        }
+        assert!(
+            switches.len() >= 2,
+            "the test's own switch and back were not seen"
+        );
+    }
+
     /// **An absolute position lands on the pixel it names, on every output
     /// of the desktop**, through a guest's own devices and the place the
     /// display gives them: the corners, the middle and points between, read
