@@ -12,6 +12,7 @@
 use std::ffi::CStr;
 use std::os::fd::RawFd;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ash::vk;
 use drm::buffer::DrmFourcc;
@@ -487,9 +488,12 @@ impl Device {
         // us perfectly well.
         // SAFETY: the device came from this instance.
         let families = unsafe { instance.get_physical_device_queue_family_properties(physical) };
-        let queue_family = conversion_family(&families)
-            .and_then(|at| u32::try_from(at).ok())
-            .ok_or(Error::NoQueue)?;
+        let family_for = |raised: bool| {
+            conversion_family(&families, raised)
+                .and_then(|at| u32::try_from(at).ok())
+                .ok_or(Error::NoQueue)
+        };
+        let plain = family_for(false)?;
 
         // The family that encodes, which is not required to be the one that
         // converts and on one vendor here cannot even copy.
@@ -515,8 +519,8 @@ impl Device {
         // on either family. The kernel grants the priority only to a process
         // that may raise its own scheduling priority, and a driver may refuse
         // it on a family for reasons of its own; **any refusal is answered by
-        // asking again without it**, so a device that opened before still
-        // opens, only not raised.
+        // asking again without it, on the family the conversion always had**,
+        // so a device that opened before opens as it did.
         let priority = [
             ash::khr::global_priority::NAME,
             ash::ext::global_priority::NAME,
@@ -526,7 +530,7 @@ impl Device {
         // Built whole per attempt: the feature structures are chained by
         // pointer, and a chain rebuilt from structures still linked from the
         // last attempt loops.
-        let attempt = |high: Option<&CStr>| {
+        let attempt = |queue_family: u32, high: Option<&CStr>| {
             let priorities = [1.0_f32];
             let mut global = vk::DeviceQueueGlobalPriorityCreateInfoKHR::default()
                 .global_priority(vk::QueueGlobalPriorityKHR::HIGH);
@@ -588,26 +592,35 @@ impl Device {
             // extension names are static.
             unsafe { instance.create_device(physical, &create, None) }
         };
-        let device = match priority {
-            Some(name) => match attempt(Some(name)) {
-                Err(vk::Result::ERROR_NOT_PERMITTED_KHR) => {
-                    lowlat_common::log_warn!(
-                        "capture: the conversion runs at normal priority; a raised one \
-                         needs CAP_SYS_NICE, and a game can then hold the stream on its \
-                         last picture"
-                    );
-                    attempt(None)
+        let (device, queue_family) = match priority {
+            Some(name) => {
+                let raised = family_for(true)?;
+                match attempt(raised, Some(name)) {
+                    Ok(device) => Ok((device, raised)),
+                    Err(refused) => {
+                        if refused == vk::Result::ERROR_NOT_PERMITTED_KHR {
+                            // **Said once.** Every device this process makes
+                            // meets the same answer, and a host without the
+                            // privilege is the usual case rather than a fault.
+                            static UNPRIVILEGED: AtomicBool = AtomicBool::new(false);
+                            if !UNPRIVILEGED.swap(true, Ordering::Relaxed) {
+                                lowlat_common::log_info!(
+                                    "capture: the conversion runs at normal priority; a \
+                                     raised one needs CAP_SYS_NICE, and a game can then hold \
+                                     the stream on its last picture"
+                                );
+                            }
+                        } else {
+                            lowlat_common::log_warn!(
+                                "capture: the conversion runs at normal priority; the driver \
+                                 refused a raised one, {refused}"
+                            );
+                        }
+                        attempt(plain, None).map(|device| (device, plain))
+                    }
                 }
-                Err(refused) => {
-                    lowlat_common::log_warn!(
-                        "capture: the conversion runs at normal priority; the driver \
-                         refused a raised one, {refused}"
-                    );
-                    attempt(None)
-                }
-                done => done,
-            },
-            None => attempt(None),
+            }
+            None => attempt(plain, None).map(|device| (device, plain)),
         }
         .map_err(driver)?;
         // SAFETY: the family index came from this device's own enumeration and
@@ -668,20 +681,23 @@ impl Drop for DeviceInner {
 
 /// The queue family the conversion runs on.
 ///
-/// **A family that computes without drawing comes first.** The first family
-/// that computes is usually the graphics one, and there a conversion waits
-/// behind every frame a game has queued: measured on a Renoir APU, a stream
-/// fell from 59 pictures a second to 18 under a heavy graphics load, and a
-/// fullscreen game held the guest on its last picture. A compute-only family
-/// runs beside the graphics one. Any family that computes is the fallback.
-fn conversion_family(families: &[vk::QueueFamilyProperties]) -> Option<usize> {
+/// **Raised, a family that computes without drawing comes first.** The first
+/// family that computes is usually the graphics one, and there a conversion
+/// waits behind every frame a game has queued: measured on a Renoir APU, a
+/// stream fell from 59 pictures a second to 18 under a heavy graphics load,
+/// and a fullscreen game held the guest on its last picture. A compute-only
+/// family runs beside the graphics one, but only raised: at normal priority it
+/// measured no better, so an unraised conversion keeps the first family that
+/// computes, which is also the fallback.
+fn conversion_family(families: &[vk::QueueFamilyProperties], raised: bool) -> Option<usize> {
     let computes =
         |family: &vk::QueueFamilyProperties| family.queue_flags.contains(vk::QueueFlags::COMPUTE);
-    families
-        .iter()
-        .position(|family| {
-            computes(family) && !family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-        })
+    let beside = |family: &vk::QueueFamilyProperties| {
+        computes(family) && !family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+    };
+    raised
+        .then(|| families.iter().position(beside))
+        .flatten()
         .or_else(|| families.iter().position(computes))
 }
 
@@ -1358,9 +1374,10 @@ mod tests {
         assert_eq!(super::pixel_format(DrmFourcc::Yuyv), None);
     }
 
-    /// The conversion takes the family that computes without drawing, and
-    /// falls back to one that does both. The families are the AMD open
-    /// driver's order: graphics, compute, decode, encode.
+    /// Raised, the conversion takes the family that computes without drawing,
+    /// and falls back to one that does both; unraised it keeps the first that
+    /// computes. The families are the AMD open driver's order: graphics,
+    /// compute, decode, encode.
     #[test]
     fn conversion_runs_beside_graphics() {
         let family = |flags| vk::QueueFamilyProperties {
@@ -1373,10 +1390,13 @@ mod tests {
             family(vk::QueueFlags::VIDEO_DECODE_KHR),
             family(vk::QueueFlags::VIDEO_ENCODE_KHR),
         ];
-        assert_eq!(super::conversion_family(&amd), Some(1));
+        assert_eq!(super::conversion_family(&amd, true), Some(1));
+        // Unraised, the compute-only family measured no better.
+        assert_eq!(super::conversion_family(&amd, false), Some(0));
         // One family for everything is still served.
-        assert_eq!(super::conversion_family(&amd[..1]), Some(0));
-        assert_eq!(super::conversion_family(&amd[2..]), None);
+        assert_eq!(super::conversion_family(&amd[..1], true), Some(0));
+        assert_eq!(super::conversion_family(&amd[2..], true), None);
+        assert_eq!(super::conversion_family(&amd[2..], false), None);
     }
 
     /// The node numbers have to come out of the encoding the kernel uses, which
