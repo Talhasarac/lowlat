@@ -1539,10 +1539,9 @@ impl Display<'_> {
 
     /// Whether this device needs predicted pictures sent as low-delay B.
     ///
-    /// **The rule is the one the established open encoder follows.** A device
-    /// whose bidirectional slices must have a second list, and which offers a
-    /// reference in that list at all, wants a predicted picture as a
-    /// bidirectional slice with both lists naming the same picture. A device
+    /// **A device whose bidirectional slices must have a second list, and which
+    /// offers a reference in that list at all, wants a predicted picture as a
+    /// bidirectional slice with both lists naming the same picture.** A device
     /// that reports no constraint, or that cannot be asked, is left as it is.
     fn low_delay_b(&self, caps: Caps) -> bool {
         let mut attribs = [
